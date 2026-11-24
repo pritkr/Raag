@@ -8,4 +8,8 @@ coverage/
 !.env.example
 _refs/
 target/
+.nsh/
+platform/android/.gradle/
+platform/android/build/
+platform/android/.kotlin/
 

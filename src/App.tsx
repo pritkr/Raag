@@ -1,6 +1,6 @@
 /**
  * @license
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -414,12 +414,25 @@ export default function App() {
       {/* Slim Pure-Rust NSH Host Control Bar */}
       <header className="w-full border-b border-[#222631] bg-[#0d0f14] px-4 py-2.5 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <div className="w-7 h-7 rounded-lg bg-[#d92638] flex items-center justify-center font-bold text-white text-sm">
-            R
-          </div>
+          <svg
+            viewBox="0 0 48 48"
+            className="w-7 h-7 shrink-0"
+            aria-label="YouTube Music Icon"
+          >
+            <circle cx="24" cy="24" r="22" fill="#FF0033" />
+            <circle
+              cx="24"
+              cy="24"
+              r="13.5"
+              fill="none"
+              stroke="#FFFFFF"
+              strokeWidth="2.2"
+            />
+            <polygon points="20,17 32,24 20,31" fill="#FFFFFF" />
+          </svg>
           <div>
             <div className="text-sm font-semibold leading-tight">
-              Resonance — Pure Rust NSH Live Host
+              Raag — Pure Rust NSH Live Host
             </div>
             <div className="text-[11px] text-[#9fa6b2]">
               {tree?.engine ?? 'Connecting to Rust nsh-engine 0.6.1...'}

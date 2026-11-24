@@ -3,10 +3,9 @@
 //! (`ClientMatrix` + `EjsSolver` + `LoopbackProxy`).
 //!
 //! License & Provenance Policy:
-//! - Resonance is `Apache-2.0`.
-//! - `ytmapi-rs` (MIT) is license-compatible and recommended behind `BrowseDelegate`.
-//! - GPL-licensed libraries (e.g. RustyPipe) are strictly excluded from Cargo dependencies;
-//!   any study repositories under `_refs/` are strictly study-only and gitignored.
+//! - Resonance is `GPL-3.0-or-later`.
+//! - `ytmapi-rs` (MIT) is compatible and recommended behind `BrowseDelegate`.
+//! - Any study repositories under `_refs/` are strictly study-only and gitignored.
 
 use std::sync::Arc;
 

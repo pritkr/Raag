@@ -1,6 +1,7 @@
 //! App-level reactive NSH store (`global::<AppState>`) bridging `crates/core`
 //! to Pure Rust NSH UI signals without ever blocking the UI thread.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{OnceLock, RwLock};
 use std::time::Duration;
@@ -33,7 +34,19 @@ pub fn proxy_stream_url(video_id: &str) -> String {
         .read()
         .map(|g| g.clone())
         .unwrap_or_else(|_| "http://127.0.0.1:0".to_owned());
-    format!("{base}/stream/{video_id}?itag=251")
+    let itag = if is_fixture_mode() {
+        251
+    } else {
+        #[cfg(target_os = "android")]
+        {
+            251
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            140
+        }
+    };
+    format!("{base}/stream/{video_id}?itag={itag}")
 }
 
 pub fn enable_fixture_mode(enabled: bool) {
@@ -48,11 +61,14 @@ pub fn is_fixture_mode() -> bool {
 pub enum AppTab {
     #[default]
     Home,
+    Explore,
     Search,
     Queue,
     NowPlaying,
     Lyrics,
     Library,
+    ListenTogether,
+    Settings,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -82,21 +98,83 @@ impl SearchFilter {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LibraryFilter {
+    Playlists,
+    Songs,
+    #[default]
+    LikedSongs,
+    Albums,
+    Artists,
+    Podcasts,
+    History,
+    Uploads,
+    Downloads,
+    Settings,
+}
+
+impl LibraryFilter {
+    pub fn all() -> &'static [Self] {
+        &[
+            Self::Playlists,
+            Self::Songs,
+            Self::LikedSongs,
+            Self::Albums,
+            Self::Artists,
+            Self::Podcasts,
+            Self::History,
+            Self::Uploads,
+            Self::Downloads,
+            Self::Settings,
+        ]
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Playlists => "Playlists",
+            Self::Songs => "Songs",
+            Self::LikedSongs => "Liked songs",
+            Self::Albums => "Albums",
+            Self::Artists => "Artists",
+            Self::Podcasts => "Podcasts",
+            Self::History => "History",
+            Self::Uploads => "Uploads",
+            Self::Downloads => "Downloads",
+            Self::Settings => "Settings",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DesktopSidePanel {
     #[default]
     Queue,
     Lyrics,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SidebarPlaylist {
+    pub id: String,
+    pub title: String,
+    pub subtitle: String,
+    pub artwork_url: Option<String>,
+    pub is_liked_auto: bool,
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub active_tab: AppTab,
+    pub nav_history: Vec<AppTab>,
+    pub nav_pos: usize,
+    pub sidebar_collapsed: bool,
+    pub desktop_side_panel_open: bool,
     pub theme_choice: ThemeChoice,
     pub reduced_motion: bool,
     pub player: PlayerSnapshot,
     pub home_sections: Vec<HomeSection>,
     pub home_loading: bool,
     pub home_error: Option<String>,
+    pub selected_mood: Option<String>,
+    pub section_pages: HashMap<String, usize>,
     pub search_query: String,
     pub search_filter: SearchFilter,
     pub search_all_tracks: Vec<Track>,
@@ -106,7 +184,12 @@ pub struct AppState {
     pub desktop_side_panel: DesktopSidePanel,
     pub lyrics: Option<LyricsDocument>,
     pub liked_tracks: Vec<Track>,
+    pub disliked_ids: Vec<String>,
     pub history: Vec<HistoryEntry>,
+    pub library_filter: LibraryFilter,
+    pub library_search_query: String,
+    pub collection_search_query: String,
+    pub collection_sort_asc: bool,
     pub cache_stats: CacheStats,
     pub signed_in: bool,
     pub account_name: Option<String>,
@@ -126,7 +209,7 @@ fn filter_tracks_for_mode(tracks: &[Track], filter: SearchFilter) -> Vec<Track> 
             .collect(),
         SearchFilter::Albums => tracks
             .iter()
-            .filter(|t| t.album.as_ref().is_some_and(|a| !a.is_empty()))
+            .filter(|t| t.album.as_ref().is_some_and(|a| !a.title.is_empty()))
             .cloned()
             .collect(),
     }
@@ -158,6 +241,10 @@ impl Default for AppState {
 
         Self {
             active_tab: AppTab::Home,
+            nav_history: vec![AppTab::Home],
+            nav_pos: 0,
+            sidebar_collapsed: false,
+            desktop_side_panel_open: true,
             theme_choice: ThemeChoice::System,
             reduced_motion: false,
             player: PlayerSnapshot {
@@ -187,6 +274,8 @@ impl Default for AppState {
             home_sections,
             home_loading: !fixture,
             home_error: None,
+            selected_mood: None,
+            section_pages: HashMap::new(),
             search_query: String::new(),
             search_filter: SearchFilter::All,
             search_all_tracks: initial_search.clone(),
@@ -196,7 +285,12 @@ impl Default for AppState {
             desktop_side_panel: DesktopSidePanel::Queue,
             lyrics,
             liked_tracks,
+            disliked_ids: Vec::new(),
             history: Vec::new(),
+            library_filter: LibraryFilter::LikedSongs,
+            library_search_query: String::new(),
+            collection_search_query: String::new(),
+            collection_sort_asc: false,
             cache_stats: CacheStats {
                 audio_chunk_bytes: if fixture { 42 * 1024 * 1024 } else { 0 },
                 audio_chunk_count: if fixture { 168 } else { 0 },
@@ -219,11 +313,6 @@ fn state_signal() -> Signal<AppState> {
 }
 
 /// Mounts the non-blocking background live-engine update pump when NOT running in `--fixture` mode.
-///
-/// In `--fixture` mode this is a zero-cost no-op so deterministic tests and QA snapshots never hit
-/// the network. In live mode it initializes the real `InnerTubeClient` / `PlaybackController` /
-/// `LoopbackProxy` / `CascadeLyricsProvider` Tokio runtime, triggers the initial Home feed load,
-/// and drains typed `LiveUpdate` messages on the NSH engine thread every 80ms.
 pub fn mount_live_engine_bridge() {
     if is_fixture_mode() {
         return;
@@ -350,7 +439,70 @@ pub fn active_tab() -> AppTab {
 }
 
 pub fn set_tab(tab: AppTab) {
-    state_signal().update(|s| s.active_tab = tab);
+    state_signal().update(|s| {
+        if s.active_tab != tab {
+            s.nav_history.truncate(s.nav_pos + 1);
+            s.nav_history.push(tab);
+            s.nav_pos = s.nav_history.len().saturating_sub(1);
+            s.active_tab = tab;
+        }
+        if tab != AppTab::Home {
+            // Keep selected collection only when staying on Home or returning to it.
+        }
+    });
+}
+
+pub fn can_go_back() -> bool {
+    state_signal().with(|s| s.selected_collection.is_some() || s.nav_pos > 0)
+}
+
+pub fn can_go_forward() -> bool {
+    state_signal().with(|s| s.nav_pos + 1 < s.nav_history.len())
+}
+
+pub fn go_back() {
+    state_signal().update(|s| {
+        if s.active_tab == AppTab::Home && s.selected_collection.is_some() {
+            s.selected_collection = None;
+            return;
+        }
+        if s.nav_pos > 0 {
+            s.nav_pos -= 1;
+            s.active_tab = s.nav_history[s.nav_pos];
+        }
+    });
+}
+
+pub fn go_forward() {
+    state_signal().update(|s| {
+        if s.nav_pos + 1 < s.nav_history.len() {
+            s.nav_pos += 1;
+            s.active_tab = s.nav_history[s.nav_pos];
+        }
+    });
+}
+
+pub fn sidebar_collapsed() -> bool {
+    state_signal().with(|s| s.sidebar_collapsed)
+}
+
+pub fn toggle_sidebar() {
+    state_signal().update(|s| s.sidebar_collapsed = !s.sidebar_collapsed);
+}
+
+pub fn desktop_side_panel_open() -> bool {
+    state_signal().with(|s| s.desktop_side_panel_open)
+}
+
+pub fn toggle_desktop_side_panel(panel: DesktopSidePanel) {
+    state_signal().update(|s| {
+        if s.desktop_side_panel_open && s.desktop_side_panel == panel {
+            s.desktop_side_panel_open = false;
+        } else {
+            s.desktop_side_panel = panel;
+            s.desktop_side_panel_open = true;
+        }
+    });
 }
 
 pub fn theme_choice() -> ThemeChoice {
@@ -374,7 +526,10 @@ pub fn desktop_side_panel() -> DesktopSidePanel {
 }
 
 pub fn set_desktop_side_panel(panel: DesktopSidePanel) {
-    state_signal().update(|s| s.desktop_side_panel = panel);
+    state_signal().update(|s| {
+        s.desktop_side_panel = panel;
+        s.desktop_side_panel_open = true;
+    });
 }
 
 pub fn player_snapshot() -> PlayerSnapshot {
@@ -391,6 +546,74 @@ pub fn is_home_loading() -> bool {
 
 pub fn home_error() -> Option<String> {
     state_signal().with(|s| s.home_error.clone())
+}
+
+pub fn selected_mood() -> Option<String> {
+    state_signal().with(|s| s.selected_mood.clone())
+}
+
+pub fn select_mood(mood: &str) {
+    let toggle_off = state_signal().with(|s| s.selected_mood.as_deref() == Some(mood));
+    state_signal().update(|s| {
+        s.selected_mood = if toggle_off {
+            None
+        } else {
+            Some(mood.to_owned())
+        };
+    });
+    if !toggle_off {
+        run_search(mood);
+        set_tab(AppTab::Search);
+    }
+}
+
+pub fn section_page(section_id: &str) -> usize {
+    state_signal().with(|s| s.section_pages.get(section_id).copied().unwrap_or(0))
+}
+
+pub fn shift_section_page(section_id: &str, delta: isize, total_items: usize, page_size: usize) {
+    if total_items == 0 || page_size == 0 {
+        return;
+    }
+    let max_page = total_items.saturating_sub(1) / page_size;
+    state_signal().update(|s| {
+        let cur = s.section_pages.get(section_id).copied().unwrap_or(0) as isize;
+        let next = (cur + delta).clamp(0, max_page as isize) as usize;
+        s.section_pages.insert(section_id.to_owned(), next);
+    });
+}
+
+pub fn sidebar_playlists() -> Vec<SidebarPlaylist> {
+    state_signal().with(|s| {
+        let mut out = vec![SidebarPlaylist {
+            id: "FEmusic_liked_videos".into(),
+            title: "Liked Music".into(),
+            subtitle: format!("Auto playlist • {} tracks", s.liked_tracks.len()),
+            artwork_url: None,
+            is_liked_auto: true,
+        }];
+        for sec in &s.home_sections {
+            for item in &sec.items {
+                if let resonance_contract::HomeItem::Collection {
+                    browse_id,
+                    title,
+                    subtitle,
+                    artwork_url,
+                } = item
+                    && !out.iter().any(|p| p.id == *browse_id)
+                {
+                    out.push(SidebarPlaylist {
+                        id: browse_id.clone(),
+                        title: title.clone(),
+                        subtitle: subtitle.clone(),
+                        artwork_url: artwork_url.clone(),
+                        is_liked_auto: false,
+                    });
+                }
+            }
+        }
+        out
+    })
 }
 
 pub fn refresh_home() {
@@ -465,7 +688,7 @@ pub fn run_search(query: &str) {
                         || t.artist_display().to_lowercase().contains(&ql)
                         || t.album
                             .as_ref()
-                            .is_some_and(|a| a.to_lowercase().contains(&ql))
+                            .is_some_and(|a| a.title.to_lowercase().contains(&ql))
                 })
                 .collect();
             s.search_all_tracks = matched;
@@ -517,6 +740,66 @@ pub fn liked_tracks() -> Vec<Track> {
     state_signal().with(|s| s.liked_tracks.clone())
 }
 
+pub fn is_track_liked(track_id: &str) -> bool {
+    state_signal().with(|s| s.liked_tracks.iter().any(|t| t.id == track_id))
+}
+
+pub fn is_current_disliked() -> bool {
+    state_signal().with(|s| {
+        s.player
+            .current_track
+            .as_ref()
+            .is_some_and(|t| s.disliked_ids.contains(&t.id))
+    })
+}
+
+pub fn toggle_dislike_current() {
+    state_signal().update(|s| {
+        if let Some(cur) = s.player.current_track.as_mut() {
+            if let Some(pos) = s.disliked_ids.iter().position(|id| id == &cur.id) {
+                s.disliked_ids.remove(pos);
+            } else {
+                s.disliked_ids.push(cur.id.clone());
+                cur.is_liked = false;
+                s.liked_tracks.retain(|t| t.id != cur.id);
+                s.status_banner = Some(format!("Less like \"{}\"", cur.title));
+            }
+        }
+    });
+}
+
+pub fn library_filter() -> LibraryFilter {
+    state_signal().with(|s| s.library_filter)
+}
+
+pub fn set_library_filter(filter: LibraryFilter) {
+    state_signal().update(|s| s.library_filter = filter);
+}
+
+pub fn library_search_query() -> String {
+    state_signal().with(|s| s.library_search_query.clone())
+}
+
+pub fn set_library_search_query(q: &str) {
+    state_signal().update(|s| s.library_search_query = q.to_owned());
+}
+
+pub fn collection_search_query() -> String {
+    state_signal().with(|s| s.collection_search_query.clone())
+}
+
+pub fn set_collection_search_query(q: &str) {
+    state_signal().update(|s| s.collection_search_query = q.to_owned());
+}
+
+pub fn collection_sort_asc() -> bool {
+    state_signal().with(|s| s.collection_sort_asc)
+}
+
+pub fn toggle_collection_sort() {
+    state_signal().update(|s| s.collection_sort_asc = !s.collection_sort_asc);
+}
+
 pub fn history_entries() -> Vec<HistoryEntry> {
     state_signal().with(|s| s.history.clone())
 }
@@ -531,6 +814,13 @@ pub fn auth_info() -> (bool, Option<String>) {
 
 pub fn status_banner() -> Option<String> {
     state_signal().with(|s| s.status_banner.clone())
+}
+
+pub fn set_status_banner(msg: impl Into<String>) {
+    let text = msg.into();
+    state_signal().update(|s| {
+        s.status_banner = Some(text);
+    });
 }
 
 pub fn play_track(track: Track) {
@@ -575,6 +865,21 @@ pub fn play_track(track: Track) {
     }
 }
 
+pub fn play_all_shuffled(mut tracks: Vec<Track>) {
+    if tracks.is_empty() {
+        return;
+    }
+    tracks.reverse();
+    let first = tracks.remove(0);
+    state_signal().update(|s| {
+        s.player.queue.shuffle = true;
+    });
+    play_track(first);
+    for extra in tracks {
+        play_last(extra);
+    }
+}
+
 pub fn play_next(track: Track) {
     state_signal().update(|s| {
         let idx = s
@@ -605,6 +910,11 @@ pub fn open_collection(
     subtitle: String,
     artwork_url: Option<String>,
 ) {
+    set_tab(AppTab::Home);
+    state_signal().update(|s| {
+        s.collection_search_query.clear();
+        s.collection_sort_asc = false;
+    });
     if is_fixture_mode() {
         state_signal().update(|s| {
             s.selected_collection = Some(Playlist {
@@ -632,6 +942,7 @@ pub fn open_collection(
 pub fn close_collection() {
     state_signal().update(|s| {
         s.selected_collection = None;
+        s.collection_search_query.clear();
     });
 }
 
@@ -841,12 +1152,32 @@ pub fn toggle_like_current() {
         if let Some(cur) = s.player.current_track.as_mut() {
             cur.is_liked = !cur.is_liked;
             if cur.is_liked {
+                s.disliked_ids.retain(|id| id != &cur.id);
                 if !s.liked_tracks.iter().any(|t| t.id == cur.id) {
                     s.liked_tracks.insert(0, cur.clone());
                 }
             } else {
                 s.liked_tracks.retain(|t| t.id != cur.id);
             }
+        }
+    });
+}
+
+pub fn toggle_like_track(mut track: Track) {
+    state_signal().update(|s| {
+        let already = s.liked_tracks.iter().any(|t| t.id == track.id);
+        let next_liked = !already;
+        if next_liked {
+            track.is_liked = true;
+            s.disliked_ids.retain(|id| id != &track.id);
+            s.liked_tracks.insert(0, track.clone());
+        } else {
+            s.liked_tracks.retain(|t| t.id != track.id);
+        }
+        if let Some(cur) = s.player.current_track.as_mut()
+            && cur.id == track.id
+        {
+            cur.is_liked = next_liked;
         }
     });
 }

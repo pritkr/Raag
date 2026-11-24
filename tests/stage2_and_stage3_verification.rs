@@ -13,11 +13,11 @@ use async_trait::async_trait;
 use nsh_engine::{EngineConfig, Points, Root, Size};
 use nsh_testing::Headless;
 use resonance_contract::{
-    AudioFormat, AudioStreamSource, CoreResult, HomeSection, LyricsDocument, MusicProvider,
-    Playlist, SearchResults, Track,
+    AudioCodec, CoreResult, HomeSection, LyricsDocument, MusicProvider, Playlist, SearchResults,
+    StreamInfo, Track,
 };
 use resonance_core::cache::{ChunkCache, DEFAULT_MAX_AUDIO_CACHE_BYTES, SqliteCacheStore};
-use resonance_core::innertube::redact_secrets;
+use resonance_core::innertube::auth::redact_secrets;
 use resonance_core::palette::{extract_and_cache_from_rgb, palette_for_track};
 use resonance_core::proxy::LoopbackProxy;
 use tempfile::tempdir;
@@ -29,8 +29,13 @@ impl MusicProvider for DummyProvider {
     async fn home(&self) -> CoreResult<Vec<HomeSection>> {
         Ok(Vec::new())
     }
-    async fn search(&self, _query: &str) -> CoreResult<SearchResults> {
-        Ok(SearchResults::default())
+    async fn search(&self, query: &str) -> CoreResult<SearchResults> {
+        Ok(SearchResults {
+            query: query.to_owned(),
+            tracks: Vec::new(),
+            albums: Vec::new(),
+            continuation: None,
+        })
     }
     async fn browse_collection(&self, _id: &str) -> CoreResult<Playlist> {
         Ok(Playlist {
@@ -41,27 +46,28 @@ impl MusicProvider for DummyProvider {
             tracks: Vec::new(),
         })
     }
-    async fn radio_tracks(&self, _video_id: &str) -> CoreResult<Vec<Track>> {
+    async fn liked_songs(&self) -> CoreResult<Vec<Track>> {
         Ok(Vec::new())
     }
-    async fn resolve_stream(&self, video_id: &str) -> CoreResult<AudioStreamSource> {
-        Ok(AudioStreamSource {
+    async fn autoplay_next(&self, _video_id: &str) -> CoreResult<Vec<Track>> {
+        Ok(Vec::new())
+    }
+    async fn resolve_stream(&self, video_id: &str) -> CoreResult<StreamInfo> {
+        Ok(StreamInfo {
             video_id: video_id.to_owned(),
             url: "http://127.0.0.1:9/unused".into(),
-            format: AudioFormat {
-                itag: 251,
-                mime_type: "audio/webm; codecs=\"opus\"".into(),
-                bitrate_bps: 160_000,
-                content_length: Some(1024),
-                approx_duration_ms: Some(1000),
-            },
-            client_used: "VISIONOS".into(),
+            itag: 251,
+            mime_type: "audio/webm; codecs=\"opus\"".into(),
+            codec: AudioCodec::Opus,
+            bitrate_kbps: 160,
+            content_length: 1024,
+            duration_ms: 1000,
+            loudness_db: None,
+            resolved_by_client: "VISIONOS".into(),
             expires_at_unix_secs: u64::MAX,
-            is_authenticated: false,
-            requires_range_chunking: false,
         })
     }
-    async fn lyrics(&self, _video_id: &str) -> CoreResult<Option<LyricsDocument>> {
+    async fn ytm_lyrics(&self, _video_id: &str) -> CoreResult<Option<LyricsDocument>> {
         Ok(None)
     }
 }
@@ -109,7 +115,7 @@ fn secret_redaction_scrubs_cookies_sapisid_auth_and_signed_urls() {
     assert!(!clean.contains("secret456"), "must redact 3PAPISID value");
     assert!(!clean.contains("deadbeef"), "must redact SAPISIDHASH");
     assert!(!clean.contains("TOPSECRET"), "must redact signed videoplayback query");
-    assert!(clean.contains("[REDACTED]"));
+    assert!(clean.contains("[REDACTED_SENSITIVE_LINE]"));
 }
 
 fn relative_luminance(rgb: [u8; 3]) -> f64 {
@@ -169,7 +175,7 @@ fn stage3_search_filters_desktop_side_panel_and_zero_blur_in_virtual_lists() -> 
     desktop.wait_for("Up Next")?;
     desktop.wait_for("Synced Lyrics")?;
     desktop.press("id:side-panel-tab-lyrics")?;
-    desktop.wait_for("Midnight traffic humming low beneath the glass")?;
+    desktop.wait_for("Streetlights blur into copper and glass")?;
     desktop.press("id:side-panel-tab-queue")?;
 
     // Search filters (All / Songs / Albums) work deterministically

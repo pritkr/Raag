@@ -44,7 +44,10 @@ async fn req1_walking_skeleton_gate0_and_exact_nsh_pin_and_fallbacks() {
     let cargo_toml = fs::read_to_string(root.join("Cargo.toml")).unwrap();
     assert!(cargo_toml.contains("nsh-core = \"=0.6.1\""));
     assert!(cargo_toml.contains("nsh-base = { version = \"=0.6.1\""));
-    assert!(cargo_toml.contains("license = \"Apache-2.0\""));
+    assert!(
+        cargo_toml.contains("license = \"GPL-3.0-or-later\"")
+            || cargo_toml.contains("license = \"GPL-3.0-only\"")
+    );
 
     // Verify documented platform fallbacks exist on disk
     let fallbacks = documented_platform_fallbacks();

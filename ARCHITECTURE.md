@@ -26,9 +26,9 @@ NSH's Rust path (`=0.6.1`) provides **native `nsh/audio`** (`nsh_core::prelude::
 - **Nightly Probe Binary (`src/bin/client_probe.rs`):** Tests every client against fixed probe videos (free, Premium-only itag, age-restricted; cookies on & off) and atomically writes `client_matrix.json`.
 
 ## 4. License Policy & `MusicProvider` Reuse Seam
-- **App License:** `Apache-2.0`.
+- **App License:** `GPL-3.0-or-later` (see [LICENSE](LICENSE)).
 - **Reuse Over Hand-Written Parsers:** `crates/core/src/innertube/provider_adapter.rs` provides `CompositeMusicProvider` separating `BrowseDelegate` (designed to wrap MIT-licensed `ytmapi-rs` for browse/search/home/library) from Resonance's owned `PlaybackResolver` (`ClientMatrix` + `yt-dlp-ejs` + `LoopbackProxy`).
-- **GPL Isolation:** GPL-licensed libraries (e.g. RustyPipe) are strictly excluded from Cargo dependencies; `_refs/` is marked strictly study-only and gitignored.
+- **Study Isolation:** `_refs/` is marked strictly study-only and gitignored.
 
 ## 5. Performance Budgets & 50% Next-Track Pre-Resolution
 To decisively beat cold-start playback latency (~5s in comparable clients):

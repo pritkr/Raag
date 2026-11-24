@@ -10,7 +10,7 @@ exclude = ["_refs"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-license = "Apache-2.0"
+license = "GPL-3.0-or-later"
 
 [workspace.dependencies]
 resonance-contract = { path = "crates/contract" }
@@ -73,6 +73,7 @@ serde_json.workspace = true
 log.workspace = true
 env_logger.workspace = true
 async-trait.workspace = true
+crossbeam-channel.workspace = true
 
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
 souvlaki = { version = "0.8", optional = true }
@@ -83,7 +84,6 @@ hyper.workspace = true
 hyper-util.workspace = true
 http-body-util.workspace = true
 bytes.workspace = true
-crossbeam-channel.workspace = true
 
 [dev-dependencies]
 nsh-engine.workspace = true

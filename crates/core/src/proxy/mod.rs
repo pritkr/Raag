@@ -166,9 +166,10 @@ async fn handle_request(
     state: Arc<ProxyState>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     let path = req.uri().path();
-    let Some(video_id) = path.strip_prefix("/stream/") else {
+    let Some(video_id_raw) = path.strip_prefix("/stream/") else {
         return Ok(simple_response(StatusCode::NOT_FOUND, "not found"));
     };
+    let video_id = video_id_raw.strip_suffix(".m4a").unwrap_or(video_id_raw);
     if video_id.is_empty() || video_id.contains('/') {
         return Ok(simple_response(StatusCode::BAD_REQUEST, "invalid video_id"));
     }
@@ -285,8 +286,9 @@ async fn handle_request(
         None => (0, total_len.saturating_sub(1), false),
     };
 
-    // Cap single response slice to 2 MiB to keep latency crisp while streaming.
-    let effective_end = req_end.min(req_start + 2 * 1024 * 1024 - 1);
+    // Respect client requested range so native players (AVPlayer / CoreMedia) don't
+    // fail with CoreMediaErrorDomain -12939 content range mismatch.
+    let effective_end = req_end;
     let first_chunk = req_start / CHUNK_SIZE;
     let last_chunk = effective_end / CHUNK_SIZE;
 

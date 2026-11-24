@@ -1,0 +1,21 @@
+{
+  "version": 2,
+  "skills": {
+    "nsh": {
+      "source": "longbridge/nsh",
+      "commit": "aedafb55bde0b1e860c024f0ffab56457d3c4452",
+      "sourceType": "github",
+      "skillPath": "skills/nsh/SKILL.md",
+      "computedHash": "8186fd9182d992cd0ea29652c92072145843f0f7ce4a9708641a5cd366c7560d",
+      "installMode": "copy"
+    },
+    "nsh-design-guides": {
+      "source": "longbridge/nsh",
+      "commit": "aedafb55bde0b1e860c024f0ffab56457d3c4452",
+      "sourceType": "github",
+      "skillPath": "skills/nsh-design-guides/SKILL.md",
+      "computedHash": "03f68a0fe54e193b3f1238cb3157035ee9ee396385c6c8201477c665d99def83",
+      "installMode": "copy"
+    }
+  }
+}

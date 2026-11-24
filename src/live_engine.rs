@@ -121,7 +121,7 @@ fn init_runtime() -> Result<LiveRuntime, String> {
 
     let (tx, rx) = unbounded();
     let initial_snap = rt.block_on(controller.snapshot());
-    let stats = cache.cache_stats().unwrap_or_default();
+    let stats = cache.stats().unwrap_or_default();
     let signed_in = provider.current_session().is_some();
     let proxy_base = format!("http://{}", proxy.addr());
     crate::store::set_proxy_base_url(&proxy_base);
@@ -223,7 +223,8 @@ pub fn dispatch_sign_in(cookie_header: String) {
             auth_user: 0,
             page_id: None,
             visitor_data: provider.current_visitor_data(),
-            updated_at_unix_secs: resonance_core::unix_secs(),
+            account_name: None,
+            is_premium: false,
         };
         match provider.sign_in(session) {
             Ok(()) => {
@@ -259,8 +260,8 @@ pub fn dispatch_clear_caches() {
     let tx = rt.tx.clone();
     rt.rt.spawn(async move {
         let _ = chunks.clear_all();
-        let _ = cache.clear_all();
-        let stats = cache.cache_stats().unwrap_or_default();
+        let _ = cache.clear_all_caches();
+        let stats = cache.stats().unwrap_or_default();
         let _ = tx.send(LiveUpdate::CacheStatsUpdated(stats));
     });
 }

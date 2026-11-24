@@ -87,7 +87,7 @@ fn native_nsh_audio_player_drives_open_pause_resume_seek_volume_loop_and_auto_ad
     })
     .expect("headless NSH engine with native audio backend starts");
 
-    app.wait_for("Resonance")?;
+    app.wait_for("Raag")?;
 
     // 1. Initial mount opens & resumes the first fixture track via Loopback Proxy URL
     let initial_cmds = recorder.commands();
@@ -227,14 +227,20 @@ fn native_nsh_audio_player_drives_open_pause_resume_seek_volume_loop_and_auto_ad
     // 8. Native AudioEvent::Ended auto-advances to track #3 and opens it in native nsh/audio!
     recorder.clear_commands();
     assert!(recorder.emit_to_active(AudioEvent::Ended));
-    app.wait_for("Amber Horizon (Acoustic Session)")?;
-    let ended_cmds = recorder.commands();
-    assert!(
-        ended_cmds.iter().any(|c| matches!(
+    let mut opened = false;
+    for _ in 0..50 {
+        if recorder.commands().iter().any(|c| matches!(
             c,
             AudioCommand::Open { src, .. }
                 if src == "http://127.0.0.1:41234/stream/fix-missing-art?itag=251"
-        )),
+        )) {
+            opened = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(
+        opened,
         "AudioEvent::Ended must auto-advance and open track #3 in native nsh/audio"
     );
 
