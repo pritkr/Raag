@@ -248,3 +248,43 @@ pub fn format_duration_ms(ms: u64) -> String {
     let secs = total_secs % 60;
     format!("{mins}:{secs:02}")
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DownloadStatus {
+    Queued,
+    Downloading,
+    Paused,
+    Tagging,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DownloadRecord {
+    pub video_id: TrackId,
+    pub track: Track,
+    pub status: DownloadStatus,
+    pub itag: u32,
+    pub codec: AudioCodec,
+    pub mime_type: String,
+    /// Relative filename inside downloads root (e.g. `dQw4w9WgXcQ_140.m4a`). Never an absolute path.
+    pub relative_path: Option<String>,
+    pub bytes_downloaded: u64,
+    pub total_bytes: u64,
+    pub sha256_hex: Option<String>,
+    pub tags_embedded: bool,
+    pub created_at_unix_secs: u64,
+    pub updated_at_unix_secs: u64,
+    pub completed_at_unix_secs: Option<u64>,
+    /// Redacted human-readable failure reason (must never contain signed URLs or query params).
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct OfflineStats {
+    pub completed_count: u64,
+    pub active_count: u64,
+    pub total_bytes: u64,
+    pub max_bytes: u64,
+}

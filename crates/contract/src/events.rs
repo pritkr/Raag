@@ -3,7 +3,10 @@
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
-use crate::{CacheStats, LyricsDocument, PlayerSnapshot, TrackId};
+use crate::{
+    CacheStats, DownloadRecord, LyricsDocument, MutationCommand, MutationReceipt, PlayerSnapshot,
+    TrackId,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MediaCommand {
@@ -39,6 +42,15 @@ pub enum AppEvent {
     Toast {
         message: String,
         is_error: bool,
+    },
+    DownloadUpdated(DownloadRecord),
+    DownloadRemoved {
+        video_id: TrackId,
+    },
+    MutationCompleted(MutationReceipt),
+    MutationFailed {
+        command: MutationCommand,
+        reason: String,
     },
 }
 

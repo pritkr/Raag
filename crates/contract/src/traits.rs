@@ -3,8 +3,9 @@
 use async_trait::async_trait;
 
 use crate::{
-    AuthError, AuthSession, CacheStats, CoreResult, HistoryEntry, HomeSection, LyricsDocument,
-    MediaCommand, Playlist, QueueState, SearchResults, SponsorSegment, StreamInfo, Track, TrackId,
+    AuthError, AuthSession, CacheStats, CoreResult, DownloadRecord, DownloadStatus, HistoryEntry,
+    HomeSection, LyricsDocument, MediaCommand, OfflineStats, Playlist, QueueState, SearchResults,
+    SponsorSegment, StreamInfo, Track, TrackId,
 };
 
 #[async_trait]
@@ -73,4 +74,39 @@ pub trait LyricsProvider: Send + Sync {
 #[async_trait]
 pub trait SponsorBlockProvider: Send + Sync {
     async fn fetch_segments(&self, video_id: &str) -> CoreResult<Vec<SponsorSegment>>;
+}
+
+pub trait OfflineStore: Send + Sync {
+    fn upsert_download(&self, record: &DownloadRecord) -> CoreResult<()>;
+    fn update_download_progress(
+        &self,
+        video_id: &str,
+        status: DownloadStatus,
+        bytes_downloaded: u64,
+        total_bytes: u64,
+        updated_at_unix_secs: u64,
+    ) -> CoreResult<()>;
+    fn mark_download_completed(
+        &self,
+        video_id: &str,
+        relative_path: &str,
+        file_size_bytes: u64,
+        sha256_hex: &str,
+        tags_embedded: bool,
+        completed_at_unix_secs: u64,
+    ) -> CoreResult<()>;
+    fn mark_download_failed(
+        &self,
+        video_id: &str,
+        status: DownloadStatus,
+        redacted_error: Option<&str>,
+        updated_at_unix_secs: u64,
+    ) -> CoreResult<()>;
+    fn get_download(&self, video_id: &str) -> CoreResult<Option<DownloadRecord>>;
+    fn get_completed_download(&self, video_id: &str) -> CoreResult<Option<DownloadRecord>>;
+    fn list_downloads(&self) -> CoreResult<Vec<DownloadRecord>>;
+    fn delete_download_record(&self, video_id: &str) -> CoreResult<Option<DownloadRecord>>;
+    fn offline_stats(&self, max_bytes: u64) -> CoreResult<OfflineStats>;
+    /// Absolute canonical directory holding finalized offline media files.
+    fn downloads_root(&self) -> std::path::PathBuf;
 }
