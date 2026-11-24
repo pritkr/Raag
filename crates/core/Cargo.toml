@@ -1,0 +1,35 @@
+[package]
+name = "resonance-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+resonance-contract.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+rusqlite.workspace = true
+rquickjs.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+hex.workspace = true
+lru.workspace = true
+url.workspace = true
+bytes.workspace = true
+log.workspace = true
+rand.workspace = true
+crossbeam-channel.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+futures-util.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+rquickjs = { workspace = true, features = ["bindgen"] }
+
+[dev-dependencies]
+tempfile.workspace = true

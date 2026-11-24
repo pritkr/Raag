@@ -1,0 +1,22 @@
+@import "tailwindcss";
+@source not "../_refs";
+@source not "../target";
+@source not "../crates";
+@source not "../platform";
+
+.nsh-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(159, 166, 178, 0.3) transparent;
+}
+.nsh-scroll::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+.nsh-scroll::-webkit-scrollbar-thumb {
+  background: rgba(159, 166, 178, 0.3);
+  border-radius: 9999px;
+}
+.nsh-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+

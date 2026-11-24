@@ -1,0 +1,39 @@
+{
+  "name": "Resonance",
+  "id": "dev.resonance.ytmusic",
+  "version": "0.1.0",
+  "build": 1,
+  "appearance": "system",
+  "theme": "theme.json",
+  "rust": ".",
+  "root": "App",
+  "capabilities": {
+    "network": {
+      "hosts": [
+        "127.0.0.1",
+        "localhost",
+        "music.youtube.com",
+        "www.youtube.com",
+        "youtubei.googleapis.com",
+        "*.googlevideo.com",
+        "lh3.googleusercontent.com",
+        "i.ytimg.com",
+        "lrclib.net",
+        "unison.betterlyrics.org",
+        "lyrics.api.dacubeking.com",
+        "sponsor.ajay.app"
+      ]
+    },
+    "webview": {
+      "hosts": [
+        "accounts.google.com",
+        "music.youtube.com",
+        "www.youtube.com"
+      ],
+      "input": true
+    },
+    "audio": true,
+    "statusBar": true,
+    "clipboard": true
+  }
+}

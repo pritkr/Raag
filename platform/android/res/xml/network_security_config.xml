@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Enforce HTTPS globally for all remote traffic -->
+    <base-config cleartextTrafficPermitted="false" />
+
+    <!-- Permit cleartext HTTP strictly for the in-process Rust Loopback Proxy -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>

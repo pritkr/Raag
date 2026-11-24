@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "updated_at_unix_secs": 1764000000,
+  "source": "probe-verified-default",
+  "po_token_policy_notes": "WEB_REMIX requires GVS PO token for free/anonymous web sessions; Premium subscribers bypass GVS PO token. iOS clients require iOSGuard PoToken and are disabled by default. Android TV / iOS TV clients are excluded due to upstream deprecation.",
+  "probe_videos": [
+    {
+      "id": "dQw4w9WgXcQ",
+      "label": "standard_free_music",
+      "category": "free"
+    },
+    {
+      "id": "kJQP7kiw5Fk",
+      "label": "premium_256k_candidate",
+      "category": "premium_itag"
+    },
+    {
+      "id": "age_gate_probe_id",
+      "label": "age_restricted_probe",
+      "category": "age_restricted"
+    }
+  ],
+  "clients": [
+    {
+      "kind": "web_remix",
+      "enabled": true,
+      "priority_signed_in": 1,
+      "priority_anonymous": 3,
+      "auth_mode": "cookies_or_anonymous",
+      "po_token_policy": "required_for_web_free_bypassed_by_premium",
+      "requires_ejs_solver": true,
+      "probe_pass_cookies_on": true,
+      "probe_pass_cookies_off": true,
+      "notes": "Primary browse/search/library/next and proactive signed-in playback with yt-dlp-ejs solver in rquickjs."
+    },
+    {
+      "kind": "vision_os",
+      "enabled": true,
+      "priority_signed_in": 2,
+      "priority_anonymous": 1,
+      "auth_mode": "cookies_or_anonymous",
+      "po_token_policy": "optional",
+      "requires_ejs_solver": false,
+      "probe_pass_cookies_on": true,
+      "probe_pass_cookies_off": true,
+      "notes": "Data-driven probe-verified candidate (not attributed to ytm-rs); disabled automatically if nightly probe fails."
+    },
+    {
+      "kind": "android_vr",
+      "enabled": true,
+      "priority_signed_in": 99,
+      "priority_anonymous": 2,
+      "auth_mode": "anonymous_only",
+      "po_token_policy": "not_required",
+      "requires_ejs_solver": false,
+      "probe_pass_cookies_on": false,
+      "probe_pass_cookies_off": true,
+      "notes": "Anonymous-only fallback; strictly isolated from browser cookies."
+    },
+    {
+      "kind": "tv_samsung",
+      "enabled": false,
+      "priority_signed_in": 99,
+      "priority_anonymous": 99,
+      "auth_mode": "tv_oauth_only",
+      "po_token_policy": "not_required",
+      "requires_ejs_solver": true,
+      "probe_pass_cookies_on": false,
+      "probe_pass_cookies_off": false,
+      "notes": "Disabled unless TV OAuth is explicitly provisioned; never receives browser cookies."
+    },
+    {
+      "kind": "ios",
+      "enabled": false,
+      "priority_signed_in": 99,
+      "priority_anonymous": 99,
+      "auth_mode": "anonymous_only",
+      "po_token_policy": "required_ios_guard",
+      "requires_ejs_solver": false,
+      "probe_pass_cookies_on": false,
+      "probe_pass_cookies_off": false,
+      "notes": "Disabled by default: requires iOSGuard PoToken and drops browser cookies."
+    }
+  ]
+}
