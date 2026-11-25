@@ -34,10 +34,10 @@ impl RecordingNshAudio {
 
     fn emit_to_active(&self, event: AudioEvent) -> bool {
         let id = *self.active_id.lock().unwrap();
-        if let Some(id) = id {
-            if let Some(sink) = self.sinks.lock().unwrap().get(&id) {
-                return sink.send(event);
-            }
+        if let Some(id) = id
+            && let Some(sink) = self.sinks.lock().unwrap().get(&id)
+        {
+            return sink.send(event);
         }
         false
     }

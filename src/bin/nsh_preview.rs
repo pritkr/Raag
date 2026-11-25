@@ -318,9 +318,9 @@ mod host {
                                 style.corner_radius.bottom_left.map_or(base_r, |p| p.0),
                             ];
                             let w = style.borders.widths.to_array();
-                            for i in 0..4 {
+                            for (i, border_w) in w.iter().enumerate() {
                                 n.borders[i] = SerializedBorderSide {
-                                    width: w[i].0,
+                                    width: border_w.0,
                                     color: color_to_css(style.borders.colors[i]),
                                 };
                             }
@@ -414,11 +414,11 @@ mod host {
                         }
                     }
                     MountItem::InputValue { id, text, count } => {
-                        if let Some(n) = self.nodes.get_mut(&id) {
-                            if count >= n.input_count {
-                                n.input_value = text;
-                                n.input_count = count;
-                            }
+                        if let Some(n) = self.nodes.get_mut(&id)
+                            && count >= n.input_count
+                        {
+                            n.input_value = text;
+                            n.input_count = count;
                         }
                     }
                     MountItem::InputContent { id, content } => {

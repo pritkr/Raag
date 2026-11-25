@@ -117,10 +117,10 @@ pub fn redact_url(raw: &str) -> String {
         parsed.set_fragment(None);
         return parsed.to_string();
     }
-    if let Some((base, _)) = raw.split_once('?') {
-        if base.starts_with("http://") || base.starts_with("https://") {
-            return base.to_owned();
-        }
+    if let Some((base, _)) = raw.split_once('?')
+        && (base.starts_with("http://") || base.starts_with("https://"))
+    {
+        return base.to_owned();
     }
     "<redacted-url>".to_owned()
 }

@@ -119,7 +119,8 @@ pub fn extract_and_cache_from_rgb(track_id: &str, rgb_pixels: &[u8]) -> AmbientP
 
     // 16x16x16 quantized RGB histogram weighted by chroma (saturation) so vibrant album art
     // colors dominate over grey borders/letterboxing.
-    let mut buckets: HashMap<(u8, u8, u8), (u64, u64, u64, u64)> = HashMap::new();
+    type BucketAcc = (u64, u64, u64, u64);
+    let mut buckets: HashMap<(u8, u8, u8), BucketAcc> = HashMap::new();
     let step = (rgb_pixels.len() / 3 / 512).max(1);
     let mut idx = 0;
     while idx + 2 < rgb_pixels.len() {

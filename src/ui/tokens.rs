@@ -144,7 +144,8 @@ pub fn cover_gradient_pair(seed: &str) -> (AdaptiveColor, AdaptiveColor) {
         hash ^= b as u64;
         hash = hash.wrapping_mul(1099511628211);
     }
-    const PAIRS: [([u8; 3], [u8; 3], [u8; 3], [u8; 3]); 6] = [
+    type RgbQuad = ([u8; 3], [u8; 3], [u8; 3], [u8; 3]);
+    const PAIRS: [RgbQuad; 6] = [
         // Crimson & Deep Berry
         ([235, 94, 110], [160, 32, 66], [156, 36, 54], [52, 18, 34]),
         // Warm Sunset Amber & Terracotta

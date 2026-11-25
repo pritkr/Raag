@@ -112,12 +112,10 @@ impl ClientMatrixEntry {
         // Enforce strict per-client auth isolation
         match cfg.auth_mode {
             AuthMode::TvOAuthOnly if !has_tv_oauth => return false,
-            AuthMode::AnonymousOnly if tier.is_signed_in() => {
+            AuthMode::AnonymousOnly if tier.is_signed_in() && !self.probe_pass_cookies_off => {
                 // Anonymous-only clients can still be used as an unauthenticated fallback
                 // ONLY if probe_pass_cookies_off is true, and cookies are NEVER sent.
-                if !self.probe_pass_cookies_off {
-                    return false;
-                }
+                return false;
             }
             _ => {}
         }

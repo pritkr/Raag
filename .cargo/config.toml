@@ -1,6 +1,17 @@
 [target.aarch64-linux-android]
 linker = "/Users/aashishpandey/Library/Android/sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android26-clang"
 ar = "/Users/aashishpandey/Library/Android/sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ar"
+rustflags = [
+    "-C", "link-arg=-Wl,--gc-sections",
+    "-C", "link-arg=-Wl,--icf=all",
+]
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
 
 [env]
 CC_aarch64_linux_android = "/Users/aashishpandey/Library/Android/sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android26-clang"

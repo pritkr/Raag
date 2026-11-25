@@ -10,8 +10,10 @@
 
 use std::path::PathBuf;
 
+use resonance_core::innertube::auth::redact_secrets;
 use resonance_core::innertube::clients::ClientConfig;
 use resonance_core::innertube::matrix::{ClientMatrix, PoTokenPolicy};
+use resonance_core::solver::{ChallengeInput, QuickJsSolver};
 use resonance_core::unix_secs;
 
 #[tokio::main]
@@ -52,6 +54,10 @@ async fn main() {
 
         // Live probe against fixed probe videos (cookies off).
         let mut ok_off = false;
+        let mut http_status = 0u16;
+        let mut playability = String::from("UNPROBED");
+        let mut audio_itags: Vec<u64> = Vec::new();
+        let mut has_ciphered_stream = false;
         if let Some(probe) = matrix.probe_videos.first() {
             let payload = serde_json::json!({
                 "videoId": probe.id,
@@ -69,16 +75,80 @@ async fn main() {
                 .json(&payload)
                 .send()
                 .await
-                && resp.status().is_success()
-                && let Ok(json) = resp.json::<serde_json::Value>().await
             {
-                ok_off = json["playabilityStatus"]["status"].as_str() == Some("OK");
+                http_status = resp.status().as_u16();
+                if resp.status().is_success()
+                    && let Ok(json) = resp.json::<serde_json::Value>().await
+                {
+                    playability = json["playabilityStatus"]["status"]
+                        .as_str()
+                        .unwrap_or("UNKNOWN")
+                        .to_owned();
+                    ok_off = playability == "OK";
+                    if let Some(formats) = json["streamingData"]["adaptiveFormats"].as_array() {
+                        for f in formats {
+                            let mime = f["mimeType"].as_str().unwrap_or("");
+                            if mime.starts_with("audio/")
+                                && let Some(itag) = f["itag"].as_u64()
+                            {
+                                audio_itags.push(itag);
+                            }
+                            if f["signatureCipher"].as_str().is_some()
+                                || f["cipher"].as_str().is_some()
+                            {
+                                has_ciphered_stream = true;
+                            }
+                        }
+                    }
+                }
             }
         }
+        let reason_line = format!(
+            "probe client={} http={} playability={} audio_itags={:?} ciphered={}",
+            cfg.client_name, http_status, playability, audio_itags, has_ciphered_stream
+        );
+        println!("{}", redact_secrets(&reason_line));
         entry.probe_pass_cookies_off = ok_off;
         entry.enabled = ok_off || entry.probe_pass_cookies_on;
         if entry.enabled {
             passed_clients += 1;
+        }
+    }
+
+    if !offline_sim {
+        let solver_dir = std::env::temp_dir().join("raag_client_probe_ejs");
+        let _ = std::fs::remove_dir_all(&solver_dir);
+        let solver = QuickJsSolver::new(&solver_dir);
+        let manifest = solver.active_ejs_manifest();
+        let probe_js = r#"
+            function solveN(n) { return n.split("").reverse().join(""); }
+            function solveSig(s) { return s.slice(1); }
+        "#;
+        let t0 = std::time::Instant::now();
+        let solve_res = solver
+            .solve(ChallengeInput {
+                player_hash: "probe-ejs-check-v2".into(),
+                solver_js: probe_js.into(),
+                n_param: Some("abcd1234".into()),
+                sig_param: Some("Xsignature".into()),
+            })
+            .await;
+        let elapsed_ms = t0.elapsed().as_millis();
+        match solve_res {
+            Ok(solved) => println!(
+                "rquickjs_ejs_solver=OK elapsed_ms={} manifest_ok={} n_solved={} sig_solved={} watchdog_hit=false",
+                elapsed_ms,
+                manifest.is_ok(),
+                solved.n_param.is_some(),
+                solved.sig_param.is_some()
+            ),
+            Err(e) => println!(
+                "rquickjs_ejs_solver=ERR elapsed_ms={} manifest_ok={} watchdog_hit={} err={}",
+                elapsed_ms,
+                manifest.is_ok(),
+                elapsed_ms >= 9900,
+                redact_secrets(&e.to_string())
+            ),
         }
     }
 

@@ -38,7 +38,7 @@ fn filter_and_sort_tracks(mut tracks: Vec<Track>, query: &str, sort_asc: bool) -
         });
     }
     if sort_asc {
-        tracks.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+        tracks.sort_by_key(|a| a.title.to_lowercase());
     }
     tracks
 }
@@ -248,9 +248,12 @@ fn download_status_label(rec: &DownloadRecord) -> String {
     match rec.status {
         DownloadStatus::Queued => "Queued".to_owned(),
         DownloadStatus::Downloading => {
-            if rec.total_bytes > 0 {
-                let pct = (rec.bytes_downloaded.saturating_mul(100) / rec.total_bytes).min(100);
-                format!("Downloading {pct}%")
+            if let Some(pct) = rec
+                .bytes_downloaded
+                .saturating_mul(100)
+                .checked_div(rec.total_bytes)
+            {
+                format!("Downloading {}%", pct.min(100))
             } else {
                 "Downloading...".to_owned()
             }
@@ -486,7 +489,7 @@ fn render_playlists_view(query: &str, sort_asc: bool) -> AnyElement {
         playlists.retain(|p| matches_query(&p.title, &ql) || matches_query(&p.subtitle, &ql));
     }
     if sort_asc {
-        playlists.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+        playlists.sort_by_key(|a| a.title.to_lowercase());
     }
 
     let count = playlists.len();
@@ -627,7 +630,7 @@ fn render_albums_view(query: &str, sort_asc: bool) -> AnyElement {
         albums.retain(|(_, title, sub, _)| matches_query(title, &ql) || matches_query(sub, &ql));
     }
     if sort_asc {
-        albums.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
+        albums.sort_by_key(|a| a.1.to_lowercase());
     }
 
     let count = albums.len();
@@ -738,7 +741,7 @@ fn render_artists_view(query: &str, sort_asc: bool) -> AnyElement {
         artists.retain(|(name, _)| matches_query(name, &ql));
     }
     if sort_asc {
-        artists.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+        artists.sort_by_key(|a| a.0.to_lowercase());
     } else {
         artists.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     }

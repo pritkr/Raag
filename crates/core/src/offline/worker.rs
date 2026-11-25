@@ -488,6 +488,7 @@ impl DownloadManager {
         // 4. Open .part file and align resume offset to CHUNK_SIZE.
         let mut file = match OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(&part_path)
@@ -691,6 +692,7 @@ impl DownloadManager {
         let (tags_embedded, sha256_hex, final_len) = match tag_and_hash {
             Ok(Ok(v)) => v,
             Ok(Err(e)) => {
+                let _ = fs::remove_file(&part_path);
                 let msg = redact_error_message(&e.to_string());
                 self.mark_failed_and_emit(&video_id, DownloadStatus::Failed, Some(&msg));
                 return;
@@ -807,7 +809,7 @@ impl DownloadManager {
                     let wait_dur = parse_retry_after(resp.headers().get(RETRY_AFTER))
                         .unwrap_or_else(|| {
                             let base_secs = 1u64 << rate_limit_count;
-                            let jitter_ms = (unix_secs().wrapping_mul(31) % 250) as u64;
+                            let jitter_ms = unix_secs().wrapping_mul(31) % 250;
                             Duration::from_secs(base_secs) + Duration::from_millis(jitter_ms)
                         });
                     rate_limit_count += 1;

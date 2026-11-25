@@ -271,7 +271,12 @@ async fn handle_request(
                 }
             }
         }
-        let info = stream_info.as_ref().unwrap();
+        let Some(info) = stream_info.as_ref() else {
+            return Ok(simple_response(
+                StatusCode::BAD_GATEWAY,
+                "missing stream info",
+            ));
+        };
         let len = if info.content_length > 0 {
             info.content_length
         } else {
@@ -317,6 +322,14 @@ async fn handle_request(
     let mut out = Vec::with_capacity((effective_end - req_start + 1) as usize);
 
     for chunk_idx in first_chunk..=last_chunk {
+        if let Some(g) = request_gen
+            && g < state.active_generation.load(Ordering::SeqCst)
+        {
+            return Ok(simple_response(
+                StatusCode::CONFLICT,
+                "cancelled: superseded track generation",
+            ));
+        }
         let chunk_bytes =
             match fetch_chunk_with_403_recovery(&state, video_id, itag, chunk_idx).await {
                 Ok((bytes, _)) => bytes,
@@ -356,7 +369,14 @@ async fn handle_request(
         builder = builder.status(StatusCode::OK);
     }
 
-    Ok(builder.body(Full::new(Bytes::from(out))).unwrap())
+    Ok(builder
+        .body(Full::new(Bytes::from(out)))
+        .unwrap_or_else(|_| {
+            simple_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "invalid proxy response headers",
+            )
+        }))
 }
 
 /// Fetches a 256 KB chunk from `ChunkCache` first; on cache miss fetches upstream.
@@ -567,7 +587,16 @@ async fn try_serve_offline_file(
         builder = builder.status(StatusCode::OK);
     }
 
-    Some(builder.body(Full::new(Bytes::from(out))).unwrap())
+    Some(
+        builder
+            .body(Full::new(Bytes::from(out)))
+            .unwrap_or_else(|_| {
+                simple_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "invalid proxy response headers",
+                )
+            }),
+    )
 }
 
 fn simple_response(status: StatusCode, msg: &str) -> Response<Full<Bytes>> {

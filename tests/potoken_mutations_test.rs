@@ -521,7 +521,7 @@ async fn sidecar_provider_rejects_non_loopback_urls_and_handles_timeout() {
     client.update_client_matrix(matrix);
 
     let fallback_info = client.resolve_stream("vid_fallback_01").await.unwrap();
-    assert_eq!(fallback_info.client_name, "ANDROID_VR");
+    assert_eq!(fallback_info.resolved_by_client, "ANDROID_VR");
     assert!(!fallback_info.url.contains("pot="));
 }
 

@@ -1,0 +1,269 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  APP_NAME: Raag
+  APP_ID: dev.resonance.ytmusic
+  NSH_VERSION: "0.6.1"
+
+jobs:
+  android:
+    name: Android APK
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev libasound2-dev libgtk-4-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK & SDK components
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;28.2.13676358"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
+
+      - name: Install NSH CLI (0.6.1)
+        run: |
+          curl -fsSL https://nsh.dev/install.sh | sh -s -- --version "$NSH_VERSION" || true
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Package Android APK
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          NSH_KEYSTORE_PASSWORD: ${{ secrets.NSH_KEYSTORE_PASSWORD }}
+        run: |
+          mkdir -p dist-android
+          if command -v nsh >/dev/null 2>&1; then
+            if [ -n "$ANDROID_KEYSTORE_BASE64" ] && [ -n "$ANDROID_KEY_ALIAS" ] && [ -n "$NSH_KEYSTORE_PASSWORD" ]; then
+              echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > release.keystore
+              nsh package --target android --abi arm64-v8a --keystore release.keystore --key-alias "$ANDROID_KEY_ALIAS"
+              python3 scripts/shrink-android-apk.py .nsh/out/*.apk --keystore release.keystore --key-alias "$ANDROID_KEY_ALIAS" --keystore-password "$NSH_KEYSTORE_PASSWORD"
+              rm -f release.keystore
+            else
+              echo "Keystore secrets not configured; falling back to debug-signed APK"
+              nsh package --target android --abi arm64-v8a
+              keytool -genkeypair -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US" 2>/dev/null || true
+              python3 scripts/shrink-android-apk.py .nsh/out/*.apk
+            fi
+            cp .nsh/out/*.apk dist-android/
+          else
+            echo "nsh CLI unavailable; falling back to cargo build --release + Gradle"
+            cargo build --release --target aarch64-linux-android
+            chmod +x platform/android/gradlew 2>/dev/null || true
+            if [ -x platform/android/gradlew ]; then
+              platform/android/gradlew -p platform/android assembleRelease
+            else
+              gradle -p platform/android assembleRelease
+            fi
+            find platform/android -name "*.apk" -exec cp {} dist-android/ \;
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: dist-android/*.apk
+
+  macos:
+    name: macOS (.dmg + .zip)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install NSH CLI (0.6.1)
+        run: |
+          curl -fsSL https://nsh.dev/install.sh | sh -s -- --version "$NSH_VERSION" || true
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Package macOS app
+        run: |
+          mkdir -p dist-macos
+          if command -v nsh >/dev/null 2>&1; then
+            nsh package --target macos
+            APP_BUNDLE=$(ls -d .nsh/out/*.app | head -n1)
+            ditto -c -k --sequesterRsrc --keepParent "$APP_BUNDLE" "dist-macos/${{ env.APP_NAME }}-macos.zip"
+            hdiutil create -volname "${{ env.APP_NAME }}" -srcfolder "$APP_BUNDLE" -ov -format UDZO "dist-macos/${{ env.APP_NAME }}-macos.dmg"
+          else
+            cargo build --release --bin resonance
+            mkdir -p "dist-macos/${{ env.APP_NAME }}"
+            cp target/release/resonance "dist-macos/${{ env.APP_NAME }}/"
+            ditto -c -k --sequesterRsrc --keepParent "dist-macos/${{ env.APP_NAME }}" "dist-macos/${{ env.APP_NAME }}-macos.zip"
+            hdiutil create -volname "${{ env.APP_NAME }}" -srcfolder "dist-macos/${{ env.APP_NAME }}" -ov -format UDZO "dist-macos/${{ env.APP_NAME }}-macos.dmg"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-bundle
+          path: |
+            dist-macos/*.dmg
+            dist-macos/*.zip
+
+  windows:
+    name: Windows (.exe installer)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install NSH CLI (0.6.1)
+        shell: pwsh
+        run: |
+          try { irm https://nsh.dev/install.ps1 | iex } catch { Write-Warning "nsh install failed; will fallback to cargo" }
+          "$env:USERPROFILE\.local\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Package Windows app
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist-windows | Out-Null
+          if (Get-Command nsh -ErrorAction SilentlyContinue) {
+            nsh package --target windows
+            $outDir = Resolve-Path ".nsh\out\${{ env.APP_NAME }}"
+          } else {
+            cargo build --release --bin resonance
+            $fallbackDir = "dist-windows\staging"
+            New-Item -ItemType Directory -Force -Path $fallbackDir | Out-Null
+            Copy-Item "target\release\resonance.exe" "$fallbackDir\${{ env.APP_NAME }}.exe"
+            $outDir = Resolve-Path $fallbackDir
+          }
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
+            choco install innosetup -y
+          }
+          $iss = @"
+          [Setup]
+          AppName=${{ env.APP_NAME }}
+          AppVersion=0.1.0
+          DefaultDirName={autopf}\${{ env.APP_NAME }}
+          DefaultGroupName=${{ env.APP_NAME }}
+          OutputDir=dist-windows
+          OutputBaseFilename=${{ env.APP_NAME }}-windows-setup
+          Compression=lzma2
+          SolidCompression=yes
+
+          [Files]
+          Source: "$outDir\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+          [Icons]
+          Name: "{group}\${{ env.APP_NAME }}"; Filename: "{app}\${{ env.APP_NAME }}.exe"
+          Name: "{autodesktop}\${{ env.APP_NAME }}"; Filename: "{app}\${{ env.APP_NAME }}.exe"
+          "@
+          $iss | Out-File -FilePath raag.iss -Encoding utf8
+          iscc raag.iss
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist-windows/*.exe
+
+  linux:
+    name: Linux (.deb + .tar.gz)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GTK 4.14+, OpenSSL & packaging deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev libasound2-dev libgtk-4-dev dpkg-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install NSH CLI (0.6.1)
+        run: |
+          curl -fsSL https://nsh.dev/install.sh | sh -s -- --version "$NSH_VERSION" || true
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Package Linux (.tar.gz + .deb)
+        run: |
+          mkdir -p dist-linux
+          PKG_ROOT="pkg-deb"
+          mkdir -p "$PKG_ROOT/DEBIAN" "$PKG_ROOT/opt/${{ env.APP_NAME }}" "$PKG_ROOT/usr/share/applications" "$PKG_ROOT/usr/share/icons/hicolor/512x512/apps"
+
+          if command -v nsh >/dev/null 2>&1; then
+            nsh package --target linux
+            cp .nsh/out/*.tar.gz dist-linux/
+            cp -r .nsh/out/${{ env.APP_NAME }}/* "$PKG_ROOT/opt/${{ env.APP_NAME }}/"
+          else
+            cargo build --release --bin resonance
+            mkdir -p "staging/${{ env.APP_NAME }}"
+            cp target/release/resonance "staging/${{ env.APP_NAME }}/${{ env.APP_NAME }}"
+            tar -czf "dist-linux/${{ env.APP_NAME }}-linux-amd64.tar.gz" -C staging "${{ env.APP_NAME }}"
+            cp -r "staging/${{ env.APP_NAME }}"/* "$PKG_ROOT/opt/${{ env.APP_NAME }}/"
+          fi
+
+          cp assets/icon.png "$PKG_ROOT/usr/share/icons/hicolor/512x512/apps/raag.png"
+          cat > "$PKG_ROOT/usr/share/applications/raag.desktop" <<'DESKTOP'
+          [Desktop Entry]
+          Name=Raag
+          Comment=Pure Rust YouTube Music Client
+          Exec=/opt/Raag/Raag
+          Icon=raag
+          Terminal=false
+          Type=Application
+          Categories=AudioVideo;Audio;Music;Player;
+          DESKTOP
+          cat > "$PKG_ROOT/DEBIAN/control" <<'CONTROL'
+          Package: raag
+          Version: 0.1.0
+          Section: sound
+          Priority: optional
+          Architecture: amd64
+          Depends: libgtk-4-1, libasound2t64
+          Maintainer: Raag Contributors
+          Description: Pure Rust YouTube Music client built on Native Shell (NSH)
+          CONTROL
+          dpkg-deb --build "$PKG_ROOT" "dist-linux/${{ env.APP_NAME }}-linux-amd64.deb"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-bundle
+          path: |
+            dist-linux/*.deb
+            dist-linux/*.tar.gz
+
+  release:
+    name: Publish GitHub Release
+    needs: [android, macos, windows, linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true

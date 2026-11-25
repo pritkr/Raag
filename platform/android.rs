@@ -16,6 +16,7 @@ pub fn ensure_downloads_dir(data_dir: &Path) -> std::io::Result<PathBuf> {
     if !nomedia.exists() {
         let _ = std::fs::OpenOptions::new()
             .create(true)
+            .truncate(false)
             .write(true)
             .open(&nomedia);
     }

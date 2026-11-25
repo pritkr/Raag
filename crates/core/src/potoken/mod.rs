@@ -292,7 +292,7 @@ impl<P: PoTokenProvider> CachingPoTokenProvider<P> {
 
     fn lookup_fresh(&self, key: &CacheKey) -> Option<PoToken> {
         let now = unix_secs();
-        let guard = self.cache.read().unwrap();
+        let guard = self.cache.read().unwrap_or_else(|p| p.into_inner());
         guard
             .get(key)
             .filter(|tok| tok.expires_at_unix_secs > now.saturating_add(CACHE_EXPIRY_SKEW_SECS))
@@ -316,14 +316,17 @@ impl<P: PoTokenProvider> PoTokenProvider for CachingPoTokenProvider<P> {
         }
 
         let minted = self.inner.mint_token(req).await?;
-        self.cache.write().unwrap().insert(key, minted.clone());
+        self.cache
+            .write()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(key, minted.clone());
         Ok(minted)
     }
 
     fn invalidate(&self, scope: PoTokenScope) {
         self.cache
             .write()
-            .unwrap()
+            .unwrap_or_else(|p| p.into_inner())
             .retain(|k, _| k.scope != scope);
         self.inner.invalidate(scope);
     }

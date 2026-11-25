@@ -3,6 +3,7 @@
   "id": "dev.resonance.ytmusic",
   "version": "0.1.0",
   "build": 1,
+  "icon": "assets/icon.png",
   "appearance": "system",
   "theme": "theme.json",
   "rust": ".",

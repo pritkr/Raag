@@ -74,19 +74,19 @@ pub fn mount_nsh_audio_driver() {
                 if state.shutdown {
                     return Poll::Ready(None);
                 }
-                if let Some(entry) = state.active.as_mut() {
-                    if !entry.drained {
-                        match entry.player.poll_next(cx) {
-                            Poll::Ready(Some(ev)) => {
-                                return Poll::Ready(Some((entry.generation, ev)));
-                            }
-                            Poll::Ready(None) => {
-                                entry.drained = true;
-                            }
-                            Poll::Pending => {
-                                state.pump_waker = Some(cx.waker().clone());
-                                return Poll::Pending;
-                            }
+                if let Some(entry) = state.active.as_mut()
+                    && !entry.drained
+                {
+                    match entry.player.poll_next(cx) {
+                        Poll::Ready(Some(ev)) => {
+                            return Poll::Ready(Some((entry.generation, ev)));
+                        }
+                        Poll::Ready(None) => {
+                            entry.drained = true;
+                        }
+                        Poll::Pending => {
+                            state.pump_waker = Some(cx.waker().clone());
+                            return Poll::Pending;
                         }
                     }
                 }
@@ -110,24 +110,25 @@ pub fn mount_nsh_audio_driver() {
             }
 
             match event {
-                AudioEvent::Load { duration } => {
-                    if let Some(dur) = duration {
-                        store::on_native_audio_duration(dur.as_millis() as u64);
-                    }
+                AudioEvent::Load {
+                    duration: Some(dur),
+                } => {
+                    store::on_native_audio_duration(dur.as_millis() as u64);
                 }
+                AudioEvent::Load { duration: None } => {}
                 AudioEvent::Playing => {
-                    if let Some(entry) = driver_for_pump.borrow_mut().active.as_mut() {
-                        if entry.generation == generation {
-                            entry.is_playing = true;
-                        }
+                    if let Some(entry) = driver_for_pump.borrow_mut().active.as_mut()
+                        && entry.generation == generation
+                    {
+                        entry.is_playing = true;
                     }
                     store::on_native_audio_state(PlayerState::Playing);
                 }
                 AudioEvent::Paused => {
-                    if let Some(entry) = driver_for_pump.borrow_mut().active.as_mut() {
-                        if entry.generation == generation {
-                            entry.is_playing = false;
-                        }
+                    if let Some(entry) = driver_for_pump.borrow_mut().active.as_mut()
+                        && entry.generation == generation
+                    {
+                        entry.is_playing = false;
                     }
                     store::on_native_audio_state(PlayerState::Paused);
                 }
@@ -143,16 +144,16 @@ pub fn mount_nsh_audio_driver() {
                 AudioEvent::Ended => {
                     store::on_native_audio_ended();
                 }
-                AudioEvent::Failed { error, message } => {
+                AudioEvent::Failed { error, message }
                     // Headless test harnesses without an audio backend emit Unavailable;
                     // keep fixture UI state clean unless a real audio backend failed.
-                    if error != AudioError::Unavailable {
-                        store::on_native_audio_error(format!(
-                            "Native audio error ({}): {}",
-                            error.as_str(),
-                            message
-                        ));
-                    }
+                    if error != AudioError::Unavailable =>
+                {
+                    store::on_native_audio_error(format!(
+                        "Native audio error ({}): {}",
+                        error.as_str(),
+                        message
+                    ));
                 }
                 _ => {}
             }

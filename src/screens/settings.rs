@@ -10,8 +10,8 @@ use resonance_contract::{CredentialBackendKind, HomeItem, Track};
 
 use crate::store::{self, AppTab, ThemeChoice};
 use crate::ui::controls::{
-    artwork_box, glass_pill_button, hero_pill_button, primary_button, secondary_button,
-    setting_switch, status_card, track_row_view,
+    artwork_box, glass_pill_button, hero_pill_button, secondary_button, setting_switch,
+    status_card, track_row_view,
 };
 use crate::ui::icons::{IconKind, icon};
 use crate::ui::tokens::{

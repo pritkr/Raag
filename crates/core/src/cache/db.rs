@@ -13,6 +13,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::cache::chunks::DEFAULT_MAX_AUDIO_CACHE_BYTES;
 
+#[allow(dead_code)]
 const SCHEMA_VERSION: i32 = 2;
 
 pub struct SqliteCacheStore {
@@ -61,6 +62,7 @@ impl SqliteCacheStore {
         &self.db_path
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_chunk_meta(
         &self,
         video_id: &str,
@@ -238,12 +240,10 @@ impl SqliteCacheStore {
                 .map_err(|e| CoreError::OfflineStorage(OfflineStorageError::Sqlite(e.to_string())))?;
 
             let mut recovered = Vec::new();
-            for row in rows {
-                if let Ok(mut rec) = row {
-                    rec.status = DownloadStatus::Paused;
-                    rec.updated_at_unix_secs = now_unix_secs;
-                    recovered.push(rec);
-                }
+            for mut rec in rows.flatten() {
+                rec.status = DownloadStatus::Paused;
+                rec.updated_at_unix_secs = now_unix_secs;
+                recovered.push(rec);
             }
             drop(stmt);
 
@@ -746,10 +746,8 @@ impl OfflineStore for SqliteCacheStore {
             .query_map([], row_to_download_record)
             .map_err(|e| CoreError::OfflineStorage(OfflineStorageError::Sqlite(e.to_string())))?;
         let mut out = Vec::new();
-        for row in rows {
-            if let Ok(rec) = row {
-                out.push(rec);
-            }
+        for rec in rows.flatten() {
+            out.push(rec);
         }
         Ok(out)
     }

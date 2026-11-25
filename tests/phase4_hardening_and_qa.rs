@@ -93,7 +93,7 @@ fn wcag_aa_contrast_passes_for_both_light_and_dark_themes() {
 #[test]
 fn binary_visual_rubric_touch_targets_reduced_motion_and_zero_raw_colors() {
     // Rubric #1: Android interactive touch targets >= 48dp
-    assert!(MOBILE_MIN_TOUCH_TARGET >= 48.0);
+    const { assert!(MOBILE_MIN_TOUCH_TARGET >= 48.0); }
 
     // Reduced-motion compliance: 0ms when enabled, non-zero when disabled
     assert_eq!(motion::duration_ms(motion::FAST_MS, true).as_millis(), 0);

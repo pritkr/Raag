@@ -13,9 +13,7 @@ pub mod nsh_audio;
 
 use std::path::Path;
 use std::sync::Arc;
-use resonance_contract::{
-    AudioBackend, AuthBackendStatus, AuthSession, AuthStore, CredentialBackendKind,
-};
+use resonance_contract::{AudioBackend, AuthBackendStatus, AuthSession, AuthStore};
 use resonance_core::innertube::auth::extract_cookie;
 
 /// Creates the appropriate platform `AudioBackend` for the compiled target.
@@ -65,7 +63,7 @@ pub fn platform_auth_status(session: Option<&AuthSession>) -> AuthBackendStatus 
             any(target_os = "linux", target_os = "macos", target_os = "windows")
         )))]
         {
-            CredentialBackendKind::EncryptedFallbackFile
+            resonance_contract::CredentialBackendKind::EncryptedFallbackFile
         }
     };
     AuthBackendStatus {

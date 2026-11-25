@@ -350,7 +350,7 @@ pub fn media_square_card(
                         .justify_center()
                         .rounded_full()
                         .hover(|s| s.bg(pill_glass_hover))
-                        .on_press(move || cb())
+                        .on_press(cb)
                         .child(icon(IconKind::MoreVertical, 14.0, move || {
                             theme().muted_foreground
                         })),
@@ -763,7 +763,7 @@ pub fn status_card(
                 .text_color(move || theme().muted_foreground),
         )
         .when_some(action_label.zip(on_action), |v, (lbl, cb)| {
-            v.child(primary_button(lbl, move || cb()))
+            v.child(primary_button(lbl, cb))
         })
 }
 

@@ -9,6 +9,10 @@ use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+#[cfg(all(
+    feature = "desktop-mpris",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
 use std::time::Duration;
 
 /// Ensures `<data_dir>/downloads` exists with restrictive `0o700` permissions on Unix.
@@ -413,7 +417,7 @@ impl DesktopAudioBridge {
                     log::warn!("failed to attach desktop media controls: {e:?}");
                     return;
                 }
-                *self.controls.lock().unwrap() = Some(controls);
+                *self.controls.lock().unwrap_or_else(|p| p.into_inner()) = Some(controls);
             }
             Err(e) => {
                 log::warn!("desktop media controls unavailable: {e:?}");

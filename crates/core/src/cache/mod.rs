@@ -7,6 +7,6 @@ pub mod artwork;
 pub mod chunks;
 pub mod db;
 
-pub use artwork::ArtworkCache;
+pub use artwork::{ArtworkCache, DEFAULT_ARTWORK_DISK_CAP};
 pub use chunks::{CHUNK_SIZE, ChunkCache, DEFAULT_MAX_AUDIO_CACHE_BYTES};
 pub use db::SqliteCacheStore;

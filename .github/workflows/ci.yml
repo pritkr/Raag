@@ -16,25 +16,30 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-24.04, macos-15]
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install Linux GTK4 deps (Ubuntu)
+      - name: Install Linux GTK4, OpenSSL & ALSA deps (Ubuntu)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libasound2-dev pkg-config
+          sudo apt-get install -y pkg-config libssl-dev libasound2-dev libgtk-4-dev
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
 
       - name: Cargo check workspace
-        run: cargo check --workspace
+        run: cargo check --workspace --all-targets
 
-      - name: Cargo test
-        run: cargo test
+      - name: Cargo test workspace
+        run: cargo test --workspace
 
       - name: Self-check smoke run
         run: cargo run --bin resonance -- --self-check
