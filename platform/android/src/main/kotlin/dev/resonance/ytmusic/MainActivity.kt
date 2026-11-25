@@ -1,29 +1,49 @@
 package dev.resonance.ytmusic
 
+import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Color
+import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
+import android.view.ViewGroup
+import android.webkit.WebView
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.core.content.ContextCompat
 
 /**
  * Resonance Android Host Activity.
  *
- * Loads the Pure Rust NSH native library (`libresonance.so` for arm64-v8a),
- * starts the Media3 `PlaybackForegroundService`, and provides the Android
- * `KeystoreBridge` & `; wv`-stripped WebView sign-in shims required by Gate 0.
+ * Initializes `ResonanceNativeBridge` (`JavaVM` + `filesDir`/`cacheDir`), starts the
+ * Media3 `PlaybackForegroundService` via `ContextCompat.startForegroundService`, requests
+ * `POST_NOTIFICATIONS` on Android 13+, and hosts the `; wv`-stripped Google Sign-In WebView modal.
  */
 class MainActivity : Activity() {
+    private var signInDialog: AlertDialog? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Verify hardware-backed Keystore shim readiness (Gate 0 Proof #3)
-        KeystoreBridge.writeSecret(this, "gate0_probe", "ok")
+        ResonanceNativeBridge.initHost(applicationContext)
+        ResonanceNativeBridge.registerActivity(this)
+        runCatching {
+            ResonanceNativeBridge.nativeInitHost(
+                ResonanceNativeBridge::class.java,
+                filesDir.absolutePath,
+                cacheDir.absolutePath,
+            )
+        }
 
-        // Ensure Media3 PlaybackForegroundService is initialized
-        startService(Intent(this, PlaybackForegroundService::class.java))
+        requestNotificationPermissionIfNeeded()
+
+        ContextCompat.startForegroundService(
+            this,
+            Intent(this, PlaybackForegroundService::class.java),
+        )
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -52,7 +72,65 @@ class MainActivity : Activity() {
         setContentView(root)
     }
 
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val granted = ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS,
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!granted) {
+                requestPermissions(
+                    arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                    REQ_POST_NOTIFICATIONS,
+                )
+            }
+        }
+    }
+
+    fun launchGoogleSignInWebView() {
+        if (isFinishing || isDestroyed) return
+        signInDialog?.dismiss()
+
+        val webView = WebView(this).apply {
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                1200,
+            )
+        }
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Sign in to YouTube Music")
+            .setView(webView)
+            .setNegativeButton("Cancel") { d, _ -> d.dismiss() }
+            .setOnDismissListener {
+                webView.stopLoading()
+                webView.loadUrl("about:blank")
+                webView.destroy()
+                if (signInDialog === it) {
+                    signInDialog = null
+                }
+            }
+            .create()
+
+        PlaybackForegroundService.configureGoogleSignInWebView(webView) { cookieHeader ->
+            ResonanceNativeBridge.nativeOnAuthCookiesCaptured(cookieHeader)
+            dialog.dismiss()
+        }
+
+        signInDialog = dialog
+        dialog.show()
+    }
+
+    override fun onDestroy() {
+        signInDialog?.dismiss()
+        signInDialog = null
+        ResonanceNativeBridge.unregisterActivity(this)
+        super.onDestroy()
+    }
+
     companion object {
+        private const val REQ_POST_NOTIFICATIONS = 1001
+
         init {
             runCatching { System.loadLibrary("resonance") }
         }

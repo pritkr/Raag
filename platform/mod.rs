@@ -30,8 +30,15 @@ pub fn create_platform_audio_backend() -> Arc<dyn AudioBackend> {
 
 /// Creates the appropriate platform `AuthStore` for the compiled target:
 /// - Desktop with `desktop-keyring`: `DesktopAuthStore` (OS Keychain / SecretService + `0o600` fallback)
-/// - Android / headless fallback: `FileAuthStore` (`0o600` atomic file store)
+/// - Android: `AndroidKeystoreAuthStore` (`AndroidKeyStore` AES-256-GCM + `0o600` fallback)
+/// - Headless fallback: `FileAuthStore` (`0o600` atomic file store)
 pub fn create_platform_auth_store(data_dir: &Path) -> Arc<dyn AuthStore> {
+    #[cfg(target_os = "android")]
+    {
+        Arc::new(android::AndroidKeystoreAuthStore::with_android_keystore(
+            data_dir,
+        ))
+    }
     #[cfg(all(
         not(target_os = "android"),
         feature = "desktop-keyring",
@@ -40,10 +47,13 @@ pub fn create_platform_auth_store(data_dir: &Path) -> Arc<dyn AuthStore> {
     {
         Arc::new(desktop::DesktopAuthStore::with_os_keyring(data_dir))
     }
-    #[cfg(not(all(
-        not(target_os = "android"),
-        feature = "desktop-keyring",
-        any(target_os = "linux", target_os = "macos", target_os = "windows")
+    #[cfg(not(any(
+        target_os = "android",
+        all(
+            not(target_os = "android"),
+            feature = "desktop-keyring",
+            any(target_os = "linux", target_os = "macos", target_os = "windows")
+        )
     )))]
     {
         Arc::new(resonance_core::innertube::FileAuthStore::new(data_dir))
@@ -53,6 +63,10 @@ pub fn create_platform_auth_store(data_dir: &Path) -> Arc<dyn AuthStore> {
 /// Builds an `AuthBackendStatus` snapshot for the current platform and optional session.
 pub fn platform_auth_status(session: Option<&AuthSession>) -> AuthBackendStatus {
     let backend = {
+        #[cfg(target_os = "android")]
+        {
+            android::active_android_backend_kind()
+        }
         #[cfg(all(
             not(target_os = "android"),
             feature = "desktop-keyring",
@@ -61,10 +75,13 @@ pub fn platform_auth_status(session: Option<&AuthSession>) -> AuthBackendStatus 
         {
             desktop::active_desktop_backend_kind()
         }
-        #[cfg(not(all(
-            not(target_os = "android"),
-            feature = "desktop-keyring",
-            any(target_os = "linux", target_os = "macos", target_os = "windows")
+        #[cfg(not(any(
+            target_os = "android",
+            all(
+                not(target_os = "android"),
+                feature = "desktop-keyring",
+                any(target_os = "linux", target_os = "macos", target_os = "windows")
+            )
         )))]
         {
             resonance_contract::CredentialBackendKind::EncryptedFallbackFile

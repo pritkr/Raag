@@ -4,10 +4,17 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = ["provider-ytmapi", "provider-rustypipe"]
+provider-ytmapi = ["dep:ytmapi-rs"]
+provider-rustypipe = ["dep:rustypipe"]
+
 [dependencies]
 resonance-contract.workspace = true
 tokio.workspace = true
 reqwest.workspace = true
+ytmapi-rs = { workspace = true, optional = true }
+rustypipe = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -29,6 +36,7 @@ http-body-util.workspace = true
 futures-util.workspace = true
 lofty.workspace = true
 directories.workspace = true
+ed25519-dalek.workspace = true
 
 [target.'cfg(target_os = "android")'.dependencies]
 rquickjs = { workspace = true, features = ["bindgen"] }

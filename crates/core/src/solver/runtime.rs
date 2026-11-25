@@ -17,10 +17,14 @@ use resonance_contract::{CoreError, CoreResult};
 use rquickjs::{Context, Function, Runtime};
 use tokio::sync::oneshot;
 
+use crate::innertube::auth::redact_secrets;
 use crate::solver::SolvedChallenge;
+use crate::solver::ejs_protocol::{EjsInput, EjsOutput};
 
 const WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(20);
 const JS_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(10);
+const STEADY_STATE_HEAP_BYTES: usize = 64 * 1024 * 1024;
+const PREPROCESS_HEAP_BYTES: usize = 160 * 1024 * 1024;
 
 /// Decoupled JavaScript execution engine for EJS challenge solving.
 #[async_trait]
@@ -33,6 +37,22 @@ pub trait JsRuntime: Send + Sync {
         n_param: Option<String>,
         sig_param: Option<String>,
     ) -> CoreResult<SolvedChallenge>;
+
+    /// Evaluates the `yt-dlp/ejs` `jsc(input)` JSON protocol.
+    /// When `preprocess_mode` is `true`, uses a temporary 160 MB heap and drops the
+    /// VM immediately afterward so steady-state RSS stays bounded.
+    async fn eval_jsc(
+        &self,
+        bundle_path: &Path,
+        input_json: &str,
+        preprocess_mode: bool,
+    ) -> CoreResult<EjsOutput> {
+        let _ = (bundle_path, input_json, preprocess_mode);
+        Err(CoreError::Solver(format!(
+            "{} does not implement jsc() protocol",
+            self.runtime_name()
+        )))
+    }
 }
 
 enum WorkerJob {
@@ -41,6 +61,12 @@ enum WorkerJob {
         n_param: Option<String>,
         sig_param: Option<String>,
         reply: oneshot::Sender<CoreResult<SolvedChallenge>>,
+    },
+    Jsc {
+        bundle_path: PathBuf,
+        input_json: String,
+        preprocess_mode: bool,
+        reply: oneshot::Sender<CoreResult<EjsOutput>>,
     },
 }
 
@@ -86,7 +112,7 @@ impl QuickJsRuntime {
                         }) => {
                             if loaded.as_ref().is_none_or(|(p, _, _)| *p != script_path) {
                                 loaded = None;
-                                match load_quickjs_context(&script_path) {
+                                match load_quickjs_context(&script_path, STEADY_STATE_HEAP_BYTES) {
                                     Ok((rt, ctx)) => loaded = Some((script_path, rt, ctx)),
                                     Err(e) => {
                                         let _ = reply.send(Err(e));
@@ -102,6 +128,55 @@ impl QuickJsRuntime {
                             let res = eval_quickjs_solve(ctx, n_param, sig_param);
                             rt.set_interrupt_handler(None);
                             let _ = reply.send(res);
+                        }
+                        Ok(WorkerJob::Jsc {
+                            bundle_path,
+                            input_json,
+                            preprocess_mode,
+                            reply,
+                        }) => {
+                            if preprocess_mode {
+                                // One-time AST preprocess: 160 MB temporary heap, dropped immediately after.
+                                let res =
+                                    match load_quickjs_context(&bundle_path, PREPROCESS_HEAP_BYTES)
+                                    {
+                                        Ok((rt, ctx)) => {
+                                            let deadline = Instant::now() + JS_WATCHDOG_TIMEOUT;
+                                            rt.set_interrupt_handler(Some(Box::new(move || {
+                                                Instant::now() >= deadline
+                                            })));
+                                            let out = eval_quickjs_jsc(&ctx, &input_json);
+                                            rt.set_interrupt_handler(None);
+                                            drop(ctx);
+                                            drop(rt);
+                                            out
+                                        }
+                                        Err(e) => Err(e),
+                                    };
+                                let _ = reply.send(res);
+                            } else {
+                                if loaded.as_ref().is_none_or(|(p, _, _)| *p != bundle_path) {
+                                    loaded = None;
+                                    match load_quickjs_context(
+                                        &bundle_path,
+                                        STEADY_STATE_HEAP_BYTES,
+                                    ) {
+                                        Ok((rt, ctx)) => loaded = Some((bundle_path, rt, ctx)),
+                                        Err(e) => {
+                                            let _ = reply.send(Err(e));
+                                            continue;
+                                        }
+                                    }
+                                }
+                                let (_, rt, ctx) = loaded.as_ref().unwrap();
+                                let deadline = Instant::now() + JS_WATCHDOG_TIMEOUT;
+                                rt.set_interrupt_handler(Some(Box::new(move || {
+                                    Instant::now() >= deadline
+                                })));
+                                let res = eval_quickjs_jsc(ctx, &input_json);
+                                rt.set_interrupt_handler(None);
+                                let _ = reply.send(res);
+                            }
                         }
                         Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => return,
                     }
@@ -151,19 +226,68 @@ impl JsRuntime for QuickJsRuntime {
             }
         }
     }
+
+    async fn eval_jsc(
+        &self,
+        bundle_path: &Path,
+        input_json: &str,
+        preprocess_mode: bool,
+    ) -> CoreResult<EjsOutput> {
+        let (tx, rx) = oneshot::channel();
+        self.dispatch(WorkerJob::Jsc {
+            bundle_path: bundle_path.to_path_buf(),
+            input_json: input_json.to_owned(),
+            preprocess_mode,
+            reply: tx,
+        })?;
+        match rx.await {
+            Ok(res) => res,
+            Err(_) => {
+                let (tx, rx) = oneshot::channel();
+                self.dispatch(WorkerJob::Jsc {
+                    bundle_path: bundle_path.to_path_buf(),
+                    input_json: input_json.to_owned(),
+                    preprocess_mode,
+                    reply: tx,
+                })?;
+                rx.await
+                    .map_err(|_| CoreError::Solver("solver worker dropped jsc reply".to_owned()))?
+            }
+        }
+    }
 }
 
-fn load_quickjs_context(script_path: &Path) -> CoreResult<(Runtime, Context)> {
+fn load_quickjs_context(
+    script_path: &Path,
+    heap_limit_bytes: usize,
+) -> CoreResult<(Runtime, Context)> {
     let source = fs::read_to_string(script_path)
         .map_err(|e| CoreError::Solver(format!("read solver script: {e}")))?;
     let rt = Runtime::new().map_err(|e| CoreError::Solver(format!("QuickJS runtime: {e}")))?;
-    rt.set_memory_limit(64 * 1024 * 1024);
+    rt.set_memory_limit(heap_limit_bytes);
     let ctx = Context::full(&rt).map_err(|e| CoreError::Solver(format!("QuickJS context: {e}")))?;
     ctx.with(|ctx| {
         ctx.eval::<(), _>(source.as_bytes())
-            .map_err(|e| CoreError::Solver(format!("QuickJS eval error: {e}")))
+            .map_err(|e| CoreError::Solver(redact_secrets(&format!("QuickJS eval error: {e}"))))
     })?;
     Ok((rt, ctx))
+}
+
+fn eval_quickjs_jsc(ctx: &Context, input_json: &str) -> CoreResult<EjsOutput> {
+    ctx.with(|ctx| {
+        let globals = ctx.globals();
+        let _: Function = globals
+            .get("jsc")
+            .map_err(|e| CoreError::Solver(format!("missing jsc entrypoint: {e}")))?;
+        let wrapper: Function = ctx
+            .eval("(function(s){ return JSON.stringify(jsc(JSON.parse(s))); })")
+            .map_err(|e| CoreError::Solver(redact_secrets(&format!("jsc wrapper error: {e}"))))?;
+        let out_json: String = wrapper
+            .call((input_json,))
+            .map_err(|e| CoreError::Solver(redact_secrets(&format!("jsc call failed: {e}"))))?;
+        serde_json::from_str::<EjsOutput>(&out_json)
+            .map_err(|e| CoreError::Solver(format!("invalid jsc output json: {e}")))
+    })
 }
 
 fn eval_quickjs_solve(
@@ -171,6 +295,28 @@ fn eval_quickjs_solve(
     n_param: Option<String>,
     sig_param: Option<String>,
 ) -> CoreResult<SolvedChallenge> {
+    let has_legacy = ctx.with(|ctx| {
+        let globals = ctx.globals();
+        globals.get::<_, Function>("solveN").is_ok()
+            || globals.get::<_, Function>("solveSig").is_ok()
+    });
+    if !has_legacy {
+        let has_jsc = ctx.with(|ctx| ctx.globals().get::<_, Function>("jsc").is_ok());
+        if has_jsc {
+            let (requests, _, _) =
+                EjsInput::build_requests(n_param.as_deref(), sig_param.as_deref());
+            let input = EjsInput::Preprocessed {
+                preprocessed_player: "",
+                requests,
+            };
+            let input_json = serde_json::to_string(&input)
+                .map_err(|e| CoreError::Solver(format!("serialize jsc input: {e}")))?;
+            let output = eval_quickjs_jsc(ctx, &input_json)?;
+            let (solved, _) = output.into_solved(n_param.as_deref(), sig_param.as_deref())?;
+            return Ok(solved);
+        }
+    }
+
     ctx.with(|ctx| {
         let globals = ctx.globals();
         let solved_n = if let Some(n) = n_param {
@@ -225,6 +371,25 @@ impl DenoSidecarRuntime {
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout.max(Duration::from_millis(100));
         self
+    }
+
+    /// Detects `deno` on `PATH` when `RESONANCE_USE_DENO=1` or `deno --version` succeeds.
+    pub fn detect_on_path() -> Option<Self> {
+        let env_opt_in = std::env::var("RESONANCE_USE_DENO")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        let path_ok = std::process::Command::new("deno")
+            .arg("--version")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        if env_opt_in || path_ok {
+            Some(Self::new("deno"))
+        } else {
+            None
+        }
     }
 
     /// Builds the sandboxed command arguments for invoking Deno with zero privileges.
@@ -309,5 +474,55 @@ impl JsRuntime for DenoSidecarRuntime {
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned),
         })
+    }
+
+    async fn eval_jsc(
+        &self,
+        bundle_path: &Path,
+        input_json: &str,
+        _preprocess_mode: bool,
+    ) -> CoreResult<EjsOutput> {
+        let source = fs::read_to_string(bundle_path)
+            .map_err(|e| CoreError::Solver(format!("read solver bundle: {e}")))?;
+        let wrapper = format!(
+            "{source}\nconst __in = JSON.parse({input_json_str});\nconsole.log(JSON.stringify(jsc(__in)));",
+            input_json_str = serde_json::to_string(input_json)
+                .map_err(|e| CoreError::Solver(format!("quote jsc input: {e}")))?
+        );
+        let args = Self::build_sandbox_args(&wrapper);
+        let deno_bin = self.deno_binary.clone();
+        let output = tokio::time::timeout(
+            self.timeout,
+            tokio::task::spawn_blocking(move || {
+                std::process::Command::new(&deno_bin)
+                    .args(&args)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .output()
+            }),
+        )
+        .await
+        .map_err(|_| CoreError::Solver("deno sidecar timed out".to_owned()))?
+        .map_err(|e| CoreError::Solver(format!("deno sidecar task join error: {e}")))?
+        .map_err(|e| CoreError::Solver(format!("failed to spawn deno sidecar: {e}")))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(CoreError::Solver(redact_secrets(&format!(
+                "deno sidecar exited with {}: {}",
+                output.status,
+                stderr.trim()
+            ))));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let last_line = stdout
+            .lines()
+            .rev()
+            .find(|l| !l.trim().is_empty())
+            .ok_or_else(|| CoreError::Solver("deno sidecar produced empty output".to_owned()))?;
+        serde_json::from_str::<EjsOutput>(last_line)
+            .map_err(|e| CoreError::Solver(format!("invalid deno jsc output json: {e}")))
     }
 }
