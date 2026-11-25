@@ -148,6 +148,52 @@ jobs:
             dist-macos/*.dmg
             dist-macos/*.zip
 
+  ios:
+    name: iOS (.app zip)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install NSH CLI (0.7.0)
+        run: |
+          curl -fsSL https://nsh.dev/install.sh | sh -s -- --version "$NSH_VERSION" || true
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Package iOS app
+        run: |
+          mkdir -p dist-ios
+          if command -v nsh >/dev/null 2>&1; then
+            nsh package --target ios
+            APP_BUNDLE=$(ls -d .nsh/out/*.app 2>/dev/null | head -n1 || true)
+            if [ -n "$APP_BUNDLE" ]; then
+              ditto -c -k --sequesterRsrc --keepParent "$APP_BUNDLE" "dist-ios/raag-ios.zip"
+            elif ls .nsh/out/*.ipa >/dev/null 2>&1; then
+              cp .nsh/out/*.ipa "dist-ios/raag-ios.ipa"
+              ditto -c -k --sequesterRsrc "dist-ios/raag-ios.ipa" "dist-ios/raag-ios.zip"
+              rm -f "dist-ios/raag-ios.ipa"
+            else
+              echo "No .app or .ipa produced in .nsh/out" >&2
+              ls -la .nsh/out || true
+              exit 1
+            fi
+          else
+            cargo build --release --target aarch64-apple-ios
+            mkdir -p "dist-ios/${{ env.APP_NAME }}.app"
+            cp target/aarch64-apple-ios/release/libresonance.a "dist-ios/${{ env.APP_NAME }}.app/" 2>/dev/null || true
+            ditto -c -k --sequesterRsrc --keepParent "dist-ios/${{ env.APP_NAME }}.app" "dist-ios/raag-ios.zip"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-bundle
+          path: dist-ios/raag-ios.zip
+
   windows:
     name: Windows (.exe installer)
     runs-on: windows-latest
@@ -277,7 +323,7 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    needs: [verify, android, macos, windows, linux]
+    needs: [verify, android, macos, ios, windows, linux]
     if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/production' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     steps:
