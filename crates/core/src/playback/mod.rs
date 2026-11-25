@@ -13,8 +13,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use rand::seq::SliceRandom;
 use resonance_contract::{
     AppEvent, AudioBackend, CacheStore, CoreError, CoreResult, EventBus, HistoryEntry,
-    LyricsProvider, MediaCommand, MusicProvider, NowPlayingMetadata, PlaybackError, PlayerSnapshot,
-    PlayerState, QueueState, RepeatMode, SponsorBlockProvider, SponsorSegment, Track,
+    LyricsProvider, MediaCommand, MusicProvider, NowPlayingMetadata, OfflineStore, PlaybackError,
+    PlayerSnapshot, PlayerState, QueueState, RepeatMode, SponsorBlockProvider, SponsorSegment,
+    Track,
 };
 use tokio::sync::Mutex;
 
@@ -25,6 +26,7 @@ pub struct PlaybackController {
     provider: Arc<dyn MusicProvider>,
     audio: Arc<dyn AudioBackend>,
     cache: Arc<dyn CacheStore>,
+    offline: Option<Arc<dyn OfflineStore>>,
     proxy: Arc<LoopbackProxy>,
     lyrics: Arc<dyn LyricsProvider>,
     sponsorblock: Arc<dyn SponsorBlockProvider>,
@@ -79,6 +81,7 @@ impl PlaybackController {
             provider,
             audio,
             cache,
+            offline: None,
             proxy,
             lyrics,
             sponsorblock,
@@ -91,6 +94,11 @@ impl PlaybackController {
                 preresolved_video_id: None,
             }),
         }
+    }
+
+    pub fn with_offline_store(mut self, offline: Arc<dyn OfflineStore>) -> Self {
+        self.offline = Some(offline);
+        self
     }
 
     pub async fn snapshot(&self) -> PlayerSnapshot {
@@ -289,44 +297,65 @@ impl PlaybackController {
             t
         };
 
-        let stream_res = self.provider.resolve_stream(&track.id).await;
-
-        // If a rapid track skip happened while resolving, cleanly abort without clobbering state.
-        if self.play_generation.load(Ordering::SeqCst) != my_gen {
-            return Ok(());
-        }
-
-        let (proxy_url, duration_ms, offline_used) = match stream_res {
-            Ok(info) => {
-                let dur = if info.duration_ms > 0 {
-                    info.duration_ms
-                } else {
-                    track.duration_ms
-                };
-                let itag = info.itag;
-                self.proxy.register_stream(info);
-                (
-                    self.proxy.stream_url_with_gen(&track.id, itag, proxy_gen),
-                    dur,
-                    false,
-                )
+        let offline_hit = self.offline.as_ref().and_then(|o| {
+            let rec = o.get_completed_download(&track.id).ok().flatten()?;
+            let rel = rec.relative_path.as_deref()?;
+            if crate::offline::resolve_confined_path(&o.downloads_root(), rel)
+                .is_ok_and(|p| p.is_file())
+            {
+                Some(rec)
+            } else {
+                None
             }
-            Err(e) => {
-                // If offline, attempt direct loopback proxy URL against cached chunks (itag 251).
-                if matches!(e, CoreError::Provider(_) | CoreError::Offline(_)) {
+        });
+
+        let (proxy_url, duration_ms, offline_used) = if let Some(rec) = offline_hit {
+            (
+                self.proxy
+                    .stream_url_with_gen(&track.id, rec.itag, proxy_gen),
+                track.duration_ms,
+                true,
+            )
+        } else {
+            let stream_res = self.provider.resolve_stream(&track.id).await;
+
+            // If a rapid track skip happened while resolving, cleanly abort without clobbering state.
+            if self.play_generation.load(Ordering::SeqCst) != my_gen {
+                return Ok(());
+            }
+
+            match stream_res {
+                Ok(info) => {
+                    let dur = if info.duration_ms > 0 {
+                        info.duration_ms
+                    } else {
+                        track.duration_ms
+                    };
+                    let itag = info.itag;
+                    self.proxy.register_stream(info);
                     (
-                        self.proxy.stream_url_with_gen(&track.id, 251, proxy_gen),
-                        track.duration_ms,
-                        true,
+                        self.proxy.stream_url_with_gen(&track.id, itag, proxy_gen),
+                        dur,
+                        false,
                     )
-                } else {
-                    let mut inner = self.inner.lock().await;
-                    let _ = inner
-                        .snapshot
-                        .state
-                        .transition(PlayerState::Error(e.to_string()));
-                    self.publish_and_persist(&inner);
-                    return Err(e);
+                }
+                Err(e) => {
+                    // If offline, attempt direct loopback proxy URL against cached chunks (itag 251).
+                    if matches!(e, CoreError::Provider(_) | CoreError::Offline(_)) {
+                        (
+                            self.proxy.stream_url_with_gen(&track.id, 251, proxy_gen),
+                            track.duration_ms,
+                            true,
+                        )
+                    } else {
+                        let mut inner = self.inner.lock().await;
+                        let _ = inner
+                            .snapshot
+                            .state
+                            .transition(PlayerState::Error(e.to_string()));
+                        self.publish_and_persist(&inner);
+                        return Err(e);
+                    }
                 }
             }
         };
@@ -621,13 +650,20 @@ impl PlaybackController {
         };
 
         if let Some(next_video_id) = preresolve_candidate {
-            let provider = self.provider.clone();
-            let proxy = self.proxy.clone();
-            tokio::spawn(async move {
-                if let Ok(stream_info) = provider.resolve_stream(&next_video_id).await {
-                    proxy.register_stream(stream_info);
-                }
-            });
+            let already_offline = self
+                .offline
+                .as_ref()
+                .and_then(|o| o.get_completed_download(&next_video_id).ok().flatten())
+                .is_some();
+            if !already_offline {
+                let provider = self.provider.clone();
+                let proxy = self.proxy.clone();
+                tokio::spawn(async move {
+                    if let Ok(stream_info) = provider.resolve_stream(&next_video_id).await {
+                        proxy.register_stream(stream_info);
+                    }
+                });
+            }
         }
 
         if let Some((video_id, target_ms)) = skip_target {

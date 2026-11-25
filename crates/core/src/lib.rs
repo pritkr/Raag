@@ -12,6 +12,7 @@ pub mod cache;
 pub mod fixture;
 pub mod innertube;
 pub mod lyrics;
+pub mod offline;
 pub mod palette;
 pub mod playback;
 pub mod potoken;

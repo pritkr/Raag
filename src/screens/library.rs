@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 
 use nsh_base::{button, input, theme};
 use nsh_core::prelude::*;
-use resonance_contract::{HomeItem, Track};
+use resonance_contract::{DownloadRecord, DownloadStatus, HomeItem, Track};
 
 use crate::screens::settings::settings_sections;
 use crate::store::{self, AppTab, LibraryFilter};
@@ -75,13 +75,11 @@ fn active_tracks_for_filter(filter: LibraryFilter, query: &str, sort_asc: bool) 
             .map(|entry| entry.track)
             .collect(),
         LibraryFilter::Songs => collect_all_songs(),
-        LibraryFilter::Downloads => {
-            if store::cache_stats().audio_chunk_count > 0 {
-                collect_all_songs()
-            } else {
-                Vec::new()
-            }
-        }
+        LibraryFilter::Downloads => store::downloads_list()
+            .into_iter()
+            .filter(|rec| rec.status == DownloadStatus::Completed)
+            .map(|rec| rec.track)
+            .collect(),
         LibraryFilter::Playlists
         | LibraryFilter::Albums
         | LibraryFilter::Artists
@@ -242,6 +240,241 @@ fn render_track_list_view(
                         move || store::play_next(t_next.clone()),
                     )
                 }))
+        })
+        .into_element()
+}
+
+fn download_status_label(rec: &DownloadRecord) -> String {
+    match rec.status {
+        DownloadStatus::Queued => "Queued".to_owned(),
+        DownloadStatus::Downloading => {
+            if rec.total_bytes > 0 {
+                let pct = (rec.bytes_downloaded.saturating_mul(100) / rec.total_bytes).min(100);
+                format!("Downloading {pct}%")
+            } else {
+                "Downloading...".to_owned()
+            }
+        }
+        DownloadStatus::Paused => "Paused".to_owned(),
+        DownloadStatus::Tagging => "Tagging...".to_owned(),
+        DownloadStatus::Completed => {
+            let mb = rec.total_bytes as f64 / (1024.0 * 1024.0);
+            format!("Offline • {mb:.1} MB")
+        }
+        DownloadStatus::Failed => rec
+            .error_message
+            .as_deref()
+            .map(|e| format!("Failed: {e}"))
+            .unwrap_or_else(|| "Failed".to_owned()),
+        DownloadStatus::Cancelled => "Cancelled".to_owned(),
+    }
+}
+
+fn render_downloads_view(query: &str, sort_asc: bool, current_id: Option<String>) -> AnyElement {
+    let ql = query.trim().to_lowercase();
+    let mut records: Vec<DownloadRecord> = store::downloads_list()
+        .into_iter()
+        .filter(|rec| rec.status != DownloadStatus::Cancelled)
+        .filter(|rec| {
+            ql.is_empty()
+                || matches_query(&rec.track.title, &ql)
+                || matches_query(&rec.track.artist_display(), &ql)
+        })
+        .collect();
+
+    if sort_asc {
+        records.sort_by(|a, b| {
+            a.track
+                .title
+                .to_lowercase()
+                .cmp(&b.track.title.to_lowercase())
+        });
+    }
+
+    let count = records.len();
+    view()
+        .gap_2()
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .child(
+                    text("Offline Downloads")
+                        .text_lg()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(move || theme().foreground),
+                )
+                .child(
+                    text(format!("{count} items"))
+                        .text_xs()
+                        .tabular_nums()
+                        .text_color(move || theme().muted_foreground),
+                ),
+        )
+        .when(records.is_empty(), |v| {
+            v.child(status_card(
+                "No offline downloads yet",
+                "Download tracks to play them locally from disk with zero network usage.",
+                None,
+                None,
+            ))
+        })
+        .when(!records.is_empty(), move |v| {
+            v.children(records.into_iter().map(move |rec| {
+                let is_cur = current_id.as_deref() == Some(rec.video_id.as_str());
+                let status_label = download_status_label(&rec);
+                let vid_pause = rec.video_id.clone();
+                let vid_resume = rec.video_id.clone();
+                let vid_delete = rec.video_id.clone();
+                let track_play = rec.track.clone();
+                let track_next = rec.track.clone();
+                let is_completed = rec.status == DownloadStatus::Completed;
+                let is_active = matches!(
+                    rec.status,
+                    DownloadStatus::Queued | DownloadStatus::Downloading
+                );
+                let is_resumable = matches!(
+                    rec.status,
+                    DownloadStatus::Paused | DownloadStatus::Failed
+                );
+
+                view()
+                    .gap_1()
+                    .when(is_completed, |wrap| {
+                        wrap.child(track_row_view(
+                            rec.track.clone(),
+                            is_cur,
+                            move || store::play_track(track_play.clone()),
+                            move || store::play_next(track_next.clone()),
+                        ))
+                    })
+                    .when(!is_completed, |wrap| {
+                        wrap.child(
+                            view()
+                                .flex_row()
+                                .items_center()
+                                .justify_between()
+                                .gap_3()
+                                .px_3()
+                                .py_2()
+                                .rounded(radius_card)
+                                .bg(pill_glass_surface)
+                                .border_1()
+                                .border_color(glass_hairline)
+                                .child(
+                                    view()
+                                        .flex_1()
+                                        .gap_0p5()
+                                        .child(
+                                            text(rec.track.title.clone())
+                                                .number_of_lines(1)
+                                                .text_sm()
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(move || theme().foreground),
+                                        )
+                                        .child(
+                                            text(format!(
+                                                "{} • {status_label}",
+                                                rec.track.artist_display()
+                                            ))
+                                            .number_of_lines(1)
+                                            .text_xs()
+                                            .text_color(move || theme().muted_foreground),
+                                        ),
+                                )
+                                .child(
+                                    view()
+                                        .flex_row()
+                                        .items_center()
+                                        .gap_2()
+                                        .when(is_active, |row| {
+                                            row.child(
+                                                button()
+                                                    .accessibility_label("Pause download")
+                                                    .on_press(move || {
+                                                        store::pause_download(&vid_pause)
+                                                    })
+                                                    .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                                                    .px_3()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .rounded(radius_pill)
+                                                    .bg(pill_glass_surface)
+                                                    .border_1()
+                                                    .border_color(glass_hairline)
+                                                    .hover(|s| s.bg(pill_glass_hover))
+                                                    .focus_visible(|s| {
+                                                        s.outline(px(2.0))
+                                                            .outline_color(move || theme().ring)
+                                                    })
+                                                    .child(
+                                                        text("Pause")
+                                                            .text_xs()
+                                                            .font_weight(FontWeight::MEDIUM)
+                                                            .text_color(move || theme().foreground),
+                                                    ),
+                                            )
+                                        })
+                                        .when(is_resumable, |row| {
+                                            row.child(
+                                                button()
+                                                    .accessibility_label("Resume download")
+                                                    .on_press(move || {
+                                                        store::resume_download(&vid_resume)
+                                                    })
+                                                    .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                                                    .px_3()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .rounded(radius_pill)
+                                                    .bg(pill_glass_surface)
+                                                    .border_1()
+                                                    .border_color(glass_hairline)
+                                                    .hover(|s| s.bg(pill_glass_hover))
+                                                    .focus_visible(|s| {
+                                                        s.outline(px(2.0))
+                                                            .outline_color(move || theme().ring)
+                                                    })
+                                                    .child(
+                                                        text("Resume")
+                                                            .text_xs()
+                                                            .font_weight(FontWeight::MEDIUM)
+                                                            .text_color(move || theme().foreground),
+                                                    ),
+                                            )
+                                        })
+                                        .child(
+                                            button()
+                                                .accessibility_label("Delete download")
+                                                .on_press(move || {
+                                                    store::delete_download(&vid_delete)
+                                                })
+                                                .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                                                .px_3()
+                                                .items_center()
+                                                .justify_center()
+                                                .rounded(radius_pill)
+                                                .bg(pill_glass_surface)
+                                                .border_1()
+                                                .border_color(glass_hairline)
+                                                .hover(|s| s.bg(pill_glass_hover))
+                                                .focus_visible(|s| {
+                                                    s.outline(px(2.0))
+                                                        .outline_color(move || theme().ring)
+                                                })
+                                                .child(
+                                                    text("Remove")
+                                                        .text_xs()
+                                                        .font_weight(FontWeight::MEDIUM)
+                                                        .text_color(move || theme().foreground),
+                                                ),
+                                        ),
+                                ),
+                        )
+                    })
+            }))
         })
         .into_element()
 }
@@ -791,18 +1024,7 @@ pub fn library_screen() -> impl IntoElement {
                                 LibraryFilter::Albums => render_albums_view(&query, sort_asc),
                                 LibraryFilter::Artists => render_artists_view(&query, sort_asc),
                                 LibraryFilter::Downloads => {
-                                    let tracks = active_tracks_for_filter(
-                                        LibraryFilter::Downloads,
-                                        &query,
-                                        sort_asc,
-                                    );
-                                    render_track_list_view(
-                                        "Offline Cached Tracks",
-                                        tracks,
-                                        current_id,
-                                        "No offline downloads cached",
-                                        "Tracks streamed via Loopback Proxy are cached in 256 KB chunks automatically.",
-                                    )
+                                    render_downloads_view(&query, sort_asc, current_id)
                                 }
                                 LibraryFilter::Podcasts => status_card(
                                     "No podcasts saved",

@@ -46,6 +46,7 @@ hyper = { version = "1.6", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 futures-util = "0.3"
+lofty = "0.22"
 
 [package]
 name = "resonance"

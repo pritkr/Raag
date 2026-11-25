@@ -11,14 +11,18 @@ use std::sync::{Arc, OnceLock};
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use resonance_contract::{
-    AppEvent, AuthBackendStatus, AuthSession, CacheStats, CacheStore, HomeSection, LikeAction,
-    LyricsDocument, LyricsProvider, MusicProvider, MutationCommand, PlayerSnapshot, Playlist,
-    PlaylistEditOp, SearchResults, Track, TrackId, WatchtimeReport,
+    AppEvent, AuthBackendStatus, AuthSession, CacheStats, CacheStore, DownloadRecord, HomeSection,
+    LikeAction, LyricsDocument, LyricsProvider, MusicProvider, MutationCommand, OfflineStore,
+    PlayerSnapshot, Playlist, PlaylistEditOp, SearchResults, Track, TrackId, WatchtimeReport,
 };
-use resonance_core::cache::{ChunkCache, DEFAULT_MAX_AUDIO_CACHE_BYTES, SqliteCacheStore};
+use resonance_core::cache::{
+    ArtworkCache, ChunkCache, DEFAULT_ARTWORK_DISK_CAP, DEFAULT_MAX_AUDIO_CACHE_BYTES,
+    SqliteCacheStore,
+};
 use resonance_core::innertube::auth::redact_secrets;
 use resonance_core::innertube::{InnerTubeClient, MutationWorker};
 use resonance_core::lyrics::CascadeLyricsProvider;
+use resonance_core::offline::DownloadManager;
 use resonance_core::playback::PlaybackController;
 use resonance_core::potoken::{CachingPoTokenProvider, SidecarPoTokenProvider};
 use resonance_core::proxy::LoopbackProxy;
@@ -57,6 +61,9 @@ pub enum LiveUpdate {
         command: MutationCommand,
         reason: String,
     },
+    DownloadsLoaded(Vec<DownloadRecord>),
+    DownloadUpdated(DownloadRecord),
+    DownloadRemoved(TrackId),
     StatusBanner(String),
 }
 
@@ -66,6 +73,7 @@ struct LiveRuntime {
     cache: Arc<SqliteCacheStore>,
     chunks: Arc<ChunkCache>,
     lyrics: Arc<CascadeLyricsProvider>,
+    downloads: Arc<DownloadManager>,
     controller: Arc<PlaybackController>,
     mutations: MutationWorker,
     tx: Sender<LiveUpdate>,
@@ -90,10 +98,13 @@ fn init_runtime() -> Result<LiveRuntime, String> {
 
     let dir = data_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create data dir: {e}"))?;
+    #[cfg(target_os = "android")]
+    let _ = crate::platform::android::ensure_downloads_dir(&dir);
+    #[cfg(not(target_os = "android"))]
+    let _ = crate::platform::desktop::ensure_downloads_dir(&dir);
 
     let cache = Arc::new(
-        SqliteCacheStore::open(&dir.join("resonance.db"))
-            .map_err(|e| format!("SQLite cache open failed: {e}"))?,
+        SqliteCacheStore::open(&dir).map_err(|e| format!("SQLite cache open failed: {e}"))?,
     );
     let chunks = Arc::new(
         ChunkCache::new(
@@ -102,6 +113,10 @@ fn init_runtime() -> Result<LiveRuntime, String> {
             DEFAULT_MAX_AUDIO_CACHE_BYTES,
         )
         .map_err(|e| format!("ChunkCache init failed: {e}"))?,
+    );
+    let artwork = Arc::new(
+        ArtworkCache::new(&dir, 128, DEFAULT_ARTWORK_DISK_CAP)
+            .map_err(|e| format!("ArtworkCache init failed: {e}"))?,
     );
     let auth = create_platform_auth_store(&dir);
     let solver = Arc::new(QuickJsSolver::new(&dir));
@@ -123,7 +138,7 @@ fn init_runtime() -> Result<LiveRuntime, String> {
         }
     }
     let proxy = rt.block_on(async {
-        LoopbackProxy::start(provider.clone(), chunks.clone())
+        LoopbackProxy::start_with_offline(provider.clone(), chunks.clone(), Some(cache.clone()))
             .await
             .map(Arc::new)
             .map_err(|e| format!("LoopbackProxy start failed: {e}"))
@@ -138,15 +153,31 @@ fn init_runtime() -> Result<LiveRuntime, String> {
         let _guard = rt.enter();
         MutationWorker::spawn(provider.clone(), bus.clone())
     };
-    let controller = Arc::new(PlaybackController::new(
-        provider.clone(),
-        audio,
-        cache.clone(),
-        proxy.clone(),
-        lyrics.clone(),
-        sponsorblock,
-        bus.clone(),
-    ));
+    let downloads = Arc::new(
+        DownloadManager::new(
+            provider.clone(),
+            cache.clone(),
+            chunks.clone(),
+            artwork,
+            lyrics.clone(),
+            bus.clone(),
+        )
+        .map_err(|e| format!("DownloadManager init failed: {e}"))?,
+    );
+    let _ = rt.block_on(downloads.startup_recovery());
+
+    let controller = Arc::new(
+        PlaybackController::new(
+            provider.clone(),
+            audio,
+            cache.clone(),
+            proxy.clone(),
+            lyrics.clone(),
+            sponsorblock,
+            bus.clone(),
+        )
+        .with_offline_store(cache.clone()),
+    );
 
     let (tx, rx) = unbounded();
     if let Some(mut cmd_rx) = audio_cmd_rx {
@@ -186,6 +217,12 @@ fn init_runtime() -> Result<LiveRuntime, String> {
                             banner: "Session expired — please sign in again".into(),
                         });
                     }
+                    AppEvent::DownloadUpdated(rec) => {
+                        let _ = ui_tx.send(LiveUpdate::DownloadUpdated(rec));
+                    }
+                    AppEvent::DownloadRemoved { video_id } => {
+                        let _ = ui_tx.send(LiveUpdate::DownloadRemoved(video_id));
+                    }
                     _ => {}
                 }
             }
@@ -193,6 +230,7 @@ fn init_runtime() -> Result<LiveRuntime, String> {
     }
     let initial_snap = rt.block_on(controller.snapshot());
     let stats = cache.stats().unwrap_or_default();
+    let initial_downloads = cache.list_downloads().unwrap_or_default();
     let current_session = provider.current_session();
     let signed_in = current_session.is_some();
     let auth_status = platform_auth_status(current_session.as_ref());
@@ -205,6 +243,7 @@ fn init_runtime() -> Result<LiveRuntime, String> {
         signed_in,
     });
     let _ = tx.send(LiveUpdate::AuthStatus(auth_status));
+    let _ = tx.send(LiveUpdate::DownloadsLoaded(initial_downloads));
 
     Ok(LiveRuntime {
         rt,
@@ -212,6 +251,7 @@ fn init_runtime() -> Result<LiveRuntime, String> {
         cache,
         chunks,
         lyrics,
+        downloads,
         controller,
         mutations,
         tx,
@@ -378,4 +418,50 @@ pub fn dispatch_report_atr(report: WatchtimeReport) {
             reason: e.to_string(),
         });
     }
+}
+
+pub fn dispatch_enqueue_download(track: Track) {
+    let Some(rt) = runtime() else { return };
+    let downloads = rt.downloads.clone();
+    let tx = rt.tx.clone();
+    rt.rt.spawn(async move {
+        if let Err(e) = downloads.enqueue(track).await {
+            let _ = tx.send(LiveUpdate::StatusBanner(format!("Download failed: {e}")));
+        }
+    });
+}
+
+pub fn dispatch_pause_download(video_id: TrackId) {
+    let Some(rt) = runtime() else { return };
+    let downloads = rt.downloads.clone();
+    rt.rt.spawn(async move {
+        let _ = downloads.pause(&video_id).await;
+    });
+}
+
+pub fn dispatch_resume_download(video_id: TrackId) {
+    let Some(rt) = runtime() else { return };
+    let downloads = rt.downloads.clone();
+    let tx = rt.tx.clone();
+    rt.rt.spawn(async move {
+        if let Err(e) = downloads.resume(&video_id).await {
+            let _ = tx.send(LiveUpdate::StatusBanner(format!("Resume failed: {e}")));
+        }
+    });
+}
+
+pub fn dispatch_cancel_download(video_id: TrackId) {
+    let Some(rt) = runtime() else { return };
+    let downloads = rt.downloads.clone();
+    rt.rt.spawn(async move {
+        let _ = downloads.cancel(&video_id).await;
+    });
+}
+
+pub fn dispatch_delete_download(video_id: TrackId) {
+    let Some(rt) = runtime() else { return };
+    let downloads = rt.downloads.clone();
+    rt.rt.spawn(async move {
+        let _ = downloads.delete(&video_id).await;
+    });
 }
