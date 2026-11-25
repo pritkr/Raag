@@ -14,12 +14,16 @@ const NSH_PORT = Number(process.env.NSH_PREVIEW_PORT ?? 3001);
 const NSH_ORIGIN = `http://127.0.0.1:${NSH_PORT}`;
 
 let nshProc: ChildProcess | null = null;
+let nshStartPromise: Promise<void> | null = null;
 
 function findNshPreviewBinary(): string | null {
   const candidates = [
+    process.env.NSH_PREVIEW_BIN,
     path.resolve('target/release/nsh_preview'),
     path.resolve('target/debug/nsh_preview'),
-  ];
+    '/tmp/raag-target/release/nsh_preview',
+    '/tmp/raag-target/debug/nsh_preview',
+  ].filter((p): p is string => Boolean(p));
   for (const bin of candidates) {
     if (fs.existsSync(bin)) {
       return bin;
@@ -30,51 +34,69 @@ function findNshPreviewBinary(): string | null {
 
 async function isNshReady(): Promise<boolean> {
   try {
-    const res = await fetch(`${NSH_ORIGIN}/api/nsh/tree`);
+    const res = await fetch(`${NSH_ORIGIN}/api/nsh/tree`, {
+      signal: AbortSignal.timeout(1500),
+    });
     return res.ok;
   } catch {
     return false;
   }
 }
 
-async function ensureNshPreviewRunning(): Promise<void> {
-  if (await isNshReady()) {
-    return;
+function ensureNshPreviewRunning(): Promise<void> {
+  if (nshStartPromise) {
+    return nshStartPromise;
   }
-  const bin = findNshPreviewBinary();
-  if (!bin) {
-    console.warn('[server] Pure Rust nsh_preview binary not built yet; waiting for build.');
-    return;
-  }
-  nshProc = spawn(bin, [], {
-    env: { ...process.env, NSH_PREVIEW_PORT: String(NSH_PORT) },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  nshProc.stdout?.on('data', (d) => process.stdout.write(`[nsh_preview] ${d}`));
-  nshProc.stderr?.on('data', (d) => process.stderr.write(`[nsh_preview] ${d}`));
-  nshProc.on('exit', (code) => {
-    console.log(`[server] nsh_preview exited with code ${code}`);
-    nshProc = null;
-  });
-
-  for (let i = 0; i < 40; i++) {
+  nshStartPromise = (async () => {
     if (await isNshReady()) {
       return;
     }
-    await new Promise((r) => setTimeout(r, 100));
-  }
+    const bin = findNshPreviewBinary();
+    if (!bin) {
+      console.warn('[server] Pure Rust nsh_preview binary not built yet; waiting for build.');
+      return;
+    }
+    if (!nshProc) {
+      nshProc = spawn(bin, [], {
+        env: { ...process.env, NSH_PREVIEW_PORT: String(NSH_PORT) },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      nshProc.stdout?.on('data', (d) => process.stdout.write(`[nsh_preview] ${d}`));
+      nshProc.stderr?.on('data', (d) => process.stderr.write(`[nsh_preview] ${d}`));
+      nshProc.on('exit', (code) => {
+        console.log(`[server] nsh_preview exited with code ${code}`);
+        nshProc = null;
+      });
+    }
+
+    for (let i = 0; i < 80; i++) {
+      if (await isNshReady()) {
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  })().finally(() => {
+    nshStartPromise = null;
+  });
+  return nshStartPromise;
 }
 
 async function main(): Promise<void> {
-  await ensureNshPreviewRunning();
+  // Kick off Pure Rust NSH preview host in the background so Express binds port 3000 immediately.
+  void ensureNshPreviewRunning();
 
   const app = express();
   app.use(express.json({ limit: '256kb' }));
 
+  app.get('/api/health', async (_req, res) => {
+    const nshReady = await isNshReady();
+    res.json({ ok: true, nshReady });
+  });
+
   // Proxy live Pure Rust NSH Engine MountBatch & Event API
   app.all('/api/nsh/*', async (req, res) => {
     try {
-      if (!nshProc && !(await isNshReady())) {
+      if (!(await isNshReady())) {
         await ensureNshPreviewRunning();
       }
       const targetUrl = `${NSH_ORIGIN}${req.originalUrl}`;

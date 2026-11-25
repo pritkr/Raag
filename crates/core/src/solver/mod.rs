@@ -1,52 +1,31 @@
-//! Updatable `yt-dlp-ejs` Solver Bundle running inside Native QuickJS-NG (`rquickjs >= 0.12.0`).
+//! Sandboxed EJS Challenge Solver with decoupled [`JsRuntime`], SHA-256 manifest pinning,
+//! and L1 RAM + L2 SQLite `n`-challenge memoization (< 2 ms after first hit).
 //!
 //! Architecture:
-//! - Executes `yt-dlp-ejs` (AST extraction via `meriyah` / SWC) rather than raw `base.js`.
-//! - Shipped as a hot-updatable asset (`assets/ejs/solver_manifest.json` + `<data_dir>/ejs/`)
-//!   so YouTube player churn (e.g. "found 0 sig function possibilities") is fixed by updating
-//!   the solver bundle asset without recompiling the binary.
-//! - Caches solved `n`-parameters in memory keyed by `(player_id, raw_n)` to eliminate
-//!   repeated JS execution latency across tracks sharing the same player revision.
-//! - Runs strictly on a dedicated worker thread with a 10s interrupt watchdog (NEVER blocks UI).
+//! - [`runtime`]: [`JsRuntime`] trait + embedded [`QuickJsRuntime`] (`rquickjs >= 0.12.0`)
+//!   + optional Desktop [`DenoSidecarRuntime`].
+//! - [`manifest`]: [`EjsBundleManifest`] with `pinned_version` + SHA-256 verification.
+//! - [`memo`]: [`EjsMemoCache`] persisting solved `n`-params & AST metadata in SQLite.
 
-use std::collections::HashMap;
+pub mod manifest;
+pub mod memo;
+pub mod runtime;
+
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use crossbeam_channel::{RecvTimeoutError, Sender};
 use resonance_contract::{CoreError, CoreResult};
-use rquickjs::{Context, Function, Runtime};
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use tokio::sync::oneshot;
 
-const WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(20);
-const JS_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(10);
+use crate::cache::SqliteCacheStore;
 
-pub const EMBEDDED_EJS_MANIFEST_JSON: &str =
-    include_str!("../../../../assets/ejs/solver_manifest.json");
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EjsBundleManifest {
-    pub bundle_name: String,
-    pub bundle_version: String,
-    pub min_quickjs_ng_version: String,
-    pub ast_parser: String,
-    pub updatable_remote_url: String,
-    pub entrypoint_fn: String,
-    #[serde(default)]
-    pub notes: String,
-}
-
-impl EjsBundleManifest {
-    pub fn embedded_default() -> CoreResult<Self> {
-        serde_json::from_str(EMBEDDED_EJS_MANIFEST_JSON)
-            .map_err(|e| CoreError::Solver(format!("invalid solver_manifest.json: {e}")))
-    }
-}
+pub use manifest::{EMBEDDED_EJS_MANIFEST_JSON, EjsBundleManifest};
+pub use memo::EjsMemoCache;
+#[cfg(not(target_os = "android"))]
+pub use runtime::DenoSidecarRuntime;
+pub use runtime::{JsRuntime, QuickJsRuntime};
 
 #[derive(Debug, Clone)]
 pub struct ChallengeInput {
@@ -62,23 +41,13 @@ pub struct SolvedChallenge {
     pub sig_param: Option<String>,
 }
 
-enum WorkerJob {
-    Solve {
-        script_path: PathBuf,
-        n_param: Option<String>,
-        sig_param: Option<String>,
-        reply: oneshot::Sender<CoreResult<SolvedChallenge>>,
-    },
-}
-
 pub struct QuickJsSolver {
     cache_dir: PathBuf,
     ejs_dir: PathBuf,
-    worker: Mutex<Option<Sender<WorkerJob>>>,
-    /// Per-player-ID solved `n`-param cache: `(player_id, raw_n) -> solved_n`.
-    n_param_cache: Mutex<HashMap<(String, String), String>>,
+    runtime: Arc<dyn JsRuntime>,
+    memo: EjsMemoCache,
     /// Counter for deterministic telemetry/QA verification of JS invocations vs cache hits.
-    js_eval_count: std::sync::atomic::AtomicU64,
+    js_eval_count: AtomicU64,
 }
 
 impl QuickJsSolver {
@@ -86,10 +55,27 @@ impl QuickJsSolver {
         Self {
             cache_dir: data_dir.join("js_solver"),
             ejs_dir: data_dir.join("ejs"),
-            worker: Mutex::new(None),
-            n_param_cache: Mutex::new(HashMap::new()),
-            js_eval_count: std::sync::atomic::AtomicU64::new(0),
+            runtime: Arc::new(QuickJsRuntime::new()),
+            memo: EjsMemoCache::default(),
+            js_eval_count: AtomicU64::new(0),
         }
+    }
+
+    /// Overrides the underlying [`JsRuntime`] (e.g., Desktop [`DenoSidecarRuntime`] or test stub).
+    pub fn with_runtime(mut self, runtime: Arc<dyn JsRuntime>) -> Self {
+        self.runtime = runtime;
+        self
+    }
+
+    /// Attaches SQLite WAL persistence to the solver's `n`-challenge memoization cache
+    /// so repeated `n`-challenges resolve in < 2 ms across restarts.
+    pub fn with_sqlite_cache(mut self, sqlite: Arc<SqliteCacheStore>) -> Self {
+        self.memo = self.memo.with_sqlite(sqlite);
+        self
+    }
+
+    pub fn runtime_name(&self) -> &'static str {
+        self.runtime.runtime_name()
     }
 
     /// Loads the active `yt-dlp-ejs` manifest (preferring a hot-updated manifest in `<data_dir>/ejs/`).
@@ -104,19 +90,16 @@ impl QuickJsSolver {
         EjsBundleManifest::embedded_default()
     }
 
-    /// Hot-installs an updated `yt-dlp-ejs` bundle asset atomically with SHA-256 verification.
+    /// Hot-installs an updated `yt-dlp-ejs` bundle asset atomically with SHA-256 verification
+    /// and version-pinning enforcement.
     pub fn install_ejs_bundle_update(
         &self,
         manifest: &EjsBundleManifest,
         bundle_js: &str,
         expected_sha256_hex: &str,
     ) -> CoreResult<PathBuf> {
-        let actual_hex = hex::encode(Sha256::digest(bundle_js.as_bytes()));
-        if !expected_sha256_hex.is_empty() && actual_hex != expected_sha256_hex.to_lowercase() {
-            return Err(CoreError::Solver(format!(
-                "EJS bundle SHA-256 mismatch: expected {expected_sha256_hex}, got {actual_hex}"
-            )));
-        }
+        let verified_sha = manifest.verify_bundle_integrity(bundle_js, expected_sha256_hex)?;
+
         fs::create_dir_all(&self.ejs_dir)
             .map_err(|e| CoreError::Solver(format!("create ejs dir: {e}")))?;
 
@@ -128,30 +111,29 @@ impl QuickJsSolver {
             .map_err(|e| CoreError::Solver(e.to_string()))?;
         fs::rename(&tmp_bundle, &bundle_path).map_err(|e| CoreError::Solver(e.to_string()))?;
 
+        let mut persisted_manifest = manifest.clone();
+        if persisted_manifest.sha256_hex.is_empty() {
+            persisted_manifest.sha256_hex = verified_sha;
+        }
         let manifest_path = self.ejs_dir.join("solver_manifest.json");
         let tmp_manifest = manifest_path.with_extension("json.tmp");
-        let manifest_json = serde_json::to_string_pretty(manifest)
+        let manifest_json = serde_json::to_string_pretty(&persisted_manifest)
             .map_err(|e| CoreError::Solver(e.to_string()))?;
         fs::write(&tmp_manifest, manifest_json).map_err(|e| CoreError::Solver(e.to_string()))?;
         fs::rename(&tmp_manifest, &manifest_path)
             .map_err(|e| CoreError::Solver(e.to_string()))?;
 
         // Clear cached n-params when solver bundle updates to avoid stale outputs.
-        self.n_param_cache.lock().unwrap().clear();
+        self.memo.clear();
         Ok(bundle_path)
     }
 
     pub fn js_eval_count(&self) -> u64 {
-        self.js_eval_count
-            .load(std::sync::atomic::Ordering::SeqCst)
+        self.js_eval_count.load(Ordering::SeqCst)
     }
 
     pub fn cached_n_param(&self, player_hash: &str, raw_n: &str) -> Option<String> {
-        self.n_param_cache
-            .lock()
-            .unwrap()
-            .get(&(player_hash.to_owned(), raw_n.to_owned()))
-            .cloned()
+        self.memo.get(player_hash, raw_n)
     }
 
     /// Persists an extracted solver bundle atomically on disk keyed by `player_hash`.
@@ -173,10 +155,9 @@ impl QuickJsSolver {
         Ok(target)
     }
 
-    /// Evaluates `solveN(n)` and/or `solveSig(sig)` inside native QuickJS-NG on the worker thread,
-    /// short-circuiting from the per-`player_hash` solved `n`-param cache whenever possible.
+    /// Evaluates `solveN(n)` and/or `solveSig(sig)` via the configured [`JsRuntime`],
+    /// short-circuiting from L1 RAM / L2 SQLite memoization whenever possible.
     pub async fn solve(&self, input: ChallengeInput) -> CoreResult<SolvedChallenge> {
-        // Fast path: check per-player-ID solved n-param cache first!
         let cached_n = input
             .n_param
             .as_deref()
@@ -196,38 +177,21 @@ impl QuickJsSolver {
         };
 
         let script_path = self.cache_solver_script(&input.player_hash, &input.solver_js)?;
-        self.js_eval_count
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.js_eval_count.fetch_add(1, Ordering::SeqCst);
 
-        let (tx, rx) = oneshot::channel();
-        self.dispatch(WorkerJob::Solve {
-            script_path: script_path.clone(),
-            n_param: need_n_eval.clone(),
-            sig_param: input.sig_param.clone(),
-            reply: tx,
-        })?;
-        let mut res = match rx.await {
-            Ok(res) => res?,
-            Err(_) => {
-                // Worker exited on idle timeout right before send; respawn once.
-                let (tx, rx) = oneshot::channel();
-                self.dispatch(WorkerJob::Solve {
-                    script_path,
-                    n_param: need_n_eval.clone(),
-                    sig_param: input.sig_param.clone(),
-                    reply: tx,
-                })?;
-                rx.await
-                    .map_err(|_| CoreError::Solver("solver worker dropped reply".to_owned()))??
-            }
-        };
+        let mut res = self
+            .runtime
+            .eval_challenge(&script_path, need_n_eval.clone(), input.sig_param.clone())
+            .await?;
 
-        // Store freshly solved n-param per player_id
         if let (Some(raw_n), Some(solved_n)) = (need_n_eval, res.n_param.clone()) {
-            self.n_param_cache
-                .lock()
-                .unwrap()
-                .insert((input.player_hash, raw_n), solved_n);
+            let meta = serde_json::json!({
+                "runtime": self.runtime.runtime_name(),
+                "script_bytes": input.solver_js.len(),
+            })
+            .to_string();
+            self.memo
+                .insert(&input.player_hash, &raw_n, &solved_n, Some(&meta));
         } else if res.n_param.is_none() {
             res.n_param = cached_n;
         }
@@ -292,110 +256,6 @@ impl QuickJsSolver {
         parsed.query_pairs_mut().clear().extend_pairs(pairs);
         Ok(parsed.to_string())
     }
-
-    fn dispatch(&self, mut job: WorkerJob) -> CoreResult<()> {
-        let mut guard = self.worker.lock().unwrap();
-        if let Some(tx) = guard.as_ref() {
-            match tx.send(job) {
-                Ok(()) => return Ok(()),
-                Err(e) => job = e.0,
-            }
-        }
-        let (tx, rx) = crossbeam_channel::unbounded();
-        std::thread::Builder::new()
-            .name("resonance-qjs".into())
-            .spawn(move || {
-                let mut loaded: Option<(PathBuf, Runtime, Context)> = None;
-                loop {
-                    match rx.recv_timeout(WORKER_IDLE_TIMEOUT) {
-                        Ok(WorkerJob::Solve {
-                            script_path,
-                            n_param,
-                            sig_param,
-                            reply,
-                        }) => {
-                            if loaded.as_ref().is_none_or(|(p, _, _)| *p != script_path) {
-                                loaded = None;
-                                match load_runtime(&script_path) {
-                                    Ok((rt, ctx)) => loaded = Some((script_path, rt, ctx)),
-                                    Err(e) => {
-                                        let _ = reply.send(Err(e));
-                                        continue;
-                                    }
-                                }
-                            }
-                            let (_, rt, ctx) = loaded.as_ref().unwrap();
-                            let deadline = Instant::now() + JS_WATCHDOG_TIMEOUT;
-                            rt.set_interrupt_handler(Some(Box::new(move || {
-                                Instant::now() >= deadline
-                            })));
-                            let res = eval_solve(ctx, n_param, sig_param);
-                            rt.set_interrupt_handler(None);
-                            let _ = reply.send(res);
-                        }
-                        Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => return,
-                    }
-                }
-            })
-            .map_err(|e| CoreError::Solver(format!("failed to spawn QuickJS thread: {e}")))?;
-
-        tx.send(job)
-            .map_err(|_| CoreError::Solver("failed to enqueue QuickJS job".to_owned()))?;
-        *guard = Some(tx);
-        Ok(())
-    }
-}
-
-fn load_runtime(script_path: &Path) -> CoreResult<(Runtime, Context)> {
-    let source = fs::read_to_string(script_path)
-        .map_err(|e| CoreError::Solver(format!("read solver script: {e}")))?;
-    let rt = Runtime::new().map_err(|e| CoreError::Solver(format!("QuickJS runtime: {e}")))?;
-    rt.set_memory_limit(64 * 1024 * 1024);
-    let ctx =
-        Context::full(&rt).map_err(|e| CoreError::Solver(format!("QuickJS context: {e}")))?;
-    ctx.with(|ctx| {
-        ctx.eval::<(), _>(source.as_bytes())
-            .map_err(|e| CoreError::Solver(format!("QuickJS eval error: {e}")))
-    })?;
-    Ok((rt, ctx))
-}
-
-fn eval_solve(
-    ctx: &Context,
-    n_param: Option<String>,
-    sig_param: Option<String>,
-) -> CoreResult<SolvedChallenge> {
-    ctx.with(|ctx| {
-        let globals = ctx.globals();
-        let solved_n = if let Some(n) = n_param {
-            let func: Function = globals
-                .get("solveN")
-                .map_err(|e| CoreError::Solver(format!("missing solveN: {e}")))?;
-            let out: String = func
-                .call((n,))
-                .map_err(|e| CoreError::Solver(format!("solveN failed: {e}")))?;
-            Some(out)
-        } else {
-            None
-        };
-
-        let solved_sig = if let Some(sig) = sig_param {
-            let func: Function = globals
-                .get("solveSig")
-                .map_err(|e| CoreError::Solver(format!("missing solveSig: {e}")))?;
-            let out: String = func
-                .call((sig,))
-                .map_err(|e| CoreError::Solver(format!("solveSig failed: {e}")))?;
-            Some(out)
-        } else {
-            None
-        };
-
-        Ok(SolvedChallenge {
-            n_param: solved_n,
-            sig_param: solved_sig,
-        })
-    })
 }
 
 /// Helper wrapper to share a single `QuickJsSolver` across providers.

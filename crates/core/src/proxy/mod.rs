@@ -1,12 +1,17 @@
-//! In-Process Loopback HTTP Streaming Proxy (`http://127.0.0.1:<port>/stream/<video_id>?itag=<itag>`).
+//! Proxy v2: In-Process Loopback HTTP Streaming Proxy (`http://127.0.0.1:<port>/stream/<video_id>?itag=<itag>`).
 //!
 //! Features:
 //! - Full `HTTP 206 Partial Content` byte-range serving for instant arbitrary seeking
-//! - Serves directly from the 256 KB atomic `ChunkCache` (offline replay `<50ms`)
+//! - Dual-buffer slot engine (`current_track` + `next_track` pre-warmed at >= 75% progress)
+//! - Range-coalescing & single-flight chunk deduplication (`ChunkCoalescer`)
+//! - Serves directly from the 256 KB atomic `ChunkCache` (offline replay `<50ms`, SHA-256 verified)
+//! - Priority 0 local-disk bypass for completed offline downloads (`X-Resonance-Source: offline-disk`)
 //! - Transparent mid-stream `403` URL re-resolution (handles ~6h googlevideo TTL expiry
 //!   and Wi-Fi <-> 5G handoffs without interrupting the audio player)
 
-use std::collections::HashMap;
+pub mod buffer;
+pub mod coalesce;
+
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
@@ -30,6 +35,12 @@ use crate::cache::chunks::{CHUNK_SIZE, ChunkCache};
 use crate::offline::{resolve_confined_path, validate_video_id};
 use crate::unix_secs;
 
+pub use buffer::{BufferSlot, DualBufferSlots, DualBufferStatus};
+pub use coalesce::{AlignedWindow, ChunkCoalescer, ChunkKey, coalesce_byte_range};
+
+/// Maximum contiguous aligned chunks fetched in a single coalesced upstream range request.
+const MAX_COALESCED_WINDOW_CHUNKS: u64 = 4;
+
 pub struct LoopbackProxy {
     addr: SocketAddr,
     shutdown_tx: Option<oneshot::Sender<()>>,
@@ -41,7 +52,8 @@ struct ProxyState {
     chunks: Arc<ChunkCache>,
     offline: Option<Arc<dyn OfflineStore>>,
     http: reqwest::Client,
-    active_streams: RwLock<HashMap<String, StreamInfo>>,
+    slots: RwLock<DualBufferSlots>,
+    coalescer: ChunkCoalescer,
     active_generation: AtomicU64,
 }
 
@@ -75,7 +87,8 @@ impl LoopbackProxy {
             chunks,
             offline,
             http,
-            active_streams: RwLock::new(HashMap::new()),
+            slots: RwLock::new(DualBufferSlots::default()),
+            coalescer: ChunkCoalescer::new(),
             active_generation: AtomicU64::new(0),
         });
 
@@ -117,11 +130,55 @@ impl LoopbackProxy {
 
     /// Registers a resolved stream so the proxy can immediately serve it without an extra resolve.
     pub fn register_stream(&self, stream: StreamInfo) {
-        self.state
-            .active_streams
-            .write()
-            .unwrap()
-            .insert(stream.video_id.clone(), stream);
+        self.state.slots.write().unwrap().register(stream);
+    }
+
+    /// Explicitly binds a resolved stream to the `current_track` buffer slot (promoting warmed
+    /// chunks if it was previously prepared in the `next_track` slot).
+    pub fn register_current_stream(&self, stream: StreamInfo) {
+        self.state.slots.write().unwrap().set_current(stream);
+    }
+
+    /// Explicitly binds an upcoming stream to the `next_track` dual-buffer slot.
+    pub fn register_next_stream(&self, stream: StreamInfo) {
+        self.state.slots.write().unwrap().set_next(stream);
+    }
+
+    /// Pre-warms the `next_track` slot by fetching up to `chunks_to_warm` aligned 256 KB
+    /// chunks into `ChunkCache` through the single-flight `ChunkCoalescer`.
+    /// Returns the number of chunks warmed on disk.
+    pub async fn warm_next_track(&self, stream: StreamInfo, chunks_to_warm: u64) -> CoreResult<u64> {
+        let video_id = stream.video_id.clone();
+        let itag = stream.itag;
+        let max_chunks = if stream.content_length > 0 {
+            stream.content_length.div_ceil(CHUNK_SIZE)
+        } else {
+            1
+        };
+        let target_chunks = chunks_to_warm.clamp(1, max_chunks);
+        self.register_next_stream(stream);
+
+        let mut warmed = 0u64;
+        for chunk_idx in 0..target_chunks {
+            fetch_chunk_with_403_recovery(&self.state, &video_id, itag, chunk_idx).await?;
+            warmed += 1;
+            self.state
+                .slots
+                .write()
+                .unwrap()
+                .record_warmed_chunk(&video_id, warmed);
+        }
+        Ok(warmed)
+    }
+
+    /// Returns a snapshot of the `current_track` and `next_track` dual-buffer slots.
+    pub fn dual_buffer_status(&self) -> DualBufferStatus {
+        self.state.slots.read().unwrap().status()
+    }
+
+    /// Returns the number of concurrent chunk fetches coalesced via single-flight deduplication.
+    pub fn coalesced_hits(&self) -> u64 {
+        self.state.coalescer.coalesced_hits()
     }
 
     pub fn stream_url(&self, video_id: &str, itag: u32) -> String {
@@ -227,12 +284,7 @@ async fn handle_request(
     }
 
     // Determine content length & mime type from chunk cache first (enables instant offline replay!)
-    let mut stream_info = state
-        .active_streams
-        .read()
-        .unwrap()
-        .get(video_id)
-        .cloned();
+    let mut stream_info = state.slots.read().unwrap().get(video_id);
 
     let known_cached_len = state
         .chunks
@@ -256,11 +308,7 @@ async fn handle_request(
         if stream_info.is_none() {
             match state.provider.resolve_stream(video_id).await {
                 Ok(info) => {
-                    state
-                        .active_streams
-                        .write()
-                        .unwrap()
-                        .insert(video_id.to_owned(), info.clone());
+                    state.slots.write().unwrap().register(info.clone());
                     stream_info = Some(info);
                 }
                 Err(e) => {
@@ -280,7 +328,6 @@ async fn handle_request(
         let len = if info.content_length > 0 {
             info.content_length
         } else {
-            // Probe first chunk if content_length was omitted.
             match fetch_chunk_with_403_recovery(&state, video_id, info.itag, 0).await {
                 Ok((_, detected_total)) if detected_total > 0 => detected_total,
                 Ok((bytes, _)) => bytes.len() as u64,
@@ -313,42 +360,40 @@ async fn handle_request(
         None => (0, total_len.saturating_sub(1), false),
     };
 
-    // Respect client requested range so native players (AVPlayer / CoreMedia) don't
-    // fail with CoreMediaErrorDomain -12939 content range mismatch.
     let effective_end = req_end;
-    let first_chunk = req_start / CHUNK_SIZE;
-    let last_chunk = effective_end / CHUNK_SIZE;
-
+    let windows = coalesce_byte_range(req_start, effective_end, total_len, MAX_COALESCED_WINDOW_CHUNKS);
     let mut out = Vec::with_capacity((effective_end - req_start + 1) as usize);
 
-    for chunk_idx in first_chunk..=last_chunk {
-        if let Some(g) = request_gen
-            && g < state.active_generation.load(Ordering::SeqCst)
-        {
-            return Ok(simple_response(
-                StatusCode::CONFLICT,
-                "cancelled: superseded track generation",
-            ));
-        }
-        let chunk_bytes =
-            match fetch_chunk_with_403_recovery(&state, video_id, itag, chunk_idx).await {
-                Ok((bytes, _)) => bytes,
-                Err(e) => {
-                    return Ok(simple_response(
-                        StatusCode::BAD_GATEWAY,
-                        &format!("chunk fetch failed: {e}"),
-                    ));
-                }
-            };
+    for win in windows {
+        for chunk_idx in win.first_chunk..=win.last_chunk {
+            if let Some(g) = request_gen
+                && g < state.active_generation.load(Ordering::SeqCst)
+            {
+                return Ok(simple_response(
+                    StatusCode::CONFLICT,
+                    "cancelled: superseded track generation",
+                ));
+            }
+            let chunk_bytes =
+                match fetch_chunk_with_403_recovery(&state, video_id, itag, chunk_idx).await {
+                    Ok((bytes, _)) => bytes,
+                    Err(e) => {
+                        return Ok(simple_response(
+                            StatusCode::BAD_GATEWAY,
+                            &format!("chunk fetch failed: {e}"),
+                        ));
+                    }
+                };
 
-        let chunk_global_start = chunk_idx * CHUNK_SIZE;
-        let slice_start = req_start.saturating_sub(chunk_global_start) as usize;
-        let slice_end = ((effective_end + 1)
-            .saturating_sub(chunk_global_start) as usize)
-            .min(chunk_bytes.len());
+            let chunk_global_start = chunk_idx * CHUNK_SIZE;
+            let slice_start = req_start.saturating_sub(chunk_global_start) as usize;
+            let slice_end = ((effective_end + 1)
+                .saturating_sub(chunk_global_start) as usize)
+                .min(chunk_bytes.len());
 
-        if slice_start < slice_end {
-            out.extend_from_slice(&chunk_bytes[slice_start..slice_end]);
+            if slice_start < slice_end {
+                out.extend_from_slice(&chunk_bytes[slice_start..slice_end]);
+            }
         }
     }
 
@@ -379,98 +424,113 @@ async fn handle_request(
         }))
 }
 
-/// Fetches a 256 KB chunk from `ChunkCache` first; on cache miss fetches upstream.
+/// Fetches a 256 KB chunk from `ChunkCache` first; on cache miss collapses concurrent
+/// callers through `ChunkCoalescer` into a single upstream fetch.
 /// If upstream returns HTTP `403 Forbidden` (expired ~6h URL or Wi-Fi/5G IP handoff),
-/// transparently re-resolves the stream via `MusicProvider::resolve_stream` and retries!
+/// transparently re-resolves the stream via `MusicProvider::resolve_stream` and retries.
 async fn fetch_chunk_with_403_recovery(
     state: &ProxyState,
     video_id: &str,
     itag: u32,
     chunk_index: u64,
 ) -> CoreResult<(Vec<u8>, u64)> {
-    // Tier 1 Cache Hit: instant offline replay (< 50ms)
+    // Tier 1 Cache Hit: instant offline replay (< 50ms) with SHA-256 verification.
     if let Ok(Some((bytes, total_len))) = state.chunks.read_chunk(video_id, itag, chunk_index) {
         return Ok((bytes, total_len));
     }
 
-    for attempt in 0..2 {
-        let info = {
-            let cached = state.active_streams.read().unwrap().get(video_id).cloned();
-            match cached {
-                Some(s) if attempt == 0 => s,
-                _ => {
-                    let fresh = state.provider.resolve_stream(video_id).await?;
-                    state
-                        .active_streams
-                        .write()
-                        .unwrap()
-                        .insert(video_id.to_owned(), fresh.clone());
-                    fresh
-                }
+    let key = ChunkKey {
+        video_id: video_id.to_owned(),
+        itag,
+        chunk_index,
+    };
+
+    state
+        .coalescer
+        .fetch_or_join(key, || async move {
+            // Re-check cache inside single-flight leader in case another caller just committed.
+            if let Ok(Some((bytes, total_len))) =
+                state.chunks.read_chunk(video_id, itag, chunk_index)
+            {
+                return Ok((bytes, total_len));
             }
-        };
 
-        let range_start = chunk_index * CHUNK_SIZE;
-        let range_end = if info.content_length > 0 {
-            (range_start + CHUNK_SIZE - 1).min(info.content_length.saturating_sub(1))
-        } else {
-            range_start + CHUNK_SIZE - 1
-        };
+            for attempt in 0..2 {
+                let info = {
+                    let cached = state.slots.read().unwrap().get(video_id);
+                    match cached {
+                        Some(s) if attempt == 0 => s,
+                        _ => {
+                            let fresh = state.provider.resolve_stream(video_id).await?;
+                            state.slots.write().unwrap().register(fresh.clone());
+                            fresh
+                        }
+                    }
+                };
 
-        let resp = state
-            .http
-            .get(&info.url)
-            .header(RANGE, format!("bytes={range_start}-{range_end}"))
-            .send()
-            .await
-            .map_err(|e| CoreError::Offline(format!("upstream fetch failed: {e}")))?;
+                let range_start = chunk_index * CHUNK_SIZE;
+                let range_end = if info.content_length > 0 {
+                    (range_start + CHUNK_SIZE - 1).min(info.content_length.saturating_sub(1))
+                } else {
+                    range_start + CHUNK_SIZE - 1
+                };
 
-        if resp.status() == reqwest::StatusCode::FORBIDDEN && attempt == 0 {
-            log::warn!(
-                "loopback proxy caught HTTP 403 mid-stream for {video_id} chunk {chunk_index}; transparently re-resolving"
-            );
-            state.active_streams.write().unwrap().remove(video_id);
-            continue;
-        }
+                let resp = state
+                    .http
+                    .get(&info.url)
+                    .header(RANGE, format!("bytes={range_start}-{range_end}"))
+                    .send()
+                    .await
+                    .map_err(|e| CoreError::Offline(format!("upstream fetch failed: {e}")))?;
 
-        if !resp.status().is_success() {
-            return Err(CoreError::Playback(PlaybackError::StreamExpired(format!(
-                "HTTP {} on chunk {chunk_index}",
-                resp.status()
-            ))));
-        }
+                if resp.status() == reqwest::StatusCode::FORBIDDEN && attempt == 0 {
+                    log::warn!(
+                        "loopback proxy caught HTTP 403 mid-stream for {video_id} chunk {chunk_index}; transparently re-resolving"
+                    );
+                    state.slots.write().unwrap().remove(video_id);
+                    continue;
+                }
 
-        let detected_total = resp
-            .headers()
-            .get(CONTENT_RANGE)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.rsplit_once('/'))
-            .and_then(|(_, tot)| tot.parse::<u64>().ok())
-            .unwrap_or(info.content_length);
+                if !resp.status().is_success() {
+                    return Err(CoreError::Playback(PlaybackError::StreamExpired(format!(
+                        "HTTP {} on chunk {chunk_index}",
+                        resp.status()
+                    ))));
+                }
 
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| CoreError::Offline(format!("body read failed: {e}")))?
-            .to_vec();
+                let detected_total = resp
+                    .headers()
+                    .get(CONTENT_RANGE)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|s| s.rsplit_once('/'))
+                    .and_then(|(_, tot)| tot.parse::<u64>().ok())
+                    .unwrap_or(info.content_length);
 
-        let final_total = if detected_total > 0 {
-            detected_total
-        } else {
-            range_start + bytes.len() as u64
-        };
+                let bytes = resp
+                    .bytes()
+                    .await
+                    .map_err(|e| CoreError::Offline(format!("body read failed: {e}")))?
+                    .to_vec();
 
-        // Atomically persist chunk for future instant seeking & offline replay.
-        let _ = state
-            .chunks
-            .write_chunk(video_id, itag, chunk_index, &bytes, final_total);
+                let final_total = if detected_total > 0 {
+                    detected_total
+                } else {
+                    range_start + bytes.len() as u64
+                };
 
-        return Ok((bytes, final_total));
-    }
+                // Atomically persist chunk with SHA-256 integrity hash & LRU eviction.
+                let _ = state
+                    .chunks
+                    .write_chunk(video_id, itag, chunk_index, &bytes, final_total);
 
-    Err(CoreError::Playback(PlaybackError::StreamExpired(format!(
-        "failed to recover 403 for {video_id}"
-    ))))
+                return Ok((bytes, final_total));
+            }
+
+            Err(CoreError::Playback(PlaybackError::StreamExpired(format!(
+                "failed to recover 403 for {video_id}"
+            ))))
+        })
+        .await
 }
 
 async fn try_serve_offline_file(

@@ -33,6 +33,7 @@ pub fn create_platform_audio_backend() -> Arc<dyn AudioBackend> {
 /// - Android / headless fallback: `FileAuthStore` (`0o600` atomic file store)
 pub fn create_platform_auth_store(data_dir: &Path) -> Arc<dyn AuthStore> {
     #[cfg(all(
+        not(target_os = "android"),
         feature = "desktop-keyring",
         any(target_os = "linux", target_os = "macos", target_os = "windows")
     ))]
@@ -40,6 +41,7 @@ pub fn create_platform_auth_store(data_dir: &Path) -> Arc<dyn AuthStore> {
         Arc::new(desktop::DesktopAuthStore::with_os_keyring(data_dir))
     }
     #[cfg(not(all(
+        not(target_os = "android"),
         feature = "desktop-keyring",
         any(target_os = "linux", target_os = "macos", target_os = "windows")
     )))]
@@ -52,6 +54,7 @@ pub fn create_platform_auth_store(data_dir: &Path) -> Arc<dyn AuthStore> {
 pub fn platform_auth_status(session: Option<&AuthSession>) -> AuthBackendStatus {
     let backend = {
         #[cfg(all(
+            not(target_os = "android"),
             feature = "desktop-keyring",
             any(target_os = "linux", target_os = "macos", target_os = "windows")
         ))]
@@ -59,6 +62,7 @@ pub fn platform_auth_status(session: Option<&AuthSession>) -> AuthBackendStatus 
             desktop::active_desktop_backend_kind()
         }
         #[cfg(not(all(
+            not(target_os = "android"),
             feature = "desktop-keyring",
             any(target_os = "linux", target_os = "macos", target_os = "windows")
         )))]

@@ -6,12 +6,12 @@
 
 use nsh_base::{button, input, theme};
 use nsh_core::prelude::*;
-use resonance_contract::{CredentialBackendKind, HomeItem, Track};
+use resonance_contract::{CredentialBackendKind, HomeItem, PoTokenHealthStatus, Track};
 
 use crate::store::{self, AppTab, ThemeChoice};
 use crate::ui::controls::{
-    artwork_box, glass_pill_button, hero_pill_button, secondary_button, setting_switch,
-    status_card, track_row_view,
+    artwork_box, diagnostics_badge, glass_pill_button, hero_pill_button, secondary_button,
+    setting_switch, status_card, track_row_view,
 };
 use crate::ui::icons::{IconKind, icon};
 use crate::ui::tokens::{
@@ -360,7 +360,117 @@ fn cache_card() -> impl IntoElement {
         .child(secondary_button("Clear Cache", store::clear_caches))
 }
 
-/// Reusable Settings, Account, Preferences & Offline Cache sections shared with `library_screen`.
+fn audio_dsp_card() -> impl IntoElement {
+    view()
+        .p_4()
+        .gap_3()
+        .rounded(radius_card)
+        .bg(move || theme().card)
+        .border_1()
+        .border_color(glass_hairline)
+        .child(
+            view()
+                .gap_0p5()
+                .child(
+                    text("Audio DSP & Gapless")
+                        .text_base()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(move || theme().foreground),
+                )
+                .child(
+                    text("Lock-free SPSC ring buffer, ReplayGain (EBU R128), 10-band biquad EQ & crossfade")
+                        .text_xs()
+                        .text_color(move || theme().muted_foreground),
+                ),
+        )
+        .child(setting_switch(
+            "ReplayGain / EBU R128 Loudness",
+            || store::dsp_config().loudness_normalization,
+            store::set_loudness_normalization,
+        ))
+        .child(setting_switch(
+            "Skip Silence",
+            || store::dsp_config().silence_skip_enabled,
+            store::set_silence_skip,
+        ))
+        .child(
+            view()
+                .flex_row()
+                .flex_wrap()
+                .gap_2()
+                .child(secondary_button(
+                    move || {
+                        let preset = store::dsp_config().eq_preset;
+                        SharedString::from(format!("10-Band EQ: {}", preset.label()))
+                    },
+                    store::cycle_eq_preset,
+                ))
+                .child(secondary_button(
+                    move || {
+                        let ms = store::dsp_config().crossfade_ms;
+                        if ms == 0 {
+                            SharedString::from("Gapless (0s)")
+                        } else {
+                            SharedString::from(format!("Crossfade {}s", ms / 1000))
+                        }
+                    },
+                    store::cycle_crossfade_ms,
+                )),
+        )
+}
+
+fn stream_diagnostics_card() -> impl IntoElement {
+    view()
+        .p_4()
+        .gap_2p5()
+        .rounded(radius_card)
+        .bg(move || theme().card)
+        .border_1()
+        .border_color(glass_hairline)
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .child(
+                    text("Stream Acquisition & PO Token")
+                        .text_base()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(move || theme().foreground),
+                )
+                .child(diagnostics_badge(
+                    move || {
+                        let diag = store::po_token_diagnostics();
+                        match diag.status {
+                            PoTokenHealthStatus::Healthy => SharedString::from("PO Token: Healthy"),
+                            PoTokenHealthStatus::DegradedColdStart => {
+                                SharedString::from("Degraded Fallback")
+                            }
+                            PoTokenHealthStatus::Unconfigured => {
+                                SharedString::from("Fallback Matrix")
+                            }
+                        }
+                    },
+                    || store::po_token_diagnostics().status == PoTokenHealthStatus::Healthy,
+                    || {
+                        store::po_token_diagnostics().status
+                            == PoTokenHealthStatus::DegradedColdStart
+                    },
+                )),
+        )
+        .child(
+            text(move || {
+                let diag = store::po_token_diagnostics();
+                SharedString::from(format!("{} • {}", diag.active_provider, diag.detail))
+            })
+            .test_id("po-token-diagnostics-detail")
+            .text_xs()
+            .text_color(move || theme().muted_foreground),
+        )
+}
+
+/// Reusable Settings, Account, Preferences, Audio DSP & Offline Cache sections shared with `library_screen`.
 pub fn settings_sections() -> impl IntoElement {
     let cookie_draft = signal(String::new());
 
@@ -370,13 +480,21 @@ pub fn settings_sections() -> impl IntoElement {
             .flex_row()
             .items_start()
             .gap_4()
-            .child(view().flex_1().min_w(px(0.0)).gap_4().child(preferences_card()))
+            .child(
+                view()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .gap_4()
+                    .child(preferences_card())
+                    .child(audio_dsp_card()),
+            )
             .child(
                 view()
                     .flex_1()
                     .min_w(px(0.0))
                     .gap_4()
                     .child(account_card(cookie_draft))
+                    .child(stream_diagnostics_card())
                     .child(cache_card()),
             )
     })
@@ -385,7 +503,9 @@ pub fn settings_sections() -> impl IntoElement {
             .w_full()
             .gap_4()
             .child(account_card(cookie_draft))
+            .child(stream_diagnostics_card())
             .child(preferences_card())
+            .child(audio_dsp_card())
             .child(cache_card())
     })
 }

@@ -117,16 +117,26 @@ fn phase5_mini_player_now_playing_volume_lyrics_queue_and_offline_toast() -> Res
 
 #[test]
 fn phase5_desktop_shortcuts_and_zero_raw_colors_in_controls() -> Result<(), String> {
-    // Verify zero raw color literals in controls.rs (strict semantic design-token discipline)
-    let controls_src = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ui/controls.rs"),
-    )
-    .expect("read controls.rs");
+    // Verify zero raw color literals across all atomic modules in src/ui/controls/
+    let controls_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ui/controls");
+    let mut checked_files = 0usize;
+    for entry in fs::read_dir(&controls_dir).expect("read src/ui/controls/") {
+        let path = entry.expect("dir entry").path();
+        if path.extension().and_then(|s| s.to_str()) == Some("rs") {
+            let controls_src = fs::read_to_string(&path).expect("read control module");
+            assert!(
+                !controls_src.contains("rgb(")
+                    && !controls_src.contains("rgba(")
+                    && !controls_src.contains("0xFF"),
+                "{} must use semantic theme tokens only",
+                path.display()
+            );
+            checked_files += 1;
+        }
+    }
     assert!(
-        !controls_src.contains("rgb(")
-            && !controls_src.contains("rgba(")
-            && !controls_src.contains("0xFF"),
-        "controls.rs must use semantic theme tokens only"
+        checked_files >= 6,
+        "expected atomic hierarchy in src/ui/controls/ (>=6 modules), found {checked_files}"
     );
 
     // Desktop layout shows keyboard shortcut legend in sidebar

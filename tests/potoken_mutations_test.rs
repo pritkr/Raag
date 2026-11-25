@@ -448,6 +448,7 @@ async fn caching_potoken_provider_deduplicates_concurrent_mints_and_invalidates_
         scope: PoTokenScope::Gvs,
         video_id: "vid_1".to_owned(),
         visitor_data: Some("vd_1".to_owned()),
+        session_hash: None,
         signed_in: false,
     };
 

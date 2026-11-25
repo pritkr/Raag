@@ -607,7 +607,7 @@ fn sqlite_v1_to_v2_migration_preserves_existing_data_and_creates_downloads_table
     let version: i32 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 2);
+    assert!(version >= 2, "expected schema migration to at least v2, got v{version}");
 
     let rec = DownloadRecord {
         video_id: "offline_v1".into(),

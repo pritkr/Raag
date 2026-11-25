@@ -70,7 +70,8 @@ impl AudioBackend for AndroidMediaBridge {
         self.position_ms.store(0, Ordering::SeqCst);
         self.playing.store(true, Ordering::SeqCst);
         log::info!(
-            "AndroidMediaBridge: handing loopback URL {proxy_url} ({}) to Media3 ForegroundService",
+            "AndroidMediaBridge: handing loopback URL {} ({}) to Media3 ForegroundService",
+            resonance_core::innertube::auth::redact_secrets(proxy_url),
             meta.title
         );
         Ok(())

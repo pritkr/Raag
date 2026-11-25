@@ -918,10 +918,13 @@ fn mobile_top_header() -> impl IntoElement {
                     view()
                         .flex_row()
                         .items_center()
+                        .flex_shrink_0()
                         .gap_2()
                         .child(yt_music_icon(22.0))
                         .child(
                             text("Raag")
+                                .number_of_lines(1)
+                                .min_w(px(64.0))
                                 .text_base()
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(move || theme().foreground),

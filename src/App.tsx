@@ -382,6 +382,14 @@ export default function App() {
     void fetchTree();
   }, [fetchTree]);
 
+  useEffect(() => {
+    if (!error || tree) return;
+    const timer = window.setTimeout(() => {
+      void fetchTree();
+    }, 2000);
+    return () => window.clearTimeout(timer);
+  }, [error, tree, fetchTree]);
+
   const sendAction = useCallback(
     async (endpoint: string, payload: Record<string, unknown>) => {
       setBusy(true);

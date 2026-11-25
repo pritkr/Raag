@@ -1,0 +1,42 @@
+name: Scheduled InnerTube Client Probe
+
+on:
+  schedule:
+    # Run every 12 hours to detect YouTube protocol drift proactively before users hit failures.
+    - cron: '0 */12 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  client-probe:
+    name: Probe InnerTube Client Matrix (Every 12h)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run client_probe drift detection
+        run: |
+          cargo run --release --bin client_probe -- \
+            --output target/probed_client_matrix.json
+        continue-on-error: true
+        id: live_probe
+
+      - name: Fallback offline matrix sanity probe if runner egress is restricted
+        if: steps.live_probe.outcome != 'success'
+        run: |
+          cargo run --release --bin client_probe -- \
+            --offline-sim \
+            --output target/probed_client_matrix.json
+
+      - name: Upload probed client matrix artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: probed-client-matrix
+          path: target/probed_client_matrix.json
+          retention-days: 14

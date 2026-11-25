@@ -8,7 +8,9 @@
 //! - SponsorBlock (`music_offtopic`) auto-skip
 //! - Deterministic `--fixture` QA dataset
 
+pub mod audio_dsp;
 pub mod cache;
+pub mod downloads;
 pub mod fixture;
 pub mod innertube;
 pub mod lyrics;

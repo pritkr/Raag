@@ -1,10 +1,15 @@
-//! Data-driven InnerTube client viability matrix & PO-token policy engine.
+//! Data-driven InnerTube client viability matrix, PO-token policy engine,
+//! and adaptive per-client Circuit Breaker (`Closed -> Open -> HalfOpen`).
 //!
 //! Replaces hard-coded client chains with a remote-updatable `client_matrix.json`
-//! generated/refreshed by the nightly `client_probe` binary.
+//! refreshed by `client_probe`, combined with rolling HTTP 403/429 & latency telemetry
+//! so unhealthy clients trip into cooldown instead of causing repeated stalls on every skip.
 
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::Path;
+use std::sync::RwLock;
+use std::time::{Duration, Instant};
 
 use resonance_contract::{CoreError, CoreResult};
 use serde::{Deserialize, Serialize};
@@ -113,8 +118,6 @@ impl ClientMatrixEntry {
         match cfg.auth_mode {
             AuthMode::TvOAuthOnly if !has_tv_oauth => return false,
             AuthMode::AnonymousOnly if tier.is_signed_in() && !self.probe_pass_cookies_off => {
-                // Anonymous-only clients can still be used as an unauthenticated fallback
-                // ONLY if probe_pass_cookies_off is true, and cookies are NEVER sent.
                 return false;
             }
             _ => {}
@@ -228,5 +231,308 @@ impl ClientMatrix {
             .collect();
         candidates.sort_by_key(|(prio, _)| *prio);
         candidates.into_iter().map(|(_, cfg)| cfg).collect()
+    }
+}
+
+// ============================================================================
+// Adaptive Client Health Tracker & Circuit Breaker
+// ============================================================================
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CircuitState {
+    Closed,
+    Open,
+    HalfOpen,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CircuitBreakerConfig {
+    /// Rolling sample window length per client.
+    pub window_size: usize,
+    /// Consecutive 403/429 or hard failures required to trip into `Open`.
+    pub failure_threshold: u32,
+    /// Rolling 403/429 ratio (0.0..=1.0) over at least `failure_threshold` samples to trip `Open`.
+    pub max_error_rate: f32,
+    /// Duration an `Open` client remains skipped before transitioning to `HalfOpen`.
+    pub cooldown: Duration,
+}
+
+impl Default for CircuitBreakerConfig {
+    fn default() -> Self {
+        Self {
+            window_size: 20,
+            failure_threshold: 3,
+            max_error_rate: 0.60,
+            cooldown: Duration::from_secs(90),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum OutcomeSample {
+    Success { latency_ms: u64 },
+    Http403 { latency_ms: u64 },
+    Http429 { latency_ms: u64 },
+    OtherFailure { latency_ms: u64 },
+}
+
+/// Snapshot of rolling health telemetry for one InnerTube client.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClientHealthSnapshot {
+    pub kind: ClientKind,
+    pub state: CircuitState,
+    pub sample_count: usize,
+    pub success_rate: f32,
+    pub rate_403: f32,
+    pub rate_429: f32,
+    pub ewma_latency_ms: f32,
+    pub consecutive_failures: u32,
+}
+
+struct PerClientHealth {
+    samples: VecDeque<OutcomeSample>,
+    consecutive_failures: u32,
+    ewma_latency_ms: f32,
+    opened_at: Option<Instant>,
+    half_open_probe_in_flight: bool,
+}
+
+impl Default for PerClientHealth {
+    fn default() -> Self {
+        Self {
+            samples: VecDeque::with_capacity(24),
+            consecutive_failures: 0,
+            ewma_latency_ms: 0.0,
+            opened_at: None,
+            half_open_probe_in_flight: false,
+        }
+    }
+}
+
+/// Adaptive per-client health tracker & circuit breaker for [`ClientMatrix`].
+///
+/// Tracks rolling success rate, HTTP 403/429 rates, and EWMA latency, tripping
+/// unhealthy clients into `Open` cooldown and recovering via `HalfOpen` probes.
+pub struct ClientCircuitBreaker {
+    config: CircuitBreakerConfig,
+    clients: RwLock<HashMap<ClientKind, PerClientHealth>>,
+}
+
+impl Default for ClientCircuitBreaker {
+    fn default() -> Self {
+        Self::new(CircuitBreakerConfig::default())
+    }
+}
+
+impl ClientCircuitBreaker {
+    pub fn new(config: CircuitBreakerConfig) -> Self {
+        Self {
+            config,
+            clients: RwLock::new(HashMap::new()),
+        }
+    }
+
+    pub fn state_at(&self, kind: ClientKind, now: Instant) -> CircuitState {
+        let guard = self.clients.read().unwrap();
+        let Some(entry) = guard.get(&kind) else {
+            return CircuitState::Closed;
+        };
+        match entry.opened_at {
+            None => CircuitState::Closed,
+            Some(opened) if now.saturating_duration_since(opened) >= self.config.cooldown => {
+                CircuitState::HalfOpen
+            }
+            Some(_) => CircuitState::Open,
+        }
+    }
+
+    pub fn state(&self, kind: ClientKind) -> CircuitState {
+        self.state_at(kind, Instant::now())
+    }
+
+    /// Returns `true` if the client may be attempted right now (`Closed` or single `HalfOpen` probe).
+    pub fn allow_request(&self, kind: ClientKind) -> bool {
+        self.allow_request_at(kind, Instant::now())
+    }
+
+    pub fn allow_request_at(&self, kind: ClientKind, now: Instant) -> bool {
+        let mut guard = self.clients.write().unwrap();
+        let entry = guard.entry(kind).or_default();
+        match entry.opened_at {
+            None => true,
+            Some(opened) if now.saturating_duration_since(opened) >= self.config.cooldown => {
+                if entry.half_open_probe_in_flight {
+                    false
+                } else {
+                    entry.half_open_probe_in_flight = true;
+                    true
+                }
+            }
+            Some(_) => false,
+        }
+    }
+
+    pub fn record_success(&self, kind: ClientKind, latency_ms: u64) {
+        let mut guard = self.clients.write().unwrap();
+        let entry = guard.entry(kind).or_default();
+        Self::push_sample(entry, OutcomeSample::Success { latency_ms }, self.config.window_size);
+        entry.consecutive_failures = 0;
+        entry.opened_at = None;
+        entry.half_open_probe_in_flight = false;
+    }
+
+    pub fn record_failure(&self, kind: ClientKind, http_status: Option<u16>, latency_ms: u64) {
+        self.record_failure_at(kind, http_status, latency_ms, Instant::now());
+    }
+
+    pub fn record_failure_at(
+        &self,
+        kind: ClientKind,
+        http_status: Option<u16>,
+        latency_ms: u64,
+        now: Instant,
+    ) {
+        let mut guard = self.clients.write().unwrap();
+        let entry = guard.entry(kind).or_default();
+        let sample = match http_status {
+            Some(403) => OutcomeSample::Http403 { latency_ms },
+            Some(429) => OutcomeSample::Http429 { latency_ms },
+            _ => OutcomeSample::OtherFailure { latency_ms },
+        };
+        let was_half_open = entry.half_open_probe_in_flight;
+        entry.half_open_probe_in_flight = false;
+        Self::push_sample(entry, sample, self.config.window_size);
+        entry.consecutive_failures = entry.consecutive_failures.saturating_add(1);
+
+        let err_rate = Self::compute_error_rate(entry);
+        let should_open = was_half_open
+            || entry.consecutive_failures >= self.config.failure_threshold
+            || (entry.samples.len() >= self.config.failure_threshold as usize
+                && err_rate >= self.config.max_error_rate);
+
+        if should_open {
+            entry.opened_at = Some(now);
+        }
+    }
+
+    pub fn health_snapshot(&self, kind: ClientKind) -> ClientHealthSnapshot {
+        let now = Instant::now();
+        let guard = self.clients.read().unwrap();
+        let Some(entry) = guard.get(&kind) else {
+            return ClientHealthSnapshot {
+                kind,
+                state: CircuitState::Closed,
+                sample_count: 0,
+                success_rate: 1.0,
+                rate_403: 0.0,
+                rate_429: 0.0,
+                ewma_latency_ms: 0.0,
+                consecutive_failures: 0,
+            };
+        };
+        let total = entry.samples.len().max(1) as f32;
+        let ok_cnt = entry
+            .samples
+            .iter()
+            .filter(|s| matches!(s, OutcomeSample::Success { .. }))
+            .count() as f32;
+        let c403 = entry
+            .samples
+            .iter()
+            .filter(|s| matches!(s, OutcomeSample::Http403 { .. }))
+            .count() as f32;
+        let c429 = entry
+            .samples
+            .iter()
+            .filter(|s| matches!(s, OutcomeSample::Http429 { .. }))
+            .count() as f32;
+        let state = match entry.opened_at {
+            None => CircuitState::Closed,
+            Some(opened) if now.saturating_duration_since(opened) >= self.config.cooldown => {
+                CircuitState::HalfOpen
+            }
+            Some(_) => CircuitState::Open,
+        };
+        ClientHealthSnapshot {
+            kind,
+            state,
+            sample_count: entry.samples.len(),
+            success_rate: if entry.samples.is_empty() { 1.0 } else { ok_cnt / total },
+            rate_403: if entry.samples.is_empty() { 0.0 } else { c403 / total },
+            rate_429: if entry.samples.is_empty() { 0.0 } else { c429 / total },
+            ewma_latency_ms: entry.ewma_latency_ms,
+            consecutive_failures: entry.consecutive_failures,
+        }
+    }
+
+    fn push_sample(entry: &mut PerClientHealth, sample: OutcomeSample, window_size: usize) {
+        let latency = match sample {
+            OutcomeSample::Success { latency_ms }
+            | OutcomeSample::Http403 { latency_ms }
+            | OutcomeSample::Http429 { latency_ms }
+            | OutcomeSample::OtherFailure { latency_ms } => latency_ms as f32,
+        };
+        if entry.samples.is_empty() {
+            entry.ewma_latency_ms = latency;
+        } else {
+            entry.ewma_latency_ms = 0.25 * latency + 0.75 * entry.ewma_latency_ms;
+        }
+        if entry.samples.len() >= window_size.max(1) {
+            entry.samples.pop_front();
+        }
+        entry.samples.push_back(sample);
+    }
+
+    fn compute_error_rate(entry: &PerClientHealth) -> f32 {
+        if entry.samples.is_empty() {
+            return 0.0;
+        }
+        let bad = entry
+            .samples
+            .iter()
+            .filter(|s| !matches!(s, OutcomeSample::Success { .. }))
+            .count();
+        bad as f32 / entry.samples.len() as f32
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn circuit_breaker_trips_on_403_429_and_recovers_after_half_open_cooldown() {
+        let cfg = CircuitBreakerConfig {
+            window_size: 10,
+            failure_threshold: 2,
+            max_error_rate: 0.5,
+            cooldown: Duration::from_secs(30),
+        };
+        let cb = ClientCircuitBreaker::new(cfg);
+        let t0 = Instant::now();
+
+        assert_eq!(cb.state_at(ClientKind::WebRemix, t0), CircuitState::Closed);
+        assert!(cb.allow_request_at(ClientKind::WebRemix, t0));
+
+        cb.record_failure_at(ClientKind::WebRemix, Some(403), 120, t0);
+        assert_eq!(cb.state_at(ClientKind::WebRemix, t0), CircuitState::Closed);
+
+        cb.record_failure_at(ClientKind::WebRemix, Some(429), 200, t0);
+        assert_eq!(cb.state_at(ClientKind::WebRemix, t0), CircuitState::Open);
+        assert!(!cb.allow_request_at(ClientKind::WebRemix, t0 + Duration::from_secs(10)));
+
+        // After cooldown -> HalfOpen allows single probe
+        let t_after = t0 + Duration::from_secs(31);
+        assert_eq!(cb.state_at(ClientKind::WebRemix, t_after), CircuitState::HalfOpen);
+        assert!(cb.allow_request_at(ClientKind::WebRemix, t_after));
+        assert!(!cb.allow_request_at(ClientKind::WebRemix, t_after));
+
+        // Probe succeeds -> Closed
+        cb.record_success(ClientKind::WebRemix, 80);
+        assert_eq!(cb.state_at(ClientKind::WebRemix, t_after), CircuitState::Closed);
+        let snap = cb.health_snapshot(ClientKind::WebRemix);
+        assert!(snap.rate_403 > 0.0);
+        assert!(snap.rate_429 > 0.0);
+        assert!(snap.ewma_latency_ms > 0.0);
     }
 }

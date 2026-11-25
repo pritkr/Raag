@@ -13,18 +13,23 @@ use crossbeam_channel::{Receiver, Sender, unbounded};
 use resonance_contract::{
     AppEvent, AuthBackendStatus, AuthSession, CacheStats, CacheStore, DownloadRecord, HomeSection,
     LikeAction, LyricsDocument, LyricsProvider, MusicProvider, MutationCommand, OfflineStore,
-    PlayerSnapshot, Playlist, PlaylistEditOp, SearchResults, Track, TrackId, WatchtimeReport,
+    PlayerSnapshot, Playlist, PlaylistEditOp, PoTokenDiagnostics, PoTokenProvider, SearchResults,
+    Track, TrackId, WatchtimeReport,
 };
 use resonance_core::cache::{
     ArtworkCache, ChunkCache, DEFAULT_ARTWORK_DISK_CAP, DEFAULT_MAX_AUDIO_CACHE_BYTES,
     SqliteCacheStore,
 };
+use resonance_core::downloads::OfflineVault;
 use resonance_core::innertube::auth::redact_secrets;
 use resonance_core::innertube::{InnerTubeClient, MutationWorker};
 use resonance_core::lyrics::CascadeLyricsProvider;
 use resonance_core::offline::DownloadManager;
 use resonance_core::playback::PlaybackController;
-use resonance_core::potoken::{CachingPoTokenProvider, SidecarPoTokenProvider};
+use resonance_core::potoken::{
+    CachingPoTokenProvider, ChainedPoTokenProvider, PlatformAttestationPoTokenProvider,
+    QuickJsVmAttestationBridge, SidecarPoTokenProvider,
+};
 use resonance_core::proxy::LoopbackProxy;
 use resonance_core::solver::QuickJsSolver;
 use resonance_core::sponsorblock::HttpSponsorBlockProvider;
@@ -57,6 +62,7 @@ pub enum LiveUpdate {
         banner: String,
     },
     AuthStatus(AuthBackendStatus),
+    PoTokenDiagnostics(PoTokenDiagnostics),
     MutationFailed {
         command: MutationCommand,
         reason: String,
@@ -74,6 +80,8 @@ struct LiveRuntime {
     chunks: Arc<ChunkCache>,
     lyrics: Arc<CascadeLyricsProvider>,
     downloads: Arc<DownloadManager>,
+    #[allow(dead_code)]
+    vault: Arc<OfflineVault>,
     controller: Arc<PlaybackController>,
     mutations: MutationWorker,
     tx: Sender<LiveUpdate>,
@@ -119,24 +127,38 @@ fn init_runtime() -> Result<LiveRuntime, String> {
             .map_err(|e| format!("ArtworkCache init failed: {e}"))?,
     );
     let auth = create_platform_auth_store(&dir);
-    let solver = Arc::new(QuickJsSolver::new(&dir));
+    let solver = Arc::new(QuickJsSolver::new(&dir).with_sqlite_cache(cache.clone()));
     let provider = Arc::new(
         InnerTubeClient::new(cache.clone(), auth, solver)
             .map_err(|e| format!("InnerTubeClient init failed: {e}"))?,
     );
+    let mut po_chain: Vec<Arc<dyn PoTokenProvider>> = Vec::new();
     if let Ok(pot_url) = std::env::var("RESONANCE_POTOKEN_URL")
         && !pot_url.trim().is_empty()
     {
         match SidecarPoTokenProvider::new(pot_url.trim()) {
             Ok(sidecar) => {
-                let cached = CachingPoTokenProvider::new(sidecar).into_arc();
-                provider.set_po_token_provider(Some(cached));
+                po_chain.push(Arc::new(sidecar));
             }
             Err(e) => {
-                log::warn!("ignoring invalid RESONANCE_POTOKEN_URL: {e}");
+                log::warn!(
+                    "ignoring invalid RESONANCE_POTOKEN_URL: {}",
+                    redact_secrets(&e.to_string())
+                );
             }
         }
     }
+    if let Ok(vm_script_path) = std::env::var("RESONANCE_POTOKEN_VM_SCRIPT")
+        && !vm_script_path.trim().is_empty()
+        && let Ok(script_source) = std::fs::read_to_string(vm_script_path.trim())
+    {
+        po_chain.push(Arc::new(PlatformAttestationPoTokenProvider::new(Arc::new(
+            QuickJsVmAttestationBridge::new(script_source),
+        ))));
+    }
+    let chained_po = ChainedPoTokenProvider::new(po_chain);
+    let cached_po = CachingPoTokenProvider::new(chained_po).into_arc();
+    provider.set_po_token_provider(Some(cached_po));
     let proxy = rt.block_on(async {
         LoopbackProxy::start_with_offline(provider.clone(), chunks.clone(), Some(cache.clone()))
             .await
@@ -165,6 +187,7 @@ fn init_runtime() -> Result<LiveRuntime, String> {
         .map_err(|e| format!("DownloadManager init failed: {e}"))?,
     );
     let _ = rt.block_on(downloads.startup_recovery());
+    let vault = Arc::new(OfflineVault::new(cache.clone(), downloads.clone()));
 
     let controller = Arc::new(
         PlaybackController::new(
@@ -243,6 +266,9 @@ fn init_runtime() -> Result<LiveRuntime, String> {
         signed_in,
     });
     let _ = tx.send(LiveUpdate::AuthStatus(auth_status));
+    let _ = tx.send(LiveUpdate::PoTokenDiagnostics(
+        provider.po_token_diagnostics(),
+    ));
     let _ = tx.send(LiveUpdate::DownloadsLoaded(initial_downloads));
 
     Ok(LiveRuntime {
@@ -252,6 +278,7 @@ fn init_runtime() -> Result<LiveRuntime, String> {
         chunks,
         lyrics,
         downloads,
+        vault,
         controller,
         mutations,
         tx,
@@ -310,6 +337,7 @@ pub fn dispatch_browse_collection(browse_id: String) {
 pub fn dispatch_play_track(track: Track) {
     let Some(rt) = runtime() else { return };
     let controller = rt.controller.clone();
+    let provider = rt.provider.clone();
     let lyrics = rt.lyrics.clone();
     let tx = rt.tx.clone();
     rt.rt.spawn(async move {
@@ -323,6 +351,9 @@ pub fn dispatch_play_track(track: Track) {
                 let _ = tx.send(LiveUpdate::StatusBanner(format!("Playback failed: {e}")));
             }
         }
+        let _ = tx.send(LiveUpdate::PoTokenDiagnostics(
+            provider.po_token_diagnostics(),
+        ));
         let lyr = lyrics.fetch_lyrics(&track_for_lyrics).await.ok().flatten();
         let _ = tx.send(LiveUpdate::LyricsLoaded(lyr));
     });

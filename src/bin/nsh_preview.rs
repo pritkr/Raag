@@ -70,6 +70,48 @@ mod host {
         }
     }
 
+    fn encode_base64(input: &[u8]) -> String {
+        const TABLE: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+        for chunk in input.chunks(3) {
+            let b0 = chunk[0] as u32;
+            let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+            let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+            let triple = (b0 << 16) | (b1 << 8) | b2;
+            out.push(TABLE[((triple >> 18) & 0x3f) as usize] as char);
+            out.push(TABLE[((triple >> 12) & 0x3f) as usize] as char);
+            if chunk.len() > 1 {
+                out.push(TABLE[((triple >> 6) & 0x3f) as usize] as char);
+            } else {
+                out.push('=');
+            }
+            if chunk.len() > 2 {
+                out.push(TABLE[(triple & 0x3f) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+        out
+    }
+
+    fn image_source_to_browser_uri(source: &nsh_core::ImageSource) -> Option<String> {
+        if let Some(data) = source.data.as_ref() {
+            let mime = source
+                .uri
+                .strip_prefix("data:")
+                .and_then(|rest| rest.split([';', ',']).next())
+                .filter(|m| !m.is_empty())
+                .unwrap_or("image/svg+xml");
+            return Some(format!("data:{mime};base64,{}", encode_base64(data.bytes())));
+        }
+        if !source.uri.is_empty() && !source.uri.contains(";nsh-key=") {
+            Some(source.uri.to_string())
+        } else {
+            None
+        }
+    }
+
     #[derive(Clone, Debug, Default, Serialize)]
     #[serde(rename_all = "camelCase")]
     struct SerializedBorderSide {
@@ -367,10 +409,7 @@ mod host {
                     }
                     MountItem::Image { id, source, .. } => {
                         if let Some(n) = self.nodes.get_mut(&id) {
-                            n.image_uri = source
-                                .as_ref()
-                                .filter(|s| !s.uri.is_empty())
-                                .map(|s| s.uri.to_string());
+                            n.image_uri = source.as_ref().and_then(image_source_to_browser_uri);
                         }
                     }
                     MountItem::Events { id, events } => {

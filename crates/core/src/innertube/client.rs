@@ -7,20 +7,24 @@
 //! - Graceful `401` cookie-rotation / session revocation recovery & `429` handling
 
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use resonance_contract::{
     AuthError, AuthSession, AuthStore, CacheStore, CoreError, CoreResult, HomeSection,
-    LyricsDocument, MusicProvider, Playlist, PoTokenError, PoTokenProvider, PoTokenRequest,
-    PoTokenScope, ProviderError, SearchResults, StreamInfo, Track,
+    LyricsDocument, MusicProvider, Playlist, PoTokenDiagnostics, PoTokenError,
+    PoTokenHealthStatus, PoTokenProvider, PoTokenRequest, PoTokenScope, ProviderError,
+    SearchResults, StreamInfo, Track,
 };
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::innertube::auth::{apply_cookie_rotation, build_auth_headers};
 use crate::innertube::clients::{AuthMode, ClientConfig, WEB_REMIX};
 use crate::innertube::formats::TargetPlatform;
-use crate::innertube::matrix::{AccountTier, ClientMatrix};
+use crate::innertube::matrix::{
+    AccountTier, CircuitBreakerConfig, ClientCircuitBreaker, ClientHealthSnapshot, ClientMatrix,
+};
 use crate::innertube::parser::{
     extract_lyrics_browse_id, extract_visitor_data, finalize_stream_info,
     parse_collection_response, parse_home_response, parse_next_queue_response,
@@ -52,11 +56,13 @@ pub struct InnerTubeClient {
     api_base_override: RwLock<Option<String>>,
     /// Remote-updatable data-driven client viability matrix (`client_matrix.json`).
     client_matrix: RwLock<ClientMatrix>,
+    /// Adaptive per-client circuit breaker tracking rolling 403/429 rates and latency.
+    circuit_breaker: Arc<ClientCircuitBreaker>,
     /// Native decoder target platform governing audio format preference.
     target_platform: TargetPlatform,
     /// Optional GVS PO token for free/anonymous web playback (bypassed for Premium subscribers).
     gvs_po_token: RwLock<Option<String>>,
-    /// Dependency-injected PO token provider (e.g. `CachingPoTokenProvider<SidecarPoTokenProvider>`).
+    /// Dependency-injected PO token provider (e.g. `CachingPoTokenProvider<ChainedPoTokenProvider>`).
     po_token_provider: RwLock<Option<Arc<dyn PoTokenProvider>>>,
     /// Whether the active signed-in session has YouTube Music Premium (bypasses GVS PO token & unlocks 256 kbps).
     is_premium_account: RwLock<bool>,
@@ -90,11 +96,50 @@ impl InnerTubeClient {
             player_solver_js: RwLock::new(None),
             api_base_override: RwLock::new(None),
             client_matrix: RwLock::new(matrix),
+            circuit_breaker: Arc::new(ClientCircuitBreaker::new(CircuitBreakerConfig::default())),
             target_platform: TargetPlatform::current(),
             gvs_po_token: RwLock::new(None),
             po_token_provider: RwLock::new(None),
             is_premium_account: RwLock::new(false),
         })
+    }
+
+    pub fn with_circuit_breaker(mut self, breaker: Arc<ClientCircuitBreaker>) -> Self {
+        self.circuit_breaker = breaker;
+        self
+    }
+
+    pub fn circuit_breaker(&self) -> &Arc<ClientCircuitBreaker> {
+        &self.circuit_breaker
+    }
+
+    pub fn client_health_snapshot(
+        &self,
+        kind: crate::innertube::clients::ClientKind,
+    ) -> ClientHealthSnapshot {
+        self.circuit_breaker.health_snapshot(kind)
+    }
+
+    pub fn po_token_diagnostics(&self) -> PoTokenDiagnostics {
+        if let Some(provider) = self.po_token_provider.read().unwrap().as_ref() {
+            provider.diagnostics()
+        } else if self.gvs_po_token.read().unwrap().is_some() {
+            PoTokenDiagnostics {
+                status: PoTokenHealthStatus::Healthy,
+                active_provider: "static-gvs".to_owned(),
+                detail: "Static GVS PO token configured".to_owned(),
+                degraded_fallback_active: false,
+                last_checked_unix_secs: unix_secs(),
+            }
+        } else {
+            PoTokenDiagnostics {
+                status: PoTokenHealthStatus::Unconfigured,
+                active_provider: "none".to_owned(),
+                detail: "No PO token provider configured — fallback matrix clients active".to_owned(),
+                degraded_fallback_active: true,
+                last_checked_unix_secs: unix_secs(),
+            }
+        }
     }
 
     pub fn update_client_matrix(&self, matrix: ClientMatrix) {
@@ -337,11 +382,17 @@ impl InnerTubeClient {
         let pot_value = if needs_pot {
             let provider = self.po_token_provider.read().unwrap().clone();
             if let Some(provider) = provider {
+                let session_hash = self.current_session().map(|sess| {
+                    let mut h = Sha256::new();
+                    h.update(sess.cookie_header.as_bytes());
+                    hex::encode(h.finalize())[..16].to_owned()
+                });
                 let req = PoTokenRequest {
                     client_name: client.client_name.to_owned(),
                     scope: PoTokenScope::Gvs,
                     video_id: video_id.to_owned(),
                     visitor_data: self.current_visitor_data(),
+                    session_hash,
                     signed_in: self.current_session().is_some(),
                 };
                 Some(provider.mint_token(&req).await?.value)
@@ -563,15 +614,41 @@ impl MusicProvider for InnerTubeClient {
 
         let mut last_err = None;
         for client in chain {
+            if !self.circuit_breaker.allow_request(client.kind) {
+                log::debug!(
+                    "skipping client {} for {video_id}: circuit breaker OPEN",
+                    client.client_name
+                );
+                continue;
+            }
+            let started = Instant::now();
             match self.resolve_with_client(client, video_id).await {
                 Ok(stream) => {
+                    self.circuit_breaker
+                        .record_success(client.kind, started.elapsed().as_millis() as u64);
                     self.write_swr(&cache_key, &stream, TTL_STREAM_SECS);
                     return Ok(stream);
                 }
                 Err(e) => {
+                    let latency_ms = started.elapsed().as_millis() as u64;
+                    let http_status = match &e {
+                        CoreError::Provider(ProviderError::Http { status, .. }) => Some(*status),
+                        CoreError::Provider(ProviderError::RateLimited { .. }) => Some(429),
+                        _ => None,
+                    };
+                    if matches!(
+                        &e,
+                        CoreError::Provider(ProviderError::Http { status: 403 | 429 | 500..=599, .. })
+                            | CoreError::Provider(ProviderError::RateLimited { .. })
+                            | CoreError::Provider(ProviderError::Network(_))
+                    ) {
+                        self.circuit_breaker
+                            .record_failure(client.kind, http_status, latency_ms);
+                    }
                     log::warn!(
-                        "stream resolve via {} failed for {video_id}: {e}",
-                        client.client_name
+                        "stream resolve via {} failed for {video_id}: {}",
+                        client.client_name,
+                        crate::innertube::auth::redact_secrets(&e.to_string())
                     );
                     last_err = Some(e);
                 }

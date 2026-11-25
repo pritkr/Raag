@@ -14,7 +14,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use crate::cache::chunks::DEFAULT_MAX_AUDIO_CACHE_BYTES;
 
 #[allow(dead_code)]
-const SCHEMA_VERSION: i32 = 2;
+const SCHEMA_VERSION: i32 = 3;
 
 pub struct SqliteCacheStore {
     conn: Mutex<Connection>,
@@ -48,6 +48,9 @@ impl SqliteCacheStore {
         }
         if version < 2 {
             migrate_v2(&conn)?;
+        }
+        if version < 3 {
+            migrate_v3(&conn)?;
         }
 
         Ok(Self {
@@ -274,6 +277,209 @@ impl SqliteCacheStore {
             }
         }
     }
+
+    // ------------------------------------------------------------------------
+    // SQLite v3: EJS Player-JS AST / n-Challenge Memoization Cache (< 2 ms)
+    // ------------------------------------------------------------------------
+
+    pub fn get_ejs_memo(&self, player_hash: &str, raw_n: &str) -> CoreResult<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT solved_n FROM ejs_memo_cache WHERE player_hash = ?1 AND raw_n = ?2",
+            params![player_hash, raw_n],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| CoreError::Cache(CacheError::Sqlite(e.to_string())))
+    }
+
+    pub fn put_ejs_memo(
+        &self,
+        player_hash: &str,
+        raw_n: &str,
+        solved_n: &str,
+        ast_meta_json: Option<&str>,
+        now_unix_secs: u64,
+    ) -> CoreResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO ejs_memo_cache (player_hash, raw_n, solved_n, ast_meta_json, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(player_hash, raw_n) DO UPDATE SET
+               solved_n = excluded.solved_n,
+               ast_meta_json = COALESCE(excluded.ast_meta_json, ejs_memo_cache.ast_meta_json),
+               updated_at = excluded.updated_at",
+            params![
+                player_hash,
+                raw_n,
+                solved_n,
+                ast_meta_json,
+                now_unix_secs as i64
+            ],
+        )
+        .map_err(|e| CoreError::Cache(CacheError::Sqlite(e.to_string())))?;
+        Ok(())
+    }
+
+    pub fn clear_ejs_memo(&self) -> CoreResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM ejs_memo_cache", [])
+            .map_err(|e| CoreError::Cache(CacheError::Sqlite(e.to_string())))?;
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------------
+    // SQLite v3: Offline Vault Pinned Albums & Playlists (Immune to LRU Clear)
+    // ------------------------------------------------------------------------
+
+    pub fn upsert_pinned_collection(
+        &self,
+        collection_id: &str,
+        kind: &str,
+        title: &str,
+        subtitle: Option<&str>,
+        artwork_url: Option<&str>,
+        tracks: &[Track],
+        pinned_at_unix_secs: u64,
+    ) -> CoreResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute_batch("BEGIN IMMEDIATE;")
+            .map_err(|e| CoreError::OfflineStorage(OfflineStorageError::Sqlite(e.to_string())))?;
+
+        let res = (|| -> CoreResult<()> {
+            conn.execute(
+                "INSERT INTO pinned_collections (collection_id, kind, title, subtitle, artwork_url, pinned_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(collection_id) DO UPDATE SET
+                   kind = excluded.kind,
+                   title = excluded.title,
+                   subtitle = excluded.subtitle,
+                   artwork_url = excluded.artwork_url,
+                   pinned_at = excluded.pinned_at",
+                params![
+                    collection_id,
+                    kind,
+                    title,
+                    subtitle,
+                    artwork_url,
+                    pinned_at_unix_secs as i64
+                ],
+            )
+            .map_err(|e| CoreError::OfflineStorage(OfflineStorageError::Sqlite(e.to_string())))?;
+
+            conn.execute(
+                "DELETE FROM pinned_collection_tracks WHERE collection_id = ?1",
+                params![collection_id],
+            )
+            .map_err(|e| CoreError::OfflineStorage(OfflineStorageError::Sqlite(e.to_string())))?;
+
+            for (pos, track) in tracks.iter().enumerate() {
+                let track_json = serde_json::to_string(track).map_err(|e| {
+                    CoreError::OfflineStorage(OfflineStorageError::Io(e.to_string()))
+                })?;
+                conn.execute(
+                    "INSERT INTO pinned_collection_tracks (collection_id, position, video_id, track_json)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![collection_id, pos as i64, track.id, track_json],
+                )
+                .map_err(|e| {
+                    CoreError::OfflineStorage(OfflineStorageError::Sqlite(e.to_string()))
+                })?;
+            }
+            Ok(())
+        })();
+
+        match res {
+            Ok(()) => {
+                conn.execute_batch("COMMIT;").map_err(|e| {
+                    CoreError::OfflineStorage(OfflineStorageError::Sqlite(e.to_string()))
+                })?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = conn.execute_batch("ROLLBACK;");
+                Err(e)
+            }
+        }
+    }
+
+    pub fn list_pinned_collection_rows(
+        &self,
+    ) -> CoreResult<Vec<(String, String, String, Option<String>, Option<String>, u64, Vec<Track>)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT collection_id, kind, title, subtitle, artwork_url, pinned_at
+                 FROM pinned_collections
+                 ORDER BY pinned_at DESC",
+            )
+            .map_err(|e| CoreError::OfflineStorage(OfflineStorageError::Sqlite(e.to_string())))?;
+        let headers: Vec<(String, String, String, Option<String>, Option<String>, u64)> = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get::<_, i64>(5)?.max(0) as u64,
+                ))
+            })
+            .map_err(|e| CoreError::OfflineStorage(OfflineStorageError::Sqlite(e.to_string())))?
+            .flatten()
+            .collect();
+        drop(stmt);
+
+        let mut out = Vec::with_capacity(headers.len());
+        for (cid, kind, title, subtitle, artwork_url, pinned_at) in headers {
+            let mut tstmt = conn
+                .prepare(
+                    "SELECT track_json FROM pinned_collection_tracks
+                     WHERE collection_id = ?1
+                     ORDER BY position ASC",
+                )
+                .map_err(|e| {
+                    CoreError::OfflineStorage(OfflineStorageError::Sqlite(e.to_string()))
+                })?;
+            let tracks: Vec<Track> = tstmt
+                .query_map(params![&cid], |r| r.get::<_, String>(0))
+                .map_err(|e| {
+                    CoreError::OfflineStorage(OfflineStorageError::Sqlite(e.to_string()))
+                })?
+                .flatten()
+                .filter_map(|json| serde_json::from_str::<Track>(&json).ok())
+                .collect();
+            out.push((cid, kind, title, subtitle, artwork_url, pinned_at, tracks));
+        }
+        Ok(out)
+    }
+
+    pub fn delete_pinned_collection(&self, collection_id: &str) -> CoreResult<bool> {
+        let conn = self.conn.lock().unwrap();
+        let _ = conn.execute(
+            "DELETE FROM pinned_collection_tracks WHERE collection_id = ?1",
+            params![collection_id],
+        );
+        let removed = conn
+            .execute(
+                "DELETE FROM pinned_collections WHERE collection_id = ?1",
+                params![collection_id],
+            )
+            .map_err(|e| CoreError::OfflineStorage(OfflineStorageError::Sqlite(e.to_string())))?;
+        Ok(removed > 0)
+    }
+
+    pub fn is_track_pinned(&self, video_id: &str) -> CoreResult<bool> {
+        let conn = self.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pinned_collection_tracks WHERE video_id = ?1",
+                params![video_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| CoreError::OfflineStorage(OfflineStorageError::Sqlite(e.to_string())))?;
+        Ok(count > 0)
+    }
 }
 
 fn migrate_v1(conn: &Connection) -> CoreResult<()> {
@@ -343,6 +549,46 @@ fn migrate_v2(conn: &Connection) -> CoreResult<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_downloads_status ON downloads(status, updated_at DESC);
         PRAGMA user_version = 2;
+        COMMIT;
+        ",
+    )
+    .map_err(|e| CoreError::OfflineStorage(OfflineStorageError::Sqlite(e.to_string())))?;
+    Ok(())
+}
+
+fn migrate_v3(conn: &Connection) -> CoreResult<()> {
+    conn.execute_batch(
+        "
+        BEGIN IMMEDIATE;
+        CREATE TABLE IF NOT EXISTS ejs_memo_cache (
+            player_hash TEXT NOT NULL,
+            raw_n TEXT NOT NULL,
+            solved_n TEXT NOT NULL,
+            ast_meta_json TEXT,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (player_hash, raw_n)
+        );
+        CREATE INDEX IF NOT EXISTS idx_ejs_memo_updated ON ejs_memo_cache(updated_at DESC);
+
+        CREATE TABLE IF NOT EXISTS pinned_collections (
+            collection_id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            title TEXT NOT NULL,
+            subtitle TEXT,
+            artwork_url TEXT,
+            pinned_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS pinned_collection_tracks (
+            collection_id TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            video_id TEXT NOT NULL,
+            track_json TEXT NOT NULL,
+            PRIMARY KEY (collection_id, video_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_pinned_tracks_vid ON pinned_collection_tracks(video_id);
+
+        PRAGMA user_version = 3;
         COMMIT;
         ",
     )

@@ -22,6 +22,7 @@ use nsh_core::prelude::{AudioPlayer, audio_available, audio_player, cleanup, eff
 use resonance_contract::{
     AudioBackend, CoreResult, MediaCommand, NowPlayingMetadata, PlayerState,
 };
+use resonance_core::audio_dsp::{DspConfig, DspPipeline, SpscConsumer, SpscProducer, SpscRingBuffer};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::store;
@@ -272,6 +273,14 @@ pub enum NshAudioControl {
     Stop,
     SeekMs(u64),
     SetVolume(f32),
+    UpdateDsp(DspConfig),
+    SetTrackLoudnessDb(Option<f32>),
+}
+
+/// Creates a lock-free cache-line-aligned SPSC PCM ring buffer for decoupling audio decoding
+/// and DSP normalization from UI/network stalls.
+pub fn create_pcm_ring_buffer(capacity_samples: usize) -> (SpscProducer<f32>, SpscConsumer<f32>) {
+    SpscRingBuffer::with_capacity(capacity_samples)
 }
 
 /// `Send + Sync` `resonance_contract::AudioBackend` implementation that routes
@@ -283,6 +292,8 @@ pub struct NshAudioBackend {
     volume_bits: AtomicU64,
     active_url: Mutex<Option<String>>,
     last_meta: Mutex<Option<NowPlayingMetadata>>,
+    dsp_config: Mutex<DspConfig>,
+    dsp_pipeline: Mutex<DspPipeline>,
     control_tx: UnboundedSender<NshAudioControl>,
     control_rx: Mutex<Option<UnboundedReceiver<NshAudioControl>>>,
     cmd_tx: UnboundedSender<MediaCommand>,
@@ -293,12 +304,16 @@ impl NshAudioBackend {
     pub fn new() -> Self {
         let (control_tx, control_rx) = unbounded_channel();
         let (cmd_tx, cmd_rx) = unbounded_channel();
+        let default_dsp = DspConfig::default();
+        let dsp_pipeline = DspPipeline::new(48_000, 2, &default_dsp);
         let backend = Self {
             playing: AtomicBool::new(false),
             position_ms: AtomicU64::new(0),
             volume_bits: AtomicU64::new(1.0_f32.to_bits() as u64),
             active_url: Mutex::new(None),
             last_meta: Mutex::new(None),
+            dsp_config: Mutex::new(default_dsp),
+            dsp_pipeline: Mutex::new(dsp_pipeline),
             control_tx,
             control_rx: Mutex::new(Some(control_rx)),
             cmd_tx,
@@ -320,7 +335,40 @@ impl NshAudioBackend {
         self.active_url.lock().unwrap().clone()
     }
 
+    /// Updates user DSP configuration (ReplayGain, 10-band EQ, silence skip, crossfade)
+    /// without blocking the NSH engine thread.
+    pub fn set_dsp_config(&self, config: DspConfig) {
+        *self.dsp_config.lock().unwrap() = config.clone();
+        self.dsp_pipeline.lock().unwrap().apply_config(&config);
+        let _ = self.control_tx.send(NshAudioControl::UpdateDsp(config));
+    }
+
+    pub fn dsp_config(&self) -> DspConfig {
+        self.dsp_config.lock().unwrap().clone()
+    }
+
+    /// Applies YouTube's `loudnessDb` metadata for the active track to ReplayGain / EBU R128 normalization.
+    pub fn set_track_loudness_db(&self, loudness_db: Option<f32>) {
+        self.dsp_pipeline
+            .lock()
+            .unwrap()
+            .set_track_loudness_db(loudness_db);
+        let _ = self
+            .control_tx
+            .send(NshAudioControl::SetTrackLoudnessDb(loudness_db));
+    }
+
+    /// Runs the configured modular PCM DSP pipeline on an interleaved stereo audio frame block.
+    /// Returns `false` if the block is silence-skipped.
+    pub fn process_dsp_block(&self, interleaved: &mut [f32]) -> bool {
+        self.dsp_pipeline
+            .lock()
+            .unwrap()
+            .process_interleaved(interleaved)
+    }
+
     #[cfg(all(
+        not(target_os = "android"),
         feature = "desktop-mpris",
         any(target_os = "linux", target_os = "macos", target_os = "windows")
     ))]
@@ -354,12 +402,80 @@ impl NshAudioBackend {
     }
 
     #[cfg(not(all(
+        not(target_os = "android"),
         feature = "desktop-mpris",
         any(target_os = "linux", target_os = "macos", target_os = "windows")
     )))]
     fn init_system_media_controls(&self) {
         log::debug!("NshAudioBackend ready (native nsh/audio + in-process media command bus)");
     }
+}
+
+/// Lock-free DSP parameter update sent from control/UI threads to [`LockFreeAudioConsumer`].
+#[derive(Debug, Clone)]
+pub enum DspControlUpdate {
+    SetConfig(DspConfig),
+    SetTrackLoudnessDb(Option<f32>),
+}
+
+/// Real-time audio callback consumer reading decoded PCM frames from a lock-free SPSC ring
+/// buffer and running a thread-owned [`DspPipeline`] with zero mutex locks or heap allocations.
+pub struct LockFreeAudioConsumer {
+    consumer: SpscConsumer<f32>,
+    dsp: DspPipeline,
+    updates: crossbeam_channel::Receiver<DspControlUpdate>,
+}
+
+impl LockFreeAudioConsumer {
+    pub fn new(
+        consumer: SpscConsumer<f32>,
+        dsp: DspPipeline,
+        updates: crossbeam_channel::Receiver<DspControlUpdate>,
+    ) -> Self {
+        Self {
+            consumer,
+            dsp,
+            updates,
+        }
+    }
+
+    /// Drains pending DSP updates without blocking, reads up to `out.len()` samples from the
+    /// SPSC ring buffer, zero-fills any underrun tail, and processes the DSP chain in-place.
+    /// Returns `(samples_popped, keep_block)` where `keep_block == false` indicates silence skip.
+    pub fn render_callback(&mut self, out: &mut [f32]) -> (usize, bool) {
+        while let Ok(upd) = self.updates.try_recv() {
+            match upd {
+                DspControlUpdate::SetConfig(cfg) => self.dsp.apply_config(&cfg),
+                DspControlUpdate::SetTrackLoudnessDb(db) => self.dsp.set_track_loudness_db(db),
+            }
+        }
+        let popped = self.consumer.pop_slice(out);
+        if popped < out.len() {
+            out[popped..].fill(0.0);
+        }
+        let keep = self.dsp.process_interleaved(out);
+        (popped, keep)
+    }
+}
+
+/// Creates a lock-free PCM producer, real-time [`LockFreeAudioConsumer`], and non-blocking DSP sender.
+pub fn create_lock_free_audio_pipeline(
+    capacity_samples: usize,
+    sample_rate: u32,
+    channels: usize,
+) -> (
+    SpscProducer<f32>,
+    LockFreeAudioConsumer,
+    crossbeam_channel::Sender<DspControlUpdate>,
+) {
+    let (prod, cons) = SpscRingBuffer::with_capacity::<f32>(capacity_samples);
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let consumer = LockFreeAudioConsumer::new(
+        cons,
+        DspPipeline::new(sample_rate, channels, &DspConfig::default()),
+        rx,
+    );
+    (prod, consumer, tx)
 }
 
 impl Default for NshAudioBackend {
@@ -379,7 +495,10 @@ impl AudioBackend for NshAudioBackend {
             proxy_url: proxy_url.to_owned(),
             meta,
         });
-        log::info!("NshAudioBackend: routing {proxy_url} to native nsh/audio AudioPlayer");
+        log::info!(
+            "NshAudioBackend: routing {} to native nsh/audio AudioPlayer",
+            resonance_core::innertube::auth::redact_secrets(proxy_url)
+        );
         Ok(())
     }
 

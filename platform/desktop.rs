@@ -508,7 +508,10 @@ impl AudioBackend for DesktopAudioBridge {
         self.playing.store(true, Ordering::SeqCst);
         self.sync_souvlaki_metadata(&meta);
         self.sync_souvlaki_playback();
-        log::info!("DesktopAudioBridge: streaming via loopback proxy {proxy_url}");
+        log::info!(
+            "DesktopAudioBridge: streaming via loopback proxy {}",
+            redact_secrets(proxy_url)
+        );
         Ok(())
     }
 
