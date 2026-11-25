@@ -202,7 +202,9 @@ jobs:
           else
             cargo build --release --target aarch64-apple-ios
             mkdir -p "dist-ios/${{ env.APP_NAME }}.app"
-            cp target/aarch64-apple-ios/release/libresonance.a "dist-ios/${{ env.APP_NAME }}.app/" 2>/dev/null || true
+            cp target/aarch64-apple-ios/release/resonance "dist-ios/${{ env.APP_NAME }}.app/${{ env.APP_NAME }}" 2>/dev/null || true
+            cp target/aarch64-apple-ios/release/libresonance.dylib "dist-ios/${{ env.APP_NAME }}.app/" 2>/dev/null || true
+            cp assets/icon.png "dist-ios/${{ env.APP_NAME }}.app/" 2>/dev/null || true
             ditto -c -k --sequesterRsrc --keepParent "dist-ios/${{ env.APP_NAME }}.app" "dist-ios/raag-ios.zip"
           fi
 
