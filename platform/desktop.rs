@@ -304,12 +304,15 @@ pub fn coalesce_seek_by(
     }
 }
 
-pub struct DesktopAudioBridge {
+/// Reusable, owned `souvlaki` MPRIS/SMTC/NowPlaying media-controls bridge.
+///
+/// Shared by `DesktopAudioBridge` and `NshAudioBackend` so there is a single
+/// non-leaking `souvlaki::MediaControls` owner across Desktop targets.
+pub struct SystemMediaControlsBridge {
     playing: AtomicBool,
     position_ms: Arc<AtomicU64>,
     duration_ms: Arc<AtomicU64>,
-    volume_bits: AtomicU64,
-    active_url: Mutex<Option<String>>,
+    has_track: AtomicBool,
     last_meta: Mutex<Option<NowPlayingMetadata>>,
     cmd_tx: UnboundedSender<MediaCommand>,
     cmd_rx: Mutex<Option<UnboundedReceiver<MediaCommand>>>,
@@ -320,19 +323,14 @@ pub struct DesktopAudioBridge {
     controls: Mutex<Option<souvlaki::MediaControls>>,
 }
 
-impl DesktopAudioBridge {
-    pub fn new() -> Self {
-        Self::with_hwnd(None)
-    }
-
-    pub fn with_hwnd(hwnd: Option<*mut c_void>) -> Self {
+impl SystemMediaControlsBridge {
+    pub fn new(hwnd: Option<*mut c_void>) -> Self {
         let (cmd_tx, cmd_rx) = unbounded_channel();
         let bridge = Self {
             playing: AtomicBool::new(false),
             position_ms: Arc::new(AtomicU64::new(0)),
             duration_ms: Arc::new(AtomicU64::new(0)),
-            volume_bits: AtomicU64::new(1.0_f32.to_bits() as u64),
-            active_url: Mutex::new(None),
+            has_track: AtomicBool::new(false),
             last_meta: Mutex::new(None),
             cmd_tx,
             cmd_rx: Mutex::new(Some(cmd_rx)),
@@ -346,16 +344,71 @@ impl DesktopAudioBridge {
         bridge
     }
 
+    /// Lazily attaches a native window `HWND` on Windows when SMTC could not be
+    /// initialized at early runtime boot (`hwnd: None`).
+    pub fn attach_window_hwnd(&self, hwnd: *mut c_void) {
+        #[cfg(all(
+            feature = "desktop-mpris",
+            any(target_os = "linux", target_os = "macos", target_os = "windows")
+        ))]
+        {
+            let needs_init = self
+                .controls
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .is_none();
+            if needs_init {
+                self.init_system_media_controls(Some(hwnd));
+                if let Some(meta) = self.last_meta.lock().unwrap().clone() {
+                    self.sync_souvlaki_metadata(&meta);
+                    self.sync_souvlaki_playback();
+                }
+            }
+        }
+        #[cfg(not(all(
+            feature = "desktop-mpris",
+            any(target_os = "linux", target_os = "macos", target_os = "windows")
+        )))]
+        {
+            let _ = hwnd;
+        }
+    }
+
     pub fn inject_command(&self, cmd: MediaCommand) {
         let _ = self.cmd_tx.send(cmd);
     }
 
-    pub fn active_stream_url(&self) -> Option<String> {
-        self.active_url.lock().unwrap().clone()
+    pub fn take_command_receiver(&self) -> Option<UnboundedReceiver<MediaCommand>> {
+        self.cmd_rx.lock().unwrap().take()
     }
 
     pub fn last_metadata(&self) -> Option<NowPlayingMetadata> {
         self.last_meta.lock().unwrap().clone()
+    }
+
+    pub fn position_ms(&self) -> u64 {
+        self.position_ms.load(Ordering::SeqCst)
+    }
+
+    pub fn playing(&self) -> bool {
+        self.playing.load(Ordering::SeqCst)
+    }
+
+    pub fn sync_metadata(&self, meta: &NowPlayingMetadata) {
+        self.duration_ms.store(meta.duration_ms, Ordering::SeqCst);
+        *self.last_meta.lock().unwrap() = Some(meta.clone());
+        self.has_track.store(true, Ordering::SeqCst);
+        self.sync_souvlaki_metadata(meta);
+    }
+
+    pub fn sync_playback(&self, playing: bool, position_ms: u64, has_track: bool) {
+        self.playing.store(playing, Ordering::SeqCst);
+        self.position_ms.store(position_ms, Ordering::SeqCst);
+        self.has_track.store(has_track, Ordering::SeqCst);
+        if !has_track {
+            *self.last_meta.lock().unwrap() = None;
+        }
+        self.sync_souvlaki_playback();
     }
 
     #[cfg(all(
@@ -443,6 +496,16 @@ impl DesktopAudioBridge {
     fn sync_souvlaki_metadata(&self, meta: &NowPlayingMetadata) {
         use souvlaki::MediaMetadata;
         let duration = (meta.duration_ms > 0).then(|| Duration::from_millis(meta.duration_ms));
+        let resolved_cover = meta.artwork_url.as_deref().map(|raw| {
+            if raw.starts_with("http://") || raw.starts_with("https://") || raw.starts_with("file://")
+            {
+                raw.to_owned()
+            } else if Path::new(raw).is_file() {
+                format!("file://{raw}")
+            } else {
+                raw.to_owned()
+            }
+        });
         if let Ok(mut guard) = self.controls.lock()
             && let Some(controls) = guard.as_mut()
         {
@@ -450,7 +513,7 @@ impl DesktopAudioBridge {
                 title: Some(&meta.title),
                 artist: Some(&meta.artist),
                 album: meta.album.as_deref(),
-                cover_url: meta.artwork_url.as_deref(),
+                cover_url: resolved_cover.as_deref(),
                 duration,
             });
         }
@@ -469,7 +532,7 @@ impl DesktopAudioBridge {
     fn sync_souvlaki_playback(&self) {
         use souvlaki::{MediaPlayback, MediaPosition};
         let has_track =
-            self.last_meta.lock().unwrap().is_some() || self.active_url.lock().unwrap().is_some();
+            self.has_track.load(Ordering::SeqCst) || self.last_meta.lock().unwrap().is_some();
         let playing = self.playing.load(Ordering::SeqCst);
         let pos = self.position_ms.load(Ordering::SeqCst);
         let playback = match map_souvlaki_playback(playing, pos, has_track) {
@@ -495,6 +558,42 @@ impl DesktopAudioBridge {
     fn sync_souvlaki_playback(&self) {}
 }
 
+pub struct DesktopAudioBridge {
+    media: SystemMediaControlsBridge,
+    volume_bits: AtomicU64,
+    active_url: Mutex<Option<String>>,
+}
+
+impl DesktopAudioBridge {
+    pub fn new() -> Self {
+        Self::with_hwnd(None)
+    }
+
+    pub fn with_hwnd(hwnd: Option<*mut c_void>) -> Self {
+        Self {
+            media: SystemMediaControlsBridge::new(hwnd),
+            volume_bits: AtomicU64::new(1.0_f32.to_bits() as u64),
+            active_url: Mutex::new(None),
+        }
+    }
+
+    pub fn attach_window_hwnd(&self, hwnd: *mut c_void) {
+        self.media.attach_window_hwnd(hwnd);
+    }
+
+    pub fn inject_command(&self, cmd: MediaCommand) {
+        self.media.inject_command(cmd);
+    }
+
+    pub fn active_stream_url(&self) -> Option<String> {
+        self.active_url.lock().unwrap().clone()
+    }
+
+    pub fn last_metadata(&self) -> Option<NowPlayingMetadata> {
+        self.media.last_metadata()
+    }
+}
+
 impl Default for DesktopAudioBridge {
     fn default() -> Self {
         Self::new()
@@ -505,12 +604,8 @@ impl Default for DesktopAudioBridge {
 impl AudioBackend for DesktopAudioBridge {
     async fn load_and_play(&self, proxy_url: &str, meta: NowPlayingMetadata) -> CoreResult<()> {
         *self.active_url.lock().unwrap() = Some(proxy_url.to_owned());
-        self.duration_ms.store(meta.duration_ms, Ordering::SeqCst);
-        *self.last_meta.lock().unwrap() = Some(meta.clone());
-        self.position_ms.store(0, Ordering::SeqCst);
-        self.playing.store(true, Ordering::SeqCst);
-        self.sync_souvlaki_metadata(&meta);
-        self.sync_souvlaki_playback();
+        self.media.sync_metadata(&meta);
+        self.media.sync_playback(true, 0, true);
         log::info!(
             "DesktopAudioBridge: streaming via loopback proxy {}",
             redact_secrets(proxy_url)
@@ -519,29 +614,32 @@ impl AudioBackend for DesktopAudioBridge {
     }
 
     async fn play(&self) -> CoreResult<()> {
-        self.playing.store(true, Ordering::SeqCst);
-        self.sync_souvlaki_playback();
+        let has_track =
+            self.active_url.lock().unwrap().is_some() || self.media.last_metadata().is_some();
+        self.media
+            .sync_playback(true, self.media.position_ms(), has_track);
         Ok(())
     }
 
     async fn pause(&self) -> CoreResult<()> {
-        self.playing.store(false, Ordering::SeqCst);
-        self.sync_souvlaki_playback();
+        let has_track =
+            self.active_url.lock().unwrap().is_some() || self.media.last_metadata().is_some();
+        self.media
+            .sync_playback(false, self.media.position_ms(), has_track);
         Ok(())
     }
 
     async fn stop(&self) -> CoreResult<()> {
-        self.playing.store(false, Ordering::SeqCst);
-        self.position_ms.store(0, Ordering::SeqCst);
         *self.active_url.lock().unwrap() = None;
-        *self.last_meta.lock().unwrap() = None;
-        self.sync_souvlaki_playback();
+        self.media.sync_playback(false, 0, false);
         Ok(())
     }
 
     async fn seek_ms(&self, position_ms: u64) -> CoreResult<()> {
-        self.position_ms.store(position_ms, Ordering::SeqCst);
-        self.sync_souvlaki_playback();
+        let has_track =
+            self.active_url.lock().unwrap().is_some() || self.media.last_metadata().is_some();
+        self.media
+            .sync_playback(self.media.playing(), position_ms, has_track);
         Ok(())
     }
 
@@ -552,19 +650,15 @@ impl AudioBackend for DesktopAudioBridge {
     }
 
     async fn position_ms(&self) -> u64 {
-        self.position_ms.load(Ordering::SeqCst)
+        self.media.position_ms()
     }
 
     async fn update_now_playing(&self, meta: NowPlayingMetadata, playing: bool, position_ms: u64) {
-        self.duration_ms.store(meta.duration_ms, Ordering::SeqCst);
-        *self.last_meta.lock().unwrap() = Some(meta.clone());
-        self.playing.store(playing, Ordering::SeqCst);
-        self.position_ms.store(position_ms, Ordering::SeqCst);
-        self.sync_souvlaki_metadata(&meta);
-        self.sync_souvlaki_playback();
+        self.media.sync_metadata(&meta);
+        self.media.sync_playback(playing, position_ms, true);
     }
 
     fn take_command_receiver(&self) -> Option<UnboundedReceiver<MediaCommand>> {
-        self.cmd_rx.lock().unwrap().take()
+        self.media.take_command_receiver()
     }
 }

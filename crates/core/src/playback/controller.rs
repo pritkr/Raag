@@ -7,15 +7,59 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use resonance_contract::{
     AppEvent, AudioBackend, CacheStore, CoreError, CoreResult, EventBus, HistoryEntry,
     LyricsProvider, MediaCommand, MusicProvider, NowPlayingMetadata, OfflineStore, PlaybackError,
-    PlayerSnapshot, PlayerState, Track,
+    PlayerSnapshot, PlayerState, RepeatMode, Track,
 };
 use tokio::sync::Mutex;
 
+use crate::innertube::auth::redact_secrets;
 use crate::playback::fsm::PlaybackFsm;
 use crate::playback::prefetch::PrefetchCoordinator;
 use crate::playback::queue::QueueManager;
 use crate::proxy::LoopbackProxy;
 use crate::unix_secs;
+
+/// Unified telemetry emitted by the native audio executor (`nsh/audio` or platform bridge)
+/// back to [`PlaybackController`] for Single Source-of-Truth state updates.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AudioTelemetry {
+    Loaded {
+        generation: u64,
+        duration_ms: u64,
+    },
+    StateChanged {
+        generation: u64,
+        state: PlayerState,
+    },
+    Buffering {
+        generation: u64,
+        buffering: bool,
+    },
+    Progress {
+        generation: u64,
+        position_ms: u64,
+        duration_ms: Option<u64>,
+    },
+    Ended {
+        generation: u64,
+    },
+    Failed {
+        generation: u64,
+        message: String,
+    },
+}
+
+impl AudioTelemetry {
+    pub fn generation(&self) -> u64 {
+        match self {
+            Self::Loaded { generation, .. }
+            | Self::StateChanged { generation, .. }
+            | Self::Buffering { generation, .. }
+            | Self::Progress { generation, .. }
+            | Self::Ended { generation }
+            | Self::Failed { generation, .. } => *generation,
+        }
+    }
+}
 
 pub struct PlaybackController {
     provider: Arc<dyn MusicProvider>,
@@ -27,6 +71,7 @@ pub struct PlaybackController {
     sponsorblock: Arc<dyn resonance_contract::SponsorBlockProvider>,
     bus: EventBus,
     play_generation: AtomicU64,
+    last_now_playing_sync_ms: AtomicU64,
     fsm: Mutex<PlaybackFsm>,
 }
 
@@ -51,8 +96,13 @@ impl PlaybackController {
             sponsorblock,
             bus,
             play_generation: AtomicU64::new(0),
+            last_now_playing_sync_ms: AtomicU64::new(0),
             fsm: Mutex::new(PlaybackFsm::from_restored_queue(restored_queue)),
         }
+    }
+
+    pub fn current_generation(&self) -> u64 {
+        self.play_generation.load(Ordering::SeqCst)
     }
 
     pub fn with_offline_store(mut self, offline: Arc<dyn OfflineStore>) -> Self {
@@ -167,6 +217,39 @@ impl PlaybackController {
         self.publish_and_persist(&fsm);
     }
 
+    pub async fn set_repeat_mode(&self, mode: RepeatMode) {
+        let mut fsm = self.fsm.lock().await;
+        fsm.snapshot.queue.repeat = mode;
+        self.publish_and_persist(&fsm);
+    }
+
+    pub async fn set_shuffle(&self, enabled: bool) {
+        let mut fsm = self.fsm.lock().await;
+        if fsm.snapshot.queue.shuffle != enabled {
+            QueueManager::toggle_shuffle(&mut fsm.snapshot.queue);
+            self.publish_and_persist(&fsm);
+        }
+    }
+
+    pub async fn set_volume(&self, volume: f32) -> CoreResult<()> {
+        let clamped = volume.clamp(0.0, 1.0);
+        self.audio.set_volume(clamped).await?;
+        let mut fsm = self.fsm.lock().await;
+        fsm.snapshot.volume = clamped;
+        self.publish_and_persist(&fsm);
+        Ok(())
+    }
+
+    pub async fn set_muted(&self, muted: bool) -> CoreResult<()> {
+        let target = if muted {
+            0.0
+        } else {
+            self.fsm.lock().await.snapshot.volume.clamp(0.0, 1.0)
+        };
+        self.audio.set_volume(target).await?;
+        Ok(())
+    }
+
     pub async fn jump_to_queue_index(&self, index: usize) -> CoreResult<()> {
         {
             let mut fsm = self.fsm.lock().await;
@@ -181,6 +264,7 @@ impl PlaybackController {
 
     async fn load_and_play_current(&self, resume_ms: u64) -> CoreResult<()> {
         let my_gen = self.play_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        self.last_now_playing_sync_ms.store(0, Ordering::SeqCst);
         let proxy_gen = self.proxy.advance_generation();
 
         let track = {
@@ -477,6 +561,114 @@ impl PlaybackController {
         let fsm = self.fsm.lock().await;
         self.publish_and_persist(&fsm);
         Ok(())
+    }
+
+    /// Handles track completion from the native audio driver (`RepeatMode::One`, queue advance,
+    /// or `autoplay_next` radio expansion).
+    pub async fn on_track_ended(&self) -> CoreResult<()> {
+        let repeat = self.fsm.lock().await.snapshot.queue.repeat;
+        if repeat == RepeatMode::One {
+            return self.load_and_play_current(0).await;
+        }
+        self.next().await
+    }
+
+    /// Processes unified telemetry from the native audio executor (`nsh/audio` or platform bridge).
+    ///
+    /// Ignores stale telemetry whose `generation` does not match the active `play_generation`
+    /// (preventing double-skips when switching tracks).
+    pub async fn handle_audio_telemetry(&self, telemetry: AudioTelemetry) -> CoreResult<()> {
+        let active_gen = self.play_generation.load(Ordering::SeqCst);
+        let msg_gen = telemetry.generation();
+        if msg_gen != 0 && active_gen != 0 && msg_gen != active_gen {
+            return Ok(());
+        }
+
+        match telemetry {
+            AudioTelemetry::Loaded { duration_ms, .. } => {
+                if duration_ms > 0 {
+                    let mut fsm = self.fsm.lock().await;
+                    if fsm.snapshot.duration_ms == 0 {
+                        fsm.snapshot.duration_ms = duration_ms;
+                        self.publish_and_persist(&fsm);
+                    }
+                }
+                Ok(())
+            }
+            AudioTelemetry::StateChanged { state, .. } => {
+                let mut fsm = self.fsm.lock().await;
+                if fsm.snapshot.current_track.is_some() {
+                    let _ = fsm.snapshot.state.transition(state);
+                    self.publish_and_persist(&fsm);
+                }
+                Ok(())
+            }
+            AudioTelemetry::Buffering { buffering, .. } => {
+                let mut fsm = self.fsm.lock().await;
+                if fsm.snapshot.current_track.is_some() {
+                    if buffering {
+                        let _ = fsm.snapshot.state.transition(PlayerState::Buffering);
+                    } else if fsm.snapshot.state == PlayerState::Buffering {
+                        let _ = fsm.snapshot.state.transition(PlayerState::Playing);
+                    }
+                    self.publish_and_persist(&fsm);
+                }
+                Ok(())
+            }
+            AudioTelemetry::Progress {
+                position_ms,
+                duration_ms,
+                ..
+            } => {
+                if let Some(dur) = duration_ms.filter(|d| *d > 0) {
+                    let mut fsm = self.fsm.lock().await;
+                    if fsm.snapshot.duration_ms == 0 {
+                        fsm.snapshot.duration_ms = dur;
+                    }
+                }
+                self.tick_position(position_ms).await?;
+
+                let last_sync = self.last_now_playing_sync_ms.load(Ordering::SeqCst);
+                if position_ms.abs_diff(last_sync) >= 1_000 {
+                    let sync_payload = {
+                        let fsm = self.fsm.lock().await;
+                        fsm.snapshot.current_track.as_ref().map(|t| {
+                            (
+                                NowPlayingMetadata {
+                                    track_id: t.id.clone(),
+                                    title: t.title.clone(),
+                                    artist: t.artist_display(),
+                                    album: t.album.as_ref().map(|a| a.title.clone()),
+                                    artwork_url: t.artwork_url.clone(),
+                                    duration_ms: fsm.snapshot.duration_ms,
+                                },
+                                fsm.snapshot.state.is_playing(),
+                            )
+                        })
+                    };
+                    if let Some((meta, playing)) = sync_payload {
+                        self.last_now_playing_sync_ms
+                            .store(position_ms, Ordering::SeqCst);
+                        self.audio
+                            .update_now_playing(meta, playing, position_ms)
+                            .await;
+                    }
+                }
+                Ok(())
+            }
+            AudioTelemetry::Ended { .. } => self.on_track_ended().await,
+            AudioTelemetry::Failed { message, .. } => {
+                let safe = redact_secrets(&message);
+                let mut fsm = self.fsm.lock().await;
+                fsm.enter_error(safe.clone());
+                self.publish_and_persist(&fsm);
+                self.bus.publish(AppEvent::Toast {
+                    message: safe,
+                    is_error: true,
+                });
+                Ok(())
+            }
+        }
     }
 
     /// Handles external system commands from Android MediaSession / BecomingNoisy / Desktop MPRIS.

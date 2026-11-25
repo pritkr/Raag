@@ -2,6 +2,8 @@
 //!
 //! Zero async runtime, zero network, zero disk I/O — 100% unit-testable in isolation.
 
+use std::collections::HashSet;
+
 use resonance_contract::{
     CoreError, CoreResult, PlaybackError, PlayerSnapshot, PlayerState, QueueState, SponsorSegment,
     Track,
@@ -24,6 +26,7 @@ pub struct TickEffects {
 pub struct PlaybackFsm {
     pub snapshot: PlayerSnapshot,
     pub sponsor_segments: Vec<SponsorSegment>,
+    pub skipped_segments: HashSet<usize>,
     pub paused_by_focus: bool,
     /// Video ID already pre-resolved at >= 50% progress.
     pub preresolved_video_id: Option<String>,
@@ -57,6 +60,7 @@ impl PlaybackFsm {
                 offline_mode: false,
             },
             sponsor_segments: Vec::new(),
+            skipped_segments: HashSet::new(),
             paused_by_focus: false,
             preresolved_video_id: None,
             prewarmed_video_id: None,
@@ -73,6 +77,7 @@ impl PlaybackFsm {
         self.snapshot.duration_ms = track.duration_ms;
         self.snapshot.last_skipped_segment = None;
         self.sponsor_segments.clear();
+        self.skipped_segments.clear();
         self.preresolved_video_id = None;
         self.prewarmed_video_id = None;
         let _ = self.snapshot.state.transition(PlayerState::Loading);
@@ -113,6 +118,7 @@ impl PlaybackFsm {
         self.preresolved_video_id = None;
         self.prewarmed_video_id = None;
         self.sponsor_segments.clear();
+        self.skipped_segments.clear();
         let _ = self.snapshot.state.transition(PlayerState::Idle);
     }
 
@@ -140,20 +146,27 @@ impl PlaybackFsm {
         let sponsor_skip = if self.snapshot.sponsorblock_enabled {
             self.sponsor_segments
                 .iter()
-                .find(|seg| seg.fits_duration(dur_secs) && seg.contains_ms(position_ms))
-                .map(|seg| {
-                    (
-                        self.snapshot
-                            .current_track
-                            .as_ref()
-                            .map(|t| t.id.clone())
-                            .unwrap_or_default(),
-                        (seg.end_secs * 1000.0) as u64,
-                    )
+                .enumerate()
+                .find(|(idx, seg)| {
+                    !self.skipped_segments.contains(idx)
+                        && seg.fits_duration(dur_secs)
+                        && seg.contains_ms(position_ms)
                 })
+                .map(|(idx, seg)| (idx, (seg.end_secs * 1000.0) as u64))
         } else {
             None
-        };
+        }
+        .map(|(idx, target_ms)| {
+            self.skipped_segments.insert(idx);
+            (
+                self.snapshot
+                    .current_track
+                    .as_ref()
+                    .map(|t| t.id.clone())
+                    .unwrap_or_default(),
+                target_ms,
+            )
+        });
 
         let upcoming = QueueManager::peek_upcoming_track_id(&self.snapshot.queue);
         let prefetch = PrefetchThresholds::evaluate(

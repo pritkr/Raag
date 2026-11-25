@@ -9,7 +9,7 @@ pub mod fsm;
 pub mod prefetch;
 pub mod queue;
 
-pub use controller::PlaybackController;
+pub use controller::{AudioTelemetry, PlaybackController};
 pub use fsm::{PlaybackFsm, TickEffects};
 pub use prefetch::{
     NEXT_TRACK_PREWARM_CHUNKS, PrefetchCoordinator, PrefetchDecision, PrefetchThresholds,

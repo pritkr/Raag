@@ -16,6 +16,40 @@ pub enum ThemeChoice {
     Dark,
 }
 
+/// Truthful capability reporting for the audio DSP pipeline.
+///
+/// While playback routes HTTP URLs directly to `nsh/audio`'s OS decoder, DSP features
+/// (ReplayGain, 10-band EQ, silence skip, crossfade) are gated behind `ExternalUrlStreamOnly`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioDspCapability {
+    ActivePcmPipeline,
+    ExternalUrlStreamOnly,
+}
+
+impl AudioDspCapability {
+    pub fn is_active(self) -> bool {
+        matches!(self, Self::ActivePcmPipeline)
+    }
+
+    pub fn badge_label(self) -> &'static str {
+        match self {
+            Self::ActivePcmPipeline => "Active • Rust PCM DSP",
+            Self::ExternalUrlStreamOnly => "Planned • Native PCM Engine",
+        }
+    }
+
+    pub fn detail_text(self) -> &'static str {
+        match self {
+            Self::ActivePcmPipeline => {
+                "32-bit float PCM pipeline active for ReplayGain, 10-band EQ, silence skip, and crossfade."
+            }
+            Self::ExternalUrlStreamOnly => {
+                "nsh/audio streams directly to the OS decoder. Full PCM DSP (EQ, ReplayGain, silence skip, crossfade) is gated until the custom Rust PCM sink lands."
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct SettingsSlice {
     pub theme_choice: ThemeChoice,
@@ -197,6 +231,10 @@ impl SettingsSlice {
         "Signed out — running in anonymous mode".into()
     }
 
+    pub fn dsp_capability(&self) -> AudioDspCapability {
+        AudioDspCapability::ExternalUrlStreamOnly
+    }
+
     pub fn set_loudness_normalization(&mut self, enabled: bool) {
         self.dsp_config.loudness_normalization = enabled;
     }
@@ -245,6 +283,15 @@ mod tests {
         s.sign_out();
         assert!(!s.signed_in);
         assert!(!s.auth_backend_status.has_sapisid);
+    }
+
+    #[test]
+    fn dsp_capability_reports_external_url_stream_only_truthfully() {
+        let s = SettingsSlice::new(true);
+        let cap = s.dsp_capability();
+        assert_eq!(cap, AudioDspCapability::ExternalUrlStreamOnly);
+        assert!(!cap.is_active());
+        assert_eq!(cap.badge_label(), "Planned • Native PCM Engine");
     }
 
     #[test]
