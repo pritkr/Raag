@@ -17,10 +17,10 @@ pub mod search;
 
 pub use browse::{parse_collection_response, parse_ytm_lyrics_response};
 pub use common::{extract_visitor_data, parse_duration_text};
-pub use home::parse_home_response;
+pub use home::{extract_home_continuation, parse_home_response};
 pub use next::{extract_lyrics_browse_id, parse_next_queue_response};
 pub use player::{
     PREFERRED_AUDIO_ITAGS, RawAudioFormat, finalize_stream_info, parse_player_response,
     parse_player_response_for_platform,
 };
-pub use search::parse_search_response;
+pub use search::{extract_search_plays, parse_search_response};

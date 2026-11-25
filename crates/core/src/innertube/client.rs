@@ -6,6 +6,7 @@
 //! - Stale-While-Revalidate (SWR) SQLite caching with self-healing on corrupt JSON
 //! - Graceful `401` cookie-rotation / session revocation recovery & `429` handling
 
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -26,9 +27,10 @@ use crate::innertube::matrix::{
     AccountTier, CircuitBreakerConfig, ClientCircuitBreaker, ClientHealthSnapshot, ClientMatrix,
 };
 use crate::innertube::parser::{
-    extract_lyrics_browse_id, extract_visitor_data, finalize_stream_info,
-    parse_collection_response, parse_home_response, parse_next_queue_response,
-    parse_player_response_for_platform, parse_search_response, parse_ytm_lyrics_response,
+    extract_home_continuation, extract_lyrics_browse_id, extract_search_plays,
+    extract_visitor_data, finalize_stream_info, parse_collection_response, parse_home_response,
+    parse_next_queue_response, parse_player_response_for_platform, parse_search_response,
+    parse_ytm_lyrics_response,
 };
 use crate::innertube::provider_adapter::PlaybackResolver;
 use crate::potoken::attach_pot_param;
@@ -499,36 +501,100 @@ impl InnerTubeClient {
             let _ = self.cache.put_metadata(key, &json_str, ttl_secs, unix_secs());
         }
     }
-}
 
-#[async_trait]
-impl MusicProvider for InnerTubeClient {
-    async fn search(&self, query: &str) -> CoreResult<SearchResults> {
-        let cache_key = format!("search:{}", query.trim().to_lowercase());
+    /// Searches YouTube Music with an optional InnerTube filter `params` token
+    /// (e.g. `None` for All, `"EgWKAQIIAWoKEAMQBBAJEAoQBQ%3D%3D"` for Songs,
+    /// `"EgWKAQIYAWoKEAMQBBAJEAoQBQ%3D%3D"` for Albums).
+    pub async fn search_with_params(
+        &self,
+        query: &str,
+        params: Option<&str>,
+    ) -> CoreResult<SearchResults> {
+        let (res, _) = self.search_with_params_and_plays(query, params).await?;
+        Ok(res)
+    }
+
+    /// Searches YouTube Music and also returns a `video_id -> plays_text` map when available.
+    pub async fn search_with_params_and_plays(
+        &self,
+        query: &str,
+        params: Option<&str>,
+    ) -> CoreResult<(SearchResults, HashMap<String, String>)> {
+        let trimmed = query.trim();
+        let filter_tag = params.unwrap_or("all");
+        let cache_key = format!("search:{filter_tag}:{}", trimmed.to_lowercase());
+        let plays_key = format!("search_plays:{filter_tag}:{}", trimmed.to_lowercase());
         if let Some((cached, false)) = self.read_swr::<SearchResults>(&cache_key) {
-            return Ok(cached);
+            let cached_plays = self
+                .read_swr::<HashMap<String, String>>(&plays_key)
+                .map(|(p, _)| p)
+                .unwrap_or_default();
+            return Ok((cached, cached_plays));
         }
 
-        let payload = json!({
-            "query": query,
-            // Songs filter parameter on YouTube Music WEB_REMIX.
-            "params": "EgWKAQIIAWoKEAMQBBAJEAoQBQ%3D%3D",
-        });
+        let mut payload = json!({ "query": trimmed });
+        if let Some(p) = params
+            && let Some(obj) = payload.as_object_mut()
+        {
+            obj.insert("params".into(), json!(p));
+        }
 
         match self.post_innertube(&WEB_REMIX, "search", payload).await {
             Ok(resp) => {
-                let parsed = parse_search_response(query, &resp)?;
-                self.write_swr(&cache_key, &parsed, TTL_SEARCH_SECS);
-                Ok(parsed)
+                let parsed = parse_search_response(trimmed, &resp)?;
+                let plays = extract_search_plays(&resp);
+                if !parsed.tracks.is_empty() || !parsed.albums.is_empty() {
+                    self.write_swr(&cache_key, &parsed, TTL_SEARCH_SECS);
+                    if !plays.is_empty() {
+                        self.write_swr(&plays_key, &plays, TTL_SEARCH_SECS);
+                    }
+                }
+                Ok((parsed, plays))
             }
             Err(err) => {
                 if let Some((stale, _)) = self.read_swr::<SearchResults>(&cache_key) {
+                    let cached_plays = self
+                        .read_swr::<HashMap<String, String>>(&plays_key)
+                        .map(|(p, _)| p)
+                        .unwrap_or_default();
+                    Ok((stale, cached_plays))
+                } else {
+                    Err(err)
+                }
+            }
+        }
+    }
+
+    /// Fetches `FEmusic_explore` (New albums & singles, Trending, Moods & genres, New music videos).
+    pub async fn explore(&self) -> CoreResult<Vec<HomeSection>> {
+        const KEY: &str = "explore:default";
+        if let Some((cached, false)) = self.read_swr::<Vec<HomeSection>>(KEY) {
+            return Ok(cached);
+        }
+        let payload = json!({ "browseId": "FEmusic_explore" });
+        match self.post_innertube(&WEB_REMIX, "browse", payload).await {
+            Ok(resp) => {
+                let sections = parse_home_response(&resp)?;
+                if !sections.is_empty() {
+                    self.write_swr(KEY, &sections, TTL_HOME_SECS);
+                }
+                Ok(sections)
+            }
+            Err(err) => {
+                if let Some((stale, _)) = self.read_swr::<Vec<HomeSection>>(KEY) {
                     Ok(stale)
                 } else {
                     Err(err)
                 }
             }
         }
+    }
+}
+
+#[async_trait]
+impl MusicProvider for InnerTubeClient {
+    async fn search(&self, query: &str) -> CoreResult<SearchResults> {
+        self.search_with_params(query, None).await
     }
 
     async fn home(&self) -> CoreResult<Vec<HomeSection>> {
@@ -539,8 +605,31 @@ impl MusicProvider for InnerTubeClient {
         let payload = json!({ "browseId": "FEmusic_home" });
         match self.post_innertube(&WEB_REMIX, "browse", payload).await {
             Ok(resp) => {
-                let sections = parse_home_response(&resp)?;
-                self.write_swr(KEY, &sections, TTL_HOME_SECS);
+                let mut sections = parse_home_response(&resp)?;
+                let mut cont = extract_home_continuation(&resp);
+                let mut page = 0usize;
+                while sections.len() < 5
+                    && page < 2
+                    && let Some(token) = cont.take()
+                {
+                    page += 1;
+                    let Ok(next_resp) = self
+                        .post_innertube(&WEB_REMIX, "browse", json!({ "continuation": token }))
+                        .await
+                    else {
+                        break;
+                    };
+                    if let Ok(mut more) = parse_home_response(&next_resp) {
+                        for (i, sec) in more.iter_mut().enumerate() {
+                            sec.id = format!("home-c{page}-{i}");
+                        }
+                        sections.extend(more);
+                    }
+                    cont = extract_home_continuation(&next_resp);
+                }
+                if !sections.is_empty() {
+                    self.write_swr(KEY, &sections, TTL_HOME_SECS);
+                }
                 Ok(sections)
             }
             Err(err) => {

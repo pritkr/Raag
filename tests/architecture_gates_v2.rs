@@ -1,5 +1,5 @@
 //! Architecture Hardening Verification Suite (Requirements 1–6):
-//! 1. Phase 0 Walking-Skeleton Gate (4 proofs + exact NSH pin `=0.6.1` + documented fallbacks)
+//! 1. Phase 0 Walking-Skeleton Gate (4 proofs + exact NSH pin `=0.7.0` + documented fallbacks)
 //! 2. Updatable `yt-dlp-ejs` Solver Bundle in `rquickjs >= 0.12.0` + per-`player_id` `n`-param cache
 //! 3. Data-driven `client_matrix.json` + explicit `PoTokenPolicy` + `client_probe` atomic update
 //! 4. `CompositeMusicProvider` (`BrowseDelegate` MIT `ytmapi-rs` seam + owned `PlaybackResolver`) & license check
@@ -40,10 +40,10 @@ use tempfile::tempdir;
 async fn req1_walking_skeleton_gate0_and_exact_nsh_pin_and_fallbacks() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
 
-    // Verify exact NSH version pin (`=0.6.1`) in Cargo.toml
+    // Verify exact NSH version pin (`=0.7.0`) in Cargo.toml
     let cargo_toml = fs::read_to_string(root.join("Cargo.toml")).unwrap();
-    assert!(cargo_toml.contains("nsh-core = \"=0.6.1\""));
-    assert!(cargo_toml.contains("nsh-base = { version = \"=0.6.1\""));
+    assert!(cargo_toml.contains("nsh-core = \"=0.7.0\""));
+    assert!(cargo_toml.contains("nsh-base = { version = \"=0.7.0\""));
     assert!(
         cargo_toml.contains("license = \"GPL-3.0-or-later\"")
             || cargo_toml.contains("license = \"GPL-3.0-only\"")
@@ -89,7 +89,7 @@ async fn req1_walking_skeleton_gate0_and_exact_nsh_pin_and_fallbacks() {
     let proof_4 = solved.n_param.as_deref() == Some("ejs_abc");
 
     let report = WalkingSkeletonReport {
-        nsh_pinned_version: "=0.6.1".into(),
+        nsh_pinned_version: "=0.7.0".into(),
         checks: vec![
             GateCheckResult {
                 id: "locked_screen_playback".into(),
@@ -136,6 +136,7 @@ async fn req2_updatable_ejs_bundle_and_per_player_id_n_param_cache() {
     let sha = hex::encode(Sha256::digest(new_bundle.as_bytes()));
     let mut updated_manifest = EjsBundleManifest {
         bundle_version: "0.6.0-hotfix".into(),
+        pinned_version: "0.6.0-hotfix".into(),
         ..manifest
     };
     // Reject bad SHA-256 first
@@ -179,6 +180,7 @@ async fn req2_updatable_ejs_bundle_and_per_player_id_n_param_cache() {
 
     // Upgrading the EJS bundle invalidates stale cached n-params
     updated_manifest.bundle_version = "0.6.1-hotfix".into();
+    updated_manifest.pinned_version = "0.6.1-hotfix".into();
     solver
         .install_ejs_bundle_update(&updated_manifest, new_bundle, &sha)
         .unwrap();

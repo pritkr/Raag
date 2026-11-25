@@ -11,7 +11,10 @@ pub enum SearchFilter {
     #[default]
     All,
     Songs,
+    Videos,
     Albums,
+    Playlists,
+    Artists,
 }
 
 impl SearchFilter {
@@ -19,7 +22,25 @@ impl SearchFilter {
         match self {
             Self::All => "All",
             Self::Songs => "Songs",
+            Self::Videos => "Videos",
             Self::Albums => "Albums",
+            Self::Playlists => "Playlists",
+            Self::Artists => "Artists",
+        }
+    }
+
+    pub fn is_collection_only(self) -> bool {
+        matches!(self, Self::Albums | Self::Playlists | Self::Artists)
+    }
+
+    pub fn params(self) -> Option<&'static str> {
+        match self {
+            Self::All => None,
+            Self::Songs => Some("EgWKAQIIAWoKEAMQBBAJEAoQBQ%3D%3D"),
+            Self::Videos => Some("EgWKAQIQAWoKEAMQBBAJEAoQBQ%3D%3D"),
+            Self::Albums => Some("EgWKAQIYAWoKEAMQBBAJEAoQBQ%3D%3D"),
+            Self::Playlists => Some("EgeKAQQoAEABagoQAxAEEAkQChAF"),
+            Self::Artists => Some("EgWKAQIgAWoKEAMQBBAJEAoQBQ%3D%3D"),
         }
     }
 }
@@ -35,13 +56,13 @@ pub struct SidebarPlaylist {
 
 pub fn filter_tracks_for_mode(tracks: &[Track], filter: SearchFilter) -> Vec<Track> {
     match filter {
-        SearchFilter::All => tracks.to_vec(),
+        SearchFilter::All | SearchFilter::Videos => tracks.to_vec(),
         SearchFilter::Songs => tracks
             .iter()
             .filter(|t| t.duration_ms > 0)
             .cloned()
             .collect(),
-        SearchFilter::Albums => tracks
+        SearchFilter::Albums | SearchFilter::Playlists | SearchFilter::Artists => tracks
             .iter()
             .filter(|t| t.album.as_ref().is_some_and(|a| !a.title.is_empty()))
             .cloned()
@@ -52,6 +73,7 @@ pub fn filter_tracks_for_mode(tracks: &[Track], filter: SearchFilter) -> Vec<Tra
 #[derive(Clone)]
 pub struct CatalogSlice {
     pub home_sections: Vec<HomeSection>,
+    pub explore_sections: Vec<HomeSection>,
     pub home_loading: bool,
     pub home_error: Option<String>,
     pub selected_mood: Option<String>,
@@ -60,6 +82,9 @@ pub struct CatalogSlice {
     pub search_filter: SearchFilter,
     pub search_all_tracks: Vec<Track>,
     pub search_results: Vec<Track>,
+    pub search_albums: Vec<Playlist>,
+    pub search_plays: HashMap<String, String>,
+    pub search_generation: u64,
     pub search_loading: bool,
     pub search_error: Option<String>,
     pub selected_collection: Option<Playlist>,
@@ -78,6 +103,7 @@ impl CatalogSlice {
 
         Self {
             home_sections,
+            explore_sections: Vec::new(),
             home_loading: !fixture,
             home_error: None,
             selected_mood: None,
@@ -86,6 +112,9 @@ impl CatalogSlice {
             search_filter: SearchFilter::All,
             search_all_tracks: initial_search.clone(),
             search_results: initial_search,
+            search_albums: Vec::new(),
+            search_plays: HashMap::new(),
+            search_generation: 0,
             search_loading: false,
             search_error: None,
             selected_collection: None,
@@ -107,7 +136,18 @@ impl CatalogSlice {
         }
     }
 
-    pub fn apply_search_loaded(&mut self, query: &str, result: Result<SearchResults, String>) {
+    pub fn apply_explore_loaded(&mut self, res: Result<Vec<HomeSection>, String>) {
+        if let Ok(sections) = res {
+            self.explore_sections = sections;
+        }
+    }
+
+    pub fn apply_search_loaded(
+        &mut self,
+        query: &str,
+        result: Result<SearchResults, String>,
+        plays: HashMap<String, String>,
+    ) {
         if self.search_query != query {
             return;
         }
@@ -115,6 +155,8 @@ impl CatalogSlice {
         match result {
             Ok(res) => {
                 self.search_all_tracks = res.tracks;
+                self.search_albums = res.albums;
+                self.search_plays = plays;
                 self.search_results =
                     filter_tracks_for_mode(&self.search_all_tracks, self.search_filter);
                 self.search_error = None;
@@ -154,16 +196,19 @@ impl CatalogSlice {
             })
             .collect();
         self.search_all_tracks = matched;
+        self.search_albums.clear();
         self.search_results = filter_tracks_for_mode(&self.search_all_tracks, self.search_filter);
     }
 
     pub fn begin_live_search(&mut self, query: String) {
         self.search_query = query.clone();
         self.search_error = None;
+        self.search_generation = self.search_generation.wrapping_add(1);
         if query.is_empty() {
             self.search_loading = false;
             self.search_all_tracks.clear();
             self.search_results.clear();
+            self.search_albums.clear();
         } else {
             self.search_loading = true;
         }

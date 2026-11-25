@@ -31,6 +31,9 @@ impl SqliteCacheStore {
         std::fs::create_dir_all(&downloads_dir)
             .map_err(|e| CoreError::OfflineStorage(OfflineStorageError::Io(e.to_string())))?;
         let db_path = data_dir.join("resonance.db");
+        if db_path.is_dir() {
+            let _ = std::fs::remove_dir_all(&db_path);
+        }
         let conn = Connection::open(&db_path)
             .map_err(|e| CoreError::Cache(CacheError::Sqlite(e.to_string())))?;
 

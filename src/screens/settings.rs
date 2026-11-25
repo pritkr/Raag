@@ -331,12 +331,12 @@ fn cache_card() -> impl IntoElement {
                         .h_full()
                         .w(move || {
                             let s = store::cache_stats();
-                            let pct = if s.max_audio_bytes > 0 {
-                                (s.audio_chunk_bytes as f32 / s.max_audio_bytes as f32) * 100.0
+                            let frac = if s.max_audio_bytes > 0 {
+                                s.audio_chunk_bytes as f32 / s.max_audio_bytes as f32
                             } else {
                                 0.0
                             };
-                            percentage(pct.clamp(0.0, 100.0))
+                            percentage(frac.clamp(0.0, 1.0))
                         })
                         .bg(move || theme().primary),
                 ),

@@ -229,8 +229,9 @@ pub fn artwork_box(
     size_px: f32,
     radius_px: f32,
 ) -> impl IntoElement {
-    let has_url = artwork_url.is_some();
-    let seed = format!("{monogram}-{}", artwork_url.as_deref().unwrap_or("mono"));
+    let resolved_url = crate::store::resolve_artwork_url(artwork_url);
+    let has_url = resolved_url.is_some();
+    let seed = format!("{monogram}-{}", resolved_url.as_deref().unwrap_or("mono"));
     let (grad_from, grad_to) = cover_gradient_pair(&seed);
     let large_mono = size_px >= 120.0;
 
@@ -246,14 +247,6 @@ pub fn artwork_box(
         .items_center()
         .justify_center()
         .overflow_hidden()
-        .when_some(artwork_url, move |v, url| {
-            v.child(
-                image(url)
-                    .size(px(size_px))
-                    .object_fit(ResizeMode::Cover)
-                    .rounded(px(radius_px)),
-            )
-        })
         .when(!has_url && !monogram.is_empty(), move |v| {
             v.child(
                 text(monogram)
@@ -262,6 +255,14 @@ pub fn artwork_box(
                     .when(size_px < 64.0, |t| t.text_sm())
                     .font_weight(FontWeight::BOLD)
                     .text_color(move || theme().primary_foreground),
+            )
+        })
+        .when_some(resolved_url, move |v, url| {
+            v.child(
+                image(url)
+                    .size(px(size_px))
+                    .object_fit(ResizeMode::Cover)
+                    .rounded(px(radius_px)),
             )
         })
 }

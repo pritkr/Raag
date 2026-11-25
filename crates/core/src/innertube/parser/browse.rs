@@ -5,11 +5,13 @@ use serde_json::Value;
 
 use crate::innertube::parser::common::{best_thumbnail, join_runs, parse_music_responsive_item};
 
-/// Parses `WEB_REMIX` `/youtubei/v1/browse` for an album or playlist (`MPRE...`, `VL...`, `FEmusic_liked_videos`).
+/// Parses `WEB_REMIX` `/youtubei/v1/browse` for an album, playlist, or artist (`MPRE...`, `VL...`, `UC...`, `FEmusic_liked_videos`).
 pub fn parse_collection_response(browse_id: &str, resp: &Value) -> CoreResult<Playlist> {
     let header = resp
         .pointer("/header/musicDetailHeaderRenderer")
         .or_else(|| resp.pointer("/header/musicResponsiveHeaderRenderer"))
+        .or_else(|| resp.pointer("/header/musicImmersiveHeaderRenderer"))
+        .or_else(|| resp.pointer("/header/musicVisualHeaderRenderer"))
         .or_else(|| {
             resp.pointer(
                 "/contents/twoColumnBrowseResultsRenderer/tabs/0/tabRenderer/content/sectionListRenderer/contents/0/musicResponsiveHeaderRenderer",
@@ -21,7 +23,10 @@ pub fn parse_collection_response(browse_id: &str, resp: &Value) -> CoreResult<Pl
         .map(join_runs)
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| browse_id.to_owned());
-    let subtitle = header.and_then(|h| h.get("subtitle")).map(join_runs);
+    let subtitle = header
+        .and_then(|h| h.get("subtitle").or_else(|| h.get("description")))
+        .map(join_runs)
+        .filter(|s| !s.is_empty());
     let artwork_url = header.and_then(best_thumbnail);
 
     let mut tracks = Vec::new();
@@ -35,11 +40,15 @@ pub fn parse_collection_response(browse_id: &str, resp: &Value) -> CoreResult<Pl
                 let items = sec
                     .pointer("/musicShelfRenderer/contents")
                     .or_else(|| sec.pointer("/musicPlaylistShelfRenderer/contents"))
+                    .or_else(|| sec.pointer("/musicCarouselShelfRenderer/contents"))
                     .and_then(Value::as_array)
                     .map(Vec::as_slice)
                     .unwrap_or_default();
                 for item in items {
-                    if let Some(track) = parse_music_responsive_item(item) {
+                    if let Some(mut track) = parse_music_responsive_item(item) {
+                        if track.artwork_url.is_none() {
+                            track.artwork_url = artwork_url.clone();
+                        }
                         tracks.push(track);
                     }
                 }

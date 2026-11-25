@@ -6,6 +6,7 @@
 //! `PlaybackController` on a dedicated background Tokio runtime and streams typed updates
 //! back to the NSH reactive store via a non-blocking channel.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
@@ -49,12 +50,18 @@ pub enum LiveUpdate {
         signed_in: bool,
     },
     HomeLoaded(Result<Vec<HomeSection>, String>),
+    ExploreLoaded(Result<Vec<HomeSection>, String>),
     SearchLoaded {
         query: String,
         result: Result<SearchResults, String>,
+        plays: HashMap<String, String>,
     },
     CollectionLoaded(Result<Playlist, String>),
     PlaybackUpdated(PlayerSnapshot),
+    AutoplayQueueLoaded {
+        seed_video_id: TrackId,
+        tracks: Vec<Track>,
+    },
     LyricsLoaded(Option<LyricsDocument>),
     CacheStatsUpdated(CacheStats),
     AuthUpdated {
@@ -159,11 +166,17 @@ fn init_runtime() -> Result<LiveRuntime, String> {
     let chained_po = ChainedPoTokenProvider::new(po_chain);
     let cached_po = CachingPoTokenProvider::new(chained_po).into_arc();
     provider.set_po_token_provider(Some(cached_po));
+    let artwork_for_proxy = artwork.clone();
     let proxy = rt.block_on(async {
-        LoopbackProxy::start_with_offline(provider.clone(), chunks.clone(), Some(cache.clone()))
-            .await
-            .map(Arc::new)
-            .map_err(|e| format!("LoopbackProxy start failed: {e}"))
+        LoopbackProxy::start_with_caches(
+            provider.clone(),
+            chunks.clone(),
+            Some(cache.clone()),
+            Some(artwork_for_proxy),
+        )
+        .await
+        .map(Arc::new)
+        .map_err(|e| format!("LoopbackProxy start failed: {e}"))
     })?;
 
     let audio = create_platform_audio_backend();
@@ -286,12 +299,15 @@ fn init_runtime() -> Result<LiveRuntime, String> {
     })
 }
 
-fn runtime() -> Option<&'static LiveRuntime> {
-    LIVE_RUNTIME.get_or_init(init_runtime).as_ref().ok()
+fn runtime() -> Result<&'static LiveRuntime, &'static str> {
+    match LIVE_RUNTIME.get_or_init(init_runtime) {
+        Ok(rt) => Ok(rt),
+        Err(err) => Err(err.as_str()),
+    }
 }
 
 pub fn try_drain_updates() -> Vec<LiveUpdate> {
-    let Some(rt) = runtime() else {
+    let Ok(rt) = runtime() else {
         return Vec::new();
     };
     let mut out = Vec::new();
@@ -302,7 +318,13 @@ pub fn try_drain_updates() -> Vec<LiveUpdate> {
 }
 
 pub fn dispatch_load_home() {
-    let Some(rt) = runtime() else { return };
+    let rt = match runtime() {
+        Ok(rt) => rt,
+        Err(err) => {
+            crate::store::set_home_init_error(err.to_owned());
+            return;
+        }
+    };
     let provider = rt.provider.clone();
     let tx = rt.tx.clone();
     rt.rt.spawn(async move {
@@ -311,18 +333,48 @@ pub fn dispatch_load_home() {
     });
 }
 
-pub fn dispatch_search(query: String) {
-    let Some(rt) = runtime() else { return };
+pub fn dispatch_load_explore() {
+    let Ok(rt) = runtime() else { return };
     let provider = rt.provider.clone();
     let tx = rt.tx.clone();
     rt.rt.spawn(async move {
-        let res = provider.search(&query).await.map_err(|e| e.to_string());
-        let _ = tx.send(LiveUpdate::SearchLoaded { query, result: res });
+        let res = provider.explore().await.map_err(|e| e.to_string());
+        let _ = tx.send(LiveUpdate::ExploreLoaded(res));
+    });
+}
+
+pub fn dispatch_search(query: String, params: Option<&'static str>) {
+    let rt = match runtime() {
+        Ok(rt) => rt,
+        Err(err) => {
+            crate::store::set_search_init_error(query, err.to_owned());
+            return;
+        }
+    };
+    let provider = rt.provider.clone();
+    let tx = rt.tx.clone();
+    rt.rt.spawn(async move {
+        match provider.search_with_params_and_plays(&query, params).await {
+            Ok((res, plays)) => {
+                let _ = tx.send(LiveUpdate::SearchLoaded {
+                    query,
+                    result: Ok(res),
+                    plays,
+                });
+            }
+            Err(e) => {
+                let _ = tx.send(LiveUpdate::SearchLoaded {
+                    query,
+                    result: Err(e.to_string()),
+                    plays: HashMap::new(),
+                });
+            }
+        }
     });
 }
 
 pub fn dispatch_browse_collection(browse_id: String) {
-    let Some(rt) = runtime() else { return };
+    let Ok(rt) = runtime() else { return };
     let provider = rt.provider.clone();
     let tx = rt.tx.clone();
     rt.rt.spawn(async move {
@@ -335,13 +387,14 @@ pub fn dispatch_browse_collection(browse_id: String) {
 }
 
 pub fn dispatch_play_track(track: Track) {
-    let Some(rt) = runtime() else { return };
+    let Ok(rt) = runtime() else { return };
     let controller = rt.controller.clone();
     let provider = rt.provider.clone();
     let lyrics = rt.lyrics.clone();
     let tx = rt.tx.clone();
     rt.rt.spawn(async move {
         let track_for_lyrics = track.clone();
+        let seed_id = track.id.clone();
         match controller.play_track(track).await {
             Ok(()) => {
                 let snap = controller.snapshot().await;
@@ -354,13 +407,24 @@ pub fn dispatch_play_track(track: Track) {
         let _ = tx.send(LiveUpdate::PoTokenDiagnostics(
             provider.po_token_diagnostics(),
         ));
-        let lyr = lyrics.fetch_lyrics(&track_for_lyrics).await.ok().flatten();
-        let _ = tx.send(LiveUpdate::LyricsLoaded(lyr));
+        let (lyr_res, next_res) = tokio::join!(
+            lyrics.fetch_lyrics(&track_for_lyrics),
+            provider.autoplay_next(&seed_id)
+        );
+        let _ = tx.send(LiveUpdate::LyricsLoaded(lyr_res.ok().flatten()));
+        if let Ok(next_tracks) = next_res
+            && !next_tracks.is_empty()
+        {
+            let _ = tx.send(LiveUpdate::AutoplayQueueLoaded {
+                seed_video_id: seed_id,
+                tracks: next_tracks,
+            });
+        }
     });
 }
 
 pub fn dispatch_sign_in(cookie_header: String) {
-    let Some(rt) = runtime() else { return };
+    let Ok(rt) = runtime() else { return };
     let provider = rt.provider.clone();
     let tx = rt.tx.clone();
     rt.rt.spawn(async move {
@@ -391,7 +455,7 @@ pub fn dispatch_sign_in(cookie_header: String) {
 }
 
 pub fn dispatch_sign_out() {
-    let Some(rt) = runtime() else { return };
+    let Ok(rt) = runtime() else { return };
     let provider = rt.provider.clone();
     let tx = rt.tx.clone();
     rt.rt.spawn(async move {
@@ -406,7 +470,7 @@ pub fn dispatch_sign_out() {
 }
 
 pub fn dispatch_clear_caches() {
-    let Some(rt) = runtime() else { return };
+    let Ok(rt) = runtime() else { return };
     let cache = rt.cache.clone();
     let chunks = rt.chunks.clone();
     let tx = rt.tx.clone();
@@ -419,7 +483,7 @@ pub fn dispatch_clear_caches() {
 }
 
 pub fn dispatch_set_like(video_id: TrackId, action: LikeAction) {
-    let Some(rt) = runtime() else { return };
+    let Ok(rt) = runtime() else { return };
     let cmd = MutationCommand::SetLike { video_id, action };
     if let Err(e) = rt.mutations.enqueue(cmd.clone()) {
         let _ = rt.tx.send(LiveUpdate::MutationFailed {
@@ -430,7 +494,7 @@ pub fn dispatch_set_like(video_id: TrackId, action: LikeAction) {
 }
 
 pub fn dispatch_edit_playlist(playlist_id: String, op: PlaylistEditOp) {
-    let Some(rt) = runtime() else { return };
+    let Ok(rt) = runtime() else { return };
     let cmd = MutationCommand::EditPlaylist { playlist_id, op };
     if let Err(e) = rt.mutations.enqueue(cmd.clone()) {
         let _ = rt.tx.send(LiveUpdate::MutationFailed {
@@ -441,7 +505,7 @@ pub fn dispatch_edit_playlist(playlist_id: String, op: PlaylistEditOp) {
 }
 
 pub fn dispatch_report_atr(report: WatchtimeReport) {
-    let Some(rt) = runtime() else { return };
+    let Ok(rt) = runtime() else { return };
     let cmd = MutationCommand::ReportAtr(report);
     if let Err(e) = rt.mutations.enqueue(cmd.clone()) {
         let _ = rt.tx.send(LiveUpdate::MutationFailed {
@@ -452,7 +516,7 @@ pub fn dispatch_report_atr(report: WatchtimeReport) {
 }
 
 pub fn dispatch_enqueue_download(track: Track) {
-    let Some(rt) = runtime() else { return };
+    let Ok(rt) = runtime() else { return };
     let downloads = rt.downloads.clone();
     let tx = rt.tx.clone();
     rt.rt.spawn(async move {
@@ -463,7 +527,7 @@ pub fn dispatch_enqueue_download(track: Track) {
 }
 
 pub fn dispatch_pause_download(video_id: TrackId) {
-    let Some(rt) = runtime() else { return };
+    let Ok(rt) = runtime() else { return };
     let downloads = rt.downloads.clone();
     rt.rt.spawn(async move {
         let _ = downloads.pause(&video_id).await;
@@ -471,7 +535,7 @@ pub fn dispatch_pause_download(video_id: TrackId) {
 }
 
 pub fn dispatch_resume_download(video_id: TrackId) {
-    let Some(rt) = runtime() else { return };
+    let Ok(rt) = runtime() else { return };
     let downloads = rt.downloads.clone();
     let tx = rt.tx.clone();
     rt.rt.spawn(async move {
@@ -482,7 +546,7 @@ pub fn dispatch_resume_download(video_id: TrackId) {
 }
 
 pub fn dispatch_cancel_download(video_id: TrackId) {
-    let Some(rt) = runtime() else { return };
+    let Ok(rt) = runtime() else { return };
     let downloads = rt.downloads.clone();
     rt.rt.spawn(async move {
         let _ = downloads.cancel(&video_id).await;
@@ -490,7 +554,7 @@ pub fn dispatch_cancel_download(video_id: TrackId) {
 }
 
 pub fn dispatch_delete_download(video_id: TrackId) {
-    let Some(rt) = runtime() else { return };
+    let Ok(rt) = runtime() else { return };
     let downloads = rt.downloads.clone();
     rt.rt.spawn(async move {
         let _ = downloads.delete(&video_id).await;

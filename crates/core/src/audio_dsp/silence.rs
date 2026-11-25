@@ -57,18 +57,18 @@ mod tests {
 
     #[test]
     fn skips_only_after_minimum_silence_hold_window() {
-        let mut skipper = SilenceSkipper::new(1000, 2, -40.0, 200);
+        let mut skipper = SilenceSkipper::new(8_000, 2, -40.0, 200);
         skipper.enabled = true;
 
-        // 100 stereo frames of near-silence -> below 200ms hold, keep
-        let silent_100 = vec![0.0001_f32; 200];
+        // 800 stereo frames (100ms at 8kHz) of near-silence -> below 200ms hold, keep
+        let silent_100 = vec![0.0001_f32; 1600];
         assert!(!skipper.should_skip_block(&silent_100));
-        // Another 150 stereo frames -> exceeds 200ms hold, skip!
-        let silent_150 = vec![0.0001_f32; 300];
+        // Another 1200 stereo frames (150ms) -> exceeds 200ms hold, skip!
+        let silent_150 = vec![0.0001_f32; 2400];
         assert!(skipper.should_skip_block(&silent_150));
 
         // Audio returns -> immediately stops skipping
-        let audible = vec![0.25_f32; 200];
+        let audible = vec![0.25_f32; 1600];
         assert!(!skipper.should_skip_block(&audible));
     }
 }

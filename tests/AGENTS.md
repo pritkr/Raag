@@ -2,7 +2,7 @@
 
 Run targeted suites matching changed subsystems; headless UI tests seed deterministic data via `resonance::store::enable_fixture_mode(true)` + `nsh_testing::Headless`.
 
-- `architecture_gates_v2` — NSH `=0.6.1` pin, Gate 0 proofs, EJS bundle + `n`-param cache, `client_matrix.json`, `GPL-3.0-or-later` license, `<3s` cold / `<1.5s` warm / `<100MB` RSS, 50% pre-resolution, format matrix.
+- `architecture_gates_v2` — NSH `=0.7.0` pin, Gate 0 proofs, EJS bundle + `n`-param cache, `client_matrix.json`, `GPL-3.0-or-later` license, `<3s` cold / `<1.5s` warm / `<100MB` RSS, 50% pre-resolution, format matrix.
 - `headless_ui` — Mobile (`390x844` Light/Dark) & Desktop (`1200x800`) end-to-end journeys.
 - `nsh_native_audio` — Native `nsh/audio` driver and `NshAudioBackend`.
 - `proxy_and_fault_injection` — `LoopbackProxy` 256 KB chunks, `403` re-resolution, upstream faults.

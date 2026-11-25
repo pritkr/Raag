@@ -126,7 +126,15 @@ fn curated_discovery_mixes() -> Vec<ReleaseCardKind> {
 
 fn build_new_releases() -> Vec<ReleaseCardKind> {
     let mut items = Vec::new();
-    for section in store::home_sections() {
+    let sections = {
+        let exp = store::explore_sections();
+        if exp.is_empty() {
+            store::home_sections()
+        } else {
+            exp
+        }
+    };
+    for section in sections {
         for item in section.items {
             match item {
                 HomeItem::Collection {
@@ -216,9 +224,11 @@ fn new_releases_section(
     const SECTION_ID: &str = "explore-new-releases";
     const PAGE_SIZE: usize = 6;
     let home_memo = computed(store::home_sections);
+    let explore_memo = computed(store::explore_sections);
 
     view().gap_3().child(dynamic(move || {
         let _ = home_memo.get();
+        let _ = explore_memo.get();
         let all_releases = build_new_releases();
         let total = all_releases.len();
         let page = store::section_page(SECTION_ID);
@@ -357,6 +367,7 @@ fn charts_section(desktop: bool) -> impl IntoElement {
                                 168.0,
                                 false,
                                 move || {
+                                    store::set_search_filter(store::SearchFilter::All);
                                     store::run_search(chart.query);
                                     store::set_tab(AppTab::Search);
                                 },
@@ -411,6 +422,7 @@ fn moods_and_genres_section(desktop: bool) -> impl IntoElement {
                                         s.outline(px(2.0)).outline_color(move || theme().ring)
                                     })
                                     .on_press(move || {
+                                        store::set_search_filter(store::SearchFilter::All);
                                         store::run_search(genre);
                                         store::set_tab(AppTab::Search);
                                     })

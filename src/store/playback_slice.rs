@@ -125,7 +125,11 @@ impl PlaybackSlice {
         } else {
             PlayerState::Playing
         };
-        self.player.active_proxy_url = Some(proxy_url);
+        self.player.active_proxy_url = if live {
+            None
+        } else {
+            Some(proxy_url)
+        };
         self.lyrics = if live {
             None
         } else {
@@ -306,11 +310,11 @@ impl PlaybackSlice {
     }
 
     pub fn set_volume(&mut self, volume: f32) {
-        self.player.volume = volume.clamp(0.0, 1.0);
+        self.player.volume = volume.clamp(0.0, 1.6);
     }
 
     pub fn adjust_volume(&mut self, delta: f32) {
-        self.player.volume = (self.player.volume + delta).clamp(0.0, 1.0);
+        self.player.volume = (self.player.volume + delta).clamp(0.0, 1.6);
     }
 
     pub fn toggle_mute(&mut self) {
@@ -337,7 +341,14 @@ impl PlaybackSlice {
 
     pub fn on_native_audio_duration(&mut self, duration_ms: u64) {
         if duration_ms > 0 {
-            self.player.duration_ms = duration_ms;
+            let has_metadata_duration = self
+                .player
+                .current_track
+                .as_ref()
+                .is_some_and(|t| t.duration_ms > 0);
+            if !has_metadata_duration {
+                self.player.duration_ms = duration_ms;
+            }
         }
     }
 
@@ -367,7 +378,14 @@ impl PlaybackSlice {
         self.player.position_ms = position_ms;
         self.player.queue.resume_position_ms = position_ms;
         if let Some(dur) = duration_ms.filter(|d| *d > 0) {
-            self.player.duration_ms = dur;
+            let has_metadata_duration = self
+                .player
+                .current_track
+                .as_ref()
+                .is_some_and(|t| t.duration_ms > 0);
+            if !has_metadata_duration {
+                self.player.duration_ms = dur;
+            }
         }
     }
 

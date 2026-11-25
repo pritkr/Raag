@@ -81,7 +81,7 @@ pub fn db_to_linear(db: f32) -> f32 {
 }
 
 #[inline]
-fn soft_limit(x: f32) -> f32 {
+pub(crate) fn soft_limit(x: f32) -> f32 {
     let abs = x.abs();
     if abs <= LIMITER_KNEE {
         x

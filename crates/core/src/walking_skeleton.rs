@@ -1,7 +1,7 @@
 //! Phase 0 Walking-Skeleton Gate Verifier & Documented Platform Fallback Registry.
 //!
 //! Never assumes NSH provides background Android MediaSession, WebView cookie capture, or Keystore APIs.
-//! Uses NSH `=0.6.1`'s real native `nsh/audio` (`nsh_core::prelude::audio_player`) for Desktop and
+//! Uses NSH `=0.7.0`'s real native `nsh/audio` (`nsh_core::prelude::audio_player`) for Desktop and
 //! foreground streaming over Resonance's `127.0.0.1` Loopback HTTP Proxy, while explicitly proving the
 //! 4 Android/Cross-Platform walking-skeleton capabilities:
 //! 1. Play a hard-coded stream URL with screen locked & MediaSession notification controls working

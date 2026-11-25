@@ -70,6 +70,54 @@ pub fn proxy_stream_url(video_id: &str) -> String {
     format!("{base}/stream/{video_id}?itag={itag}")
 }
 
+/// Normalizes a remote artwork URL and, when the live `LoopbackProxy` is running,
+/// routes it through `/artwork?url=...` for L1/L2 caching, connection pooling, and retries.
+pub fn resolve_artwork_url(raw: Option<String>) -> Option<String> {
+    let url = raw?;
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let normalized = if let Some(rest) = trimmed.strip_prefix("//") {
+        format!("https://{rest}")
+    } else if let Some(rest) = trimmed.strip_prefix("http://")
+        && !rest.starts_with("127.0.0.1")
+        && !rest.starts_with("localhost")
+    {
+        format!("https://{rest}")
+    } else {
+        trimmed.to_owned()
+    };
+
+    if is_fixture_mode() || !normalized.starts_with("http") {
+        return Some(normalized);
+    }
+    if normalized.starts_with("http://127.0.0.1") || normalized.starts_with("http://localhost") {
+        return Some(normalized);
+    }
+
+    let base = proxy_base_lock()
+        .read()
+        .map(|g| g.clone())
+        .unwrap_or_default();
+    if base.starts_with("http://127.0.0.1:") && !base.ends_with(":0") {
+        let mut encoded = String::with_capacity(normalized.len() * 2);
+        for b in normalized.as_bytes() {
+            match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                    encoded.push(*b as char);
+                }
+                _ => {
+                    use std::fmt::Write;
+                    let _ = write!(encoded, "%{b:02X}");
+                }
+            }
+        }
+        return Some(format!("{base}/artwork?url={encoded}"));
+    }
+    Some(normalized)
+}
+
 pub fn enable_fixture_mode(enabled: bool) {
     FIXTURE_MODE_FLAG.store(enabled, Ordering::SeqCst);
 }
@@ -119,6 +167,7 @@ pub fn mount_live_engine_bridge() {
         return;
     }
     live_engine::dispatch_load_home();
+    live_engine::dispatch_load_explore();
     spawn(async {
         loop {
             let updates = live_engine::try_drain_updates();
@@ -153,8 +202,15 @@ fn apply_live_update(update: LiveUpdate) {
         LiveUpdate::HomeLoaded(res) => {
             state_signal().update(|s| s.catalog.apply_home_loaded(res));
         }
-        LiveUpdate::SearchLoaded { query, result } => {
-            state_signal().update(|s| s.catalog.apply_search_loaded(&query, result));
+        LiveUpdate::ExploreLoaded(res) => {
+            state_signal().update(|s| s.catalog.apply_explore_loaded(res));
+        }
+        LiveUpdate::SearchLoaded {
+            query,
+            result,
+            plays,
+        } => {
+            state_signal().update(|s| s.catalog.apply_search_loaded(&query, result, plays));
         }
         LiveUpdate::CollectionLoaded(res) => {
             state_signal().update(|s| match res {
@@ -166,9 +222,52 @@ fn apply_live_update(update: LiveUpdate) {
                 }
             });
         }
-        LiveUpdate::PlaybackUpdated(snapshot) => {
+        LiveUpdate::PlaybackUpdated(mut snapshot) => {
             state_signal().update(|s| {
+                snapshot.volume = s.playback.player.volume;
+                if snapshot.queue.items.len() <= 1 && s.playback.player.queue.items.len() > 1 {
+                    snapshot.queue.items = s.playback.player.queue.items.clone();
+                    snapshot.queue.current_index = snapshot
+                        .current_track
+                        .as_ref()
+                        .and_then(|c| snapshot.queue.items.iter().position(|t| t.id == c.id))
+                        .or(s.playback.player.queue.current_index);
+                }
+                snapshot.queue.autoplay_radio = s.playback.player.queue.autoplay_radio;
+                snapshot.queue.shuffle = s.playback.player.queue.shuffle;
+                snapshot.queue.repeat = s.playback.player.queue.repeat;
                 s.playback.player = snapshot;
+            });
+        }
+        LiveUpdate::AutoplayQueueLoaded {
+            seed_video_id,
+            tracks,
+        } => {
+            state_signal().update(|s| {
+                if !s.playback.player.queue.autoplay_radio {
+                    return;
+                }
+                let still_same_seed = s
+                    .playback
+                    .player
+                    .current_track
+                    .as_ref()
+                    .is_some_and(|t| t.id == seed_video_id);
+                if !still_same_seed {
+                    return;
+                }
+                for t in tracks {
+                    if !s
+                        .playback
+                        .player
+                        .queue
+                        .items
+                        .iter()
+                        .any(|existing| existing.id == t.id)
+                    {
+                        s.playback.player.queue.items.push(t);
+                    }
+                }
             });
         }
         LiveUpdate::LyricsLoaded(doc) => {
@@ -406,12 +505,32 @@ pub fn home_sections() -> Vec<HomeSection> {
     state_signal().with(|s| s.catalog.home_sections.clone())
 }
 
+pub fn explore_sections() -> Vec<HomeSection> {
+    state_signal().with(|s| s.catalog.explore_sections.clone())
+}
+
 pub fn is_home_loading() -> bool {
     state_signal().with(|s| s.catalog.home_loading)
 }
 
 pub fn home_error() -> Option<String> {
     state_signal().with(|s| s.catalog.home_error.clone())
+}
+
+pub fn set_home_init_error(err: String) {
+    state_signal().update(|s| {
+        s.catalog.home_loading = false;
+        s.catalog.home_error = Some(err);
+    });
+}
+
+pub fn set_search_init_error(query: String, err: String) {
+    state_signal().update(|s| {
+        if s.catalog.search_query == query {
+            s.catalog.search_loading = false;
+            s.catalog.search_error = Some(err);
+        }
+    });
 }
 
 pub fn selected_mood() -> Option<String> {
@@ -473,7 +592,31 @@ pub fn search_filter() -> SearchFilter {
 }
 
 pub fn set_search_filter(filter: SearchFilter) {
-    state_signal().update(|s| s.catalog.set_search_filter(filter));
+    let mut live_dispatch: Option<(String, Option<&'static str>)> = None;
+    state_signal().update(|s| {
+        s.catalog.set_search_filter(filter);
+        if !is_fixture_mode() && !s.catalog.search_query.is_empty() {
+            s.catalog.search_loading = true;
+            s.catalog.search_error = None;
+            s.catalog.search_generation = s.catalog.search_generation.wrapping_add(1);
+            live_dispatch = Some((s.catalog.search_query.clone(), filter.params()));
+        }
+    });
+    if let Some((q, params)) = live_dispatch {
+        live_engine::dispatch_search(q, params);
+    }
+}
+
+pub fn search_albums() -> Vec<Playlist> {
+    state_signal().with(|s| s.catalog.search_albums.clone())
+}
+
+pub fn search_tracks() -> Vec<Track> {
+    state_signal().with(|s| s.catalog.search_results.clone())
+}
+
+pub fn track_plays(video_id: &str) -> Option<String> {
+    state_signal().with(|s| s.catalog.search_plays.get(video_id).cloned())
 }
 
 pub fn search_results_len() -> usize {
@@ -501,12 +644,42 @@ pub fn run_search(query: &str) {
     if is_fixture_mode() {
         state_signal().update(|s| s.catalog.run_fixture_search(q));
     } else {
+        let mut params = None;
         let should_dispatch = !q.is_empty();
-        state_signal().update(|s| s.catalog.begin_live_search(q.clone()));
+        state_signal().update(|s| {
+            s.catalog.begin_live_search(q.clone());
+            if should_dispatch {
+                params = s.catalog.search_filter.params();
+            }
+        });
         if should_dispatch {
-            live_engine::dispatch_search(q);
+            live_engine::dispatch_search(q, params);
         }
     }
+}
+
+/// Debounced search for interactive typing (260ms) so fast keystrokes do not spam InnerTube.
+pub fn run_search_debounced(query: &str) {
+    let q = query.trim().to_owned();
+    if is_fixture_mode() || q.is_empty() {
+        run_search(query);
+        return;
+    }
+    let mut seq = 0u64;
+    let mut params = None;
+    state_signal().update(|s| {
+        s.catalog.begin_live_search(q.clone());
+        seq = s.catalog.search_generation;
+        params = s.catalog.search_filter.params();
+    });
+    spawn(async move {
+        timer(Duration::from_millis(260)).await;
+        let still_current = state_signal()
+            .with(|s| s.catalog.search_generation == seq && s.catalog.search_query == q);
+        if still_current {
+            live_engine::dispatch_search(q, params);
+        }
+    });
 }
 
 pub fn selected_collection() -> Option<Playlist> {

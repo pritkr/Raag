@@ -241,10 +241,10 @@ fn focal_artwork(size_px: f32) -> impl IntoElement {
                 .child(
                     when(has_art_url, move || {
                         image(move || {
-                            let url = store::player_snapshot()
+                            let raw = store::player_snapshot()
                                 .current_track
-                                .and_then(|t| t.artwork_url)
-                                .unwrap_or_default();
+                                .and_then(|t| t.artwork_url);
+                            let url = store::resolve_artwork_url(raw).unwrap_or_default();
                             ImageSrc::from(url)
                         })
                         .size(px(size_px))

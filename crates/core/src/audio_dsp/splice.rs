@@ -80,13 +80,13 @@ mod tests {
         assert_eq!(spliced[15], 0.5);
         assert_eq!(spliced[16], -0.5);
 
-        let xfade = GaplessSplicer::new(1000, 1, 10);
-        let ones = vec![1.0_f32; 20];
-        let twos = vec![1.0_f32; 20];
+        let xfade = GaplessSplicer::new(8_000, 1, 10);
+        let ones = vec![1.0_f32; 160];
+        let twos = vec![1.0_f32; 160];
         let mixed = xfade.splice_interleaved(&ones, &twos);
-        assert_eq!(mixed.len(), 30); // 20 + 20 - 10 overlap
+        assert_eq!(mixed.len(), 240); // 160 + 160 - 80 overlap
         // Midpoint of equal-power crossfade of identical DC signals: cos(pi/4)+sin(pi/4) ≈ 1.414
-        let mid = mixed[15];
+        let mid = mixed[120];
         assert!(mid > 1.2 && mid <= 1.42, "mid={mid}");
     }
 }

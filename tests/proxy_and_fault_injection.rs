@@ -635,8 +635,55 @@ async fn artwork_cache_two_level_atomic_eviction_and_lyrics_30d_sqlite_cache() {
         content_length: 1024,
         resolve_calls: AtomicUsize::new(0),
     });
-    let lyrics = CascadeLyricsProvider::new(provider, db);
+    let lyrics = CascadeLyricsProvider::new(provider, db.clone());
     let loaded = lyrics.fetch_lyrics(&track).await.unwrap().unwrap();
     assert_eq!(loaded.provider, "LRCLIB (Cached)");
     assert_eq!(loaded.lines[0].text, "Cached synced line");
+
+    // 3. LoopbackProxy /artwork endpoint caches in ArtworkCache and blocks loopback SSRF
+    let art_arc = Arc::new(art2);
+    let proxy = LoopbackProxy::start_with_caches(
+        Arc::new(TestProvider {
+            v1_url: "http://127.0.0.1:1/unused".into(),
+            v2_url: "http://127.0.0.1:1/unused".into(),
+            content_length: 1024,
+            resolve_calls: AtomicUsize::new(0),
+        }),
+        Arc::new(ChunkCache::new(&dir.path().join("art_chunks"), db.clone(), 1024 * 1024).unwrap()),
+        None,
+        Some(art_arc.clone()),
+    )
+    .await
+    .unwrap();
+
+    // Seed an entry in ArtworkCache and verify /artwork serves it with image/png
+    let png_bytes = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4];
+    art_arc
+        .put("https://img.example/cached.png", 0, png_bytes.clone())
+        .unwrap();
+    let http = reqwest::Client::new();
+    let resp = http
+        .get(format!(
+            "http://{}/artwork?url=https%3A%2F%2Fimg.example%2Fcached.png",
+            proxy.addr()
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.headers().get("content-type").unwrap().to_str().unwrap(),
+        "image/png"
+    );
+    assert_eq!(resp.bytes().await.unwrap().to_vec(), png_bytes);
+
+    let ssrf_resp = http
+        .get(format!(
+            "http://{}/artwork?url=http%3A%2F%2F127.0.0.1%3A8080%2Fsecret",
+            proxy.addr()
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ssrf_resp.status(), 403);
 }

@@ -43,16 +43,70 @@ pub(crate) fn join_runs(v: &Value) -> String {
         .unwrap_or_default()
 }
 
+fn upgrade_thumbnail_url(url: String) -> String {
+    let is_google_cdn = url.contains("googleusercontent.com/") || url.contains("ggpht.com/");
+    if !is_google_cdn {
+        return url;
+    }
+    if let Some((prefix, suffix)) = url.rsplit_once('=') {
+        if suffix.starts_with('w') && suffix.contains("-h") {
+            let width_digits: String = suffix
+                .strip_prefix('w')
+                .unwrap_or("")
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            if width_digits.parse::<u32>().is_ok_and(|w| w < 544) {
+                return format!("{prefix}=w544-h544-l90-rj");
+            }
+        } else if let Some(rest) = suffix.strip_prefix('s') {
+            let size_digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if size_digits.parse::<u32>().is_ok_and(|s| s < 544) {
+                return format!("{prefix}=s544");
+            }
+        }
+    }
+    url
+}
+
+fn normalize_thumbnail_url(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let normalized = if let Some(rest) = trimmed.strip_prefix("//") {
+        format!("https://{rest}")
+    } else if let Some(rest) = trimmed.strip_prefix("http://")
+        && !rest.starts_with("127.0.0.1")
+        && !rest.starts_with("localhost")
+    {
+        format!("https://{rest}")
+    } else {
+        trimmed.to_owned()
+    };
+    Some(upgrade_thumbnail_url(normalized))
+}
+
 pub(crate) fn best_thumbnail(v: &Value) -> Option<String> {
     let thumbs = v
         .pointer("/thumbnail/musicThumbnailRenderer/thumbnail/thumbnails")
+        .or_else(|| v.pointer("/thumbnailRenderer/musicThumbnailRenderer/thumbnail/thumbnails"))
+        .or_else(|| v.pointer("/thumbnail/croppedSquareThumbnailRenderer/thumbnail/thumbnails"))
+        .or_else(|| v.pointer("/musicThumbnailRenderer/thumbnail/thumbnails"))
         .or_else(|| v.pointer("/thumbnail/thumbnails"))
         .and_then(Value::as_array)?;
     thumbs
         .iter()
-        .max_by_key(|t| t.get("width").and_then(Value::as_u64).unwrap_or(0))
-        .and_then(|t| t.get("url").and_then(Value::as_str))
-        .map(str::to_owned)
+        .filter_map(|t| {
+            let url = t
+                .get("url")
+                .and_then(Value::as_str)
+                .and_then(normalize_thumbnail_url)?;
+            let width = t.get("width").and_then(Value::as_u64).unwrap_or(0);
+            Some((width, url))
+        })
+        .max_by_key(|(w, _)| *w)
+        .map(|(_, url)| url)
 }
 
 pub(crate) fn parse_music_responsive_item(item: &Value) -> Option<Track> {
@@ -115,11 +169,29 @@ pub(crate) fn parse_music_responsive_item(item: &Value) -> Option<Track> {
                     text.to_ascii_lowercase().as_str(),
                     "song" | "video" | "single" | "album" | "ep"
                 )
+                && !text.ends_with(" plays")
+                && !text.ends_with(" views")
+                && !text.ends_with(" listeners")
             {
                 artists.push(ArtistRef {
                     id: None,
                     name: text.to_owned(),
                 });
+            }
+        }
+    }
+
+    if duration_ms == 0
+        && let Some(runs) = flex
+            .get(2)
+            .and_then(|c| c.pointer("/musicResponsiveListItemFlexColumnRenderer/text/runs"))
+            .and_then(Value::as_array)
+    {
+        for run in runs {
+            let text = run.get("text").and_then(Value::as_str).unwrap_or("").trim();
+            if text.contains(':') && text.chars().all(|c| c.is_ascii_digit() || c == ':') {
+                duration_ms = parse_duration_text(text);
+                break;
             }
         }
     }

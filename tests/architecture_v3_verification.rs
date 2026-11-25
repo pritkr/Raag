@@ -640,7 +640,7 @@ async fn arch3_offline_vault_isolates_pinned_collections_from_lru_cache_eviction
         relative_path: Some("downloads/pinned_track.m4a".into()),
         bytes_downloaded: 1024,
         total_bytes: 1024,
-        sha256_hex: None,
+        sha256_hex: Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".into()),
         tags_embedded: true,
         created_at_unix_secs: 1_700_000_000,
         updated_at_unix_secs: 1_700_000_000,
@@ -677,6 +677,7 @@ fn settings_surfaces_po_token_diagnostics_badge_and_audio_dsp_controls() -> Resu
     })
     .expect("desktop headless starts cleanly");
 
+    app.wait_for("Raag")?;
     app.press("id:nav-settings")?;
     app.wait_for("Stream Acquisition & PO Token")?;
     app.wait_for("Degraded Fallback")?;

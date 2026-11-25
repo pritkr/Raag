@@ -416,6 +416,7 @@ impl NshAudioBackend {
 pub enum DspControlUpdate {
     SetConfig(DspConfig),
     SetTrackLoudnessDb(Option<f32>),
+    SetVolumeBoost(f32),
 }
 
 /// Real-time audio callback consumer reading decoded PCM frames from a lock-free SPSC ring
@@ -447,6 +448,7 @@ impl LockFreeAudioConsumer {
             match upd {
                 DspControlUpdate::SetConfig(cfg) => self.dsp.apply_config(&cfg),
                 DspControlUpdate::SetTrackLoudnessDb(db) => self.dsp.set_track_loudness_db(db),
+                DspControlUpdate::SetVolumeBoost(vol) => self.dsp.set_volume_boost(vol),
             }
         }
         let popped = self.consumer.pop_slice(out);
@@ -529,7 +531,7 @@ impl AudioBackend for NshAudioBackend {
     }
 
     async fn set_volume(&self, volume: f32) -> CoreResult<()> {
-        let clamped = volume.clamp(0.0, 1.0);
+        let clamped = volume.clamp(0.0, 1.6);
         self.volume_bits
             .store(clamped.to_bits() as u64, Ordering::SeqCst);
         let _ = self.control_tx.send(NshAudioControl::SetVolume(clamped));

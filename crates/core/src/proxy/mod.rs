@@ -31,6 +31,7 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
+use crate::cache::artwork::ArtworkCache;
 use crate::cache::chunks::{CHUNK_SIZE, ChunkCache};
 use crate::offline::{resolve_confined_path, validate_video_id};
 use crate::unix_secs;
@@ -51,6 +52,7 @@ struct ProxyState {
     provider: Arc<dyn MusicProvider>,
     chunks: Arc<ChunkCache>,
     offline: Option<Arc<dyn OfflineStore>>,
+    artwork: Option<Arc<ArtworkCache>>,
     http: reqwest::Client,
     slots: RwLock<DualBufferSlots>,
     coalescer: ChunkCoalescer,
@@ -62,13 +64,22 @@ impl LoopbackProxy {
         provider: Arc<dyn MusicProvider>,
         chunks: Arc<ChunkCache>,
     ) -> CoreResult<Self> {
-        Self::start_with_offline(provider, chunks, None).await
+        Self::start_with_caches(provider, chunks, None, None).await
     }
 
     pub async fn start_with_offline(
         provider: Arc<dyn MusicProvider>,
         chunks: Arc<ChunkCache>,
         offline: Option<Arc<dyn OfflineStore>>,
+    ) -> CoreResult<Self> {
+        Self::start_with_caches(provider, chunks, offline, None).await
+    }
+
+    pub async fn start_with_caches(
+        provider: Arc<dyn MusicProvider>,
+        chunks: Arc<ChunkCache>,
+        offline: Option<Arc<dyn OfflineStore>>,
+        artwork: Option<Arc<ArtworkCache>>,
     ) -> CoreResult<Self> {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -86,6 +97,7 @@ impl LoopbackProxy {
             provider,
             chunks,
             offline,
+            artwork,
             http,
             slots: RwLock::new(DualBufferSlots::default()),
             coalescer: ChunkCoalescer::new(),
@@ -182,7 +194,8 @@ impl LoopbackProxy {
     }
 
     pub fn stream_url(&self, video_id: &str, itag: u32) -> String {
-        format!("http://{}/stream/{video_id}?itag={itag}", self.addr)
+        let ext = if matches!(itag, 251 | 774) { "" } else { ".m4a" };
+        format!("http://{}/stream/{video_id}{ext}?itag={itag}", self.addr)
     }
 
     /// Advances the monotonic playback generation ID, cancelling any in-flight
@@ -196,8 +209,9 @@ impl LoopbackProxy {
     }
 
     pub fn stream_url_with_gen(&self, video_id: &str, itag: u32, generation: u64) -> String {
+        let ext = if matches!(itag, 251 | 774) { "" } else { ".m4a" };
         format!(
-            "http://{}/stream/{video_id}?itag={itag}&gen={generation}",
+            "http://{}/stream/{video_id}{ext}?itag={itag}&gen={generation}",
             self.addr
         )
     }
@@ -233,11 +247,146 @@ fn parse_byte_range(header: &str, total_len: u64) -> Option<(u64, u64)> {
     Some((start, end))
 }
 
+fn detect_image_mime(bytes: &[u8]) -> &'static str {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+        "image/png"
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        "image/jpeg"
+    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        "image/webp"
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        "image/gif"
+    } else {
+        "image/jpeg"
+    }
+}
+
+async fn handle_artwork_request(
+    req: Request<Incoming>,
+    state: Arc<ProxyState>,
+) -> Response<Full<Bytes>> {
+    let mut target_url: Option<String> = None;
+    if let Some(q) = req.uri().query() {
+        for (k, v) in url::form_urlencoded::parse(q.as_bytes()) {
+            if k == "url" {
+                target_url = Some(v.into_owned());
+                break;
+            }
+        }
+    }
+    let Some(raw_url) = target_url else {
+        return simple_response(StatusCode::BAD_REQUEST, "missing url");
+    };
+    let normalized = if let Some(rest) = raw_url.strip_prefix("//") {
+        format!("https://{rest}")
+    } else {
+        raw_url
+    };
+    let Ok(parsed) = url::Url::parse(&normalized) else {
+        return simple_response(StatusCode::BAD_REQUEST, "invalid artwork url");
+    };
+    if !matches!(parsed.scheme(), "https" | "http") {
+        return simple_response(StatusCode::BAD_REQUEST, "unsupported scheme");
+    }
+    if matches!(
+        parsed.host_str(),
+        Some("127.0.0.1" | "localhost" | "::1" | "0.0.0.0")
+    ) {
+        return simple_response(StatusCode::FORBIDDEN, "loopback artwork forbidden");
+    }
+
+    if let Some(cache) = &state.artwork
+        && let Some(bytes) = cache.get(&normalized, 0)
+    {
+        let mime = detect_image_mime(&bytes);
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, mime)
+            .header(CONTENT_LENGTH, bytes.len())
+            .header("Cache-Control", "public, max-age=86400")
+            .body(Full::new(Bytes::from(bytes)))
+            .unwrap();
+    }
+
+    let mut last_status = StatusCode::BAD_GATEWAY;
+    for attempt in 0..3u32 {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_millis(120 * u64::from(attempt))).await;
+        }
+        let resp = state
+            .http
+            .get(normalized.as_str())
+            .header("Accept", "image/jpeg,image/png,image/webp,*/*;q=0.8")
+            .header(
+                "User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+            )
+            .send()
+            .await;
+
+        match resp {
+            Ok(r) if r.status().is_success() => {
+                if let Ok(bytes) = r.bytes().await
+                    && !bytes.is_empty()
+                {
+                    let vec = bytes.to_vec();
+                    let mime = detect_image_mime(&vec);
+                    if let Some(cache) = &state.artwork {
+                        let _ = cache.put(&normalized, 0, vec.clone());
+                    }
+                    return Response::builder()
+                        .status(StatusCode::OK)
+                        .header(CONTENT_TYPE, mime)
+                        .header(CONTENT_LENGTH, vec.len())
+                        .header("Cache-Control", "public, max-age=86400")
+                        .body(Full::new(Bytes::from(vec)))
+                        .unwrap();
+                }
+            }
+            Ok(r) => {
+                last_status = StatusCode::from_u16(r.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+                if r.status().is_client_error() && r.status().as_u16() != 429 {
+                    if let Some(fallback) = normalized.strip_suffix("=w544-h544-l90-rj") {
+                        let smaller = format!("{fallback}=w226-h226-l90-rj");
+                        if let Ok(fr) = state.http.get(&smaller).send().await
+                            && fr.status().is_success()
+                            && let Ok(bytes) = fr.bytes().await
+                            && !bytes.is_empty()
+                        {
+                            let vec = bytes.to_vec();
+                            let mime = detect_image_mime(&vec);
+                            if let Some(cache) = &state.artwork {
+                                let _ = cache.put(&normalized, 0, vec.clone());
+                            }
+                            return Response::builder()
+                                .status(StatusCode::OK)
+                                .header(CONTENT_TYPE, mime)
+                                .header(CONTENT_LENGTH, vec.len())
+                                .header("Cache-Control", "public, max-age=86400")
+                                .body(Full::new(Bytes::from(vec)))
+                                .unwrap();
+                        }
+                    }
+                    break;
+                }
+            }
+            Err(_) => {
+                last_status = StatusCode::BAD_GATEWAY;
+            }
+        }
+    }
+
+    simple_response(last_status, "artwork fetch failed")
+}
+
 async fn handle_request(
     req: Request<Incoming>,
     state: Arc<ProxyState>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     let path = req.uri().path();
+    if path == "/artwork" {
+        return Ok(handle_artwork_request(req, state).await);
+    }
     let Some(video_id_raw) = path.strip_prefix("/stream/") else {
         return Ok(simple_response(StatusCode::NOT_FOUND, "not found"));
     };
@@ -270,6 +419,7 @@ async fn handle_request(
         ));
     }
 
+    let is_head = *req.method() == hyper::Method::HEAD;
     let range_header = req
         .headers()
         .get(RANGE)
@@ -346,6 +496,13 @@ async fn handle_request(
         return Ok(simple_response(StatusCode::BAD_GATEWAY, "empty stream"));
     }
 
+    let clean_mime = mime_type
+        .split(';')
+        .next()
+        .unwrap_or("audio/mp4")
+        .trim()
+        .to_owned();
+
     let (req_start, req_end, is_partial) = match range_header.as_deref() {
         Some(hdr) => match parse_byte_range(hdr, total_len) {
             Some((s, e)) => (s, e, true),
@@ -359,6 +516,25 @@ async fn handle_request(
         },
         None => (0, total_len.saturating_sub(1), false),
     };
+
+    if is_head {
+        let mut builder = Response::builder()
+            .status(if is_partial {
+                StatusCode::PARTIAL_CONTENT
+            } else {
+                StatusCode::OK
+            })
+            .header(ACCEPT_RANGES, "bytes")
+            .header(CONTENT_TYPE, &clean_mime)
+            .header(CONTENT_LENGTH, req_end - req_start + 1);
+        if is_partial {
+            builder = builder.header(
+                CONTENT_RANGE,
+                format!("bytes {req_start}-{req_end}/{total_len}"),
+            );
+        }
+        return Ok(builder.body(Full::new(Bytes::new())).unwrap());
+    }
 
     let effective_end = req_end;
     let windows = coalesce_byte_range(req_start, effective_end, total_len, MAX_COALESCED_WINDOW_CHUNKS);
@@ -399,7 +575,7 @@ async fn handle_request(
 
     let actual_end = req_start + (out.len() as u64).saturating_sub(1);
     let mut builder = Response::builder()
-        .header(CONTENT_TYPE, mime_type)
+        .header(CONTENT_TYPE, &clean_mime)
         .header(ACCEPT_RANGES, "bytes")
         .header(CONTENT_LENGTH, out.len().to_string());
 

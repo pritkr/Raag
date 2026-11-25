@@ -1,6 +1,6 @@
 //! Pure Rust NSH Live Preview Host (`nsh_preview`).
 //!
-//! Runs the REAL Pure Rust NSH `resonance::App` (`nsh-engine =0.6.1`, `nsh-core`,
+//! Runs the REAL Pure Rust NSH `resonance::App` (`nsh-engine =0.7.0`, `nsh-core`,
 //! `nsh-base`, `theme.json`, `src/screens/*.rs`, `src/store.rs`) inside a real
 //! `nsh_engine::Engine` instance, captures every `MountBatch` frame emitted by
 //! NSH's Taffy layout & reactive signal engine, and serves the live Native View
@@ -578,7 +578,7 @@ mod host {
             let apk_meta = std::fs::metadata(apk_path).ok();
             TreeResponse {
                 version: self.scene.version,
-                engine: "Pure Rust NSH 0.6.1 (nsh-engine + nsh-core + nsh-base)",
+                engine: "Pure Rust NSH 0.7.0 (nsh-engine + nsh-core + nsh-base)",
                 device: self.scene.device.clone(),
                 scheme: self.scene.scheme.clone(),
                 width: self.scene.width,

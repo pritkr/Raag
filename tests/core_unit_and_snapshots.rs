@@ -316,6 +316,148 @@ fn innertube_json_snapshot_parsers_cover_search_home_next_player_and_lyrics() {
     let doc = parse_ytm_lyrics_response("rad01", &lyrics_json).unwrap();
     assert_eq!(doc.lines.len(), 2);
     assert_eq!(doc.sync_kind, LyricSyncKind::Plain);
+
+    // 6. Home two-row thumbnailRenderer + Search itemSectionRenderer/musicCardShelfRenderer + Album artwork inheritance
+    let home_tworow_json = json!({
+        "contents": {
+            "singleColumnBrowseResultsRenderer": {
+                "tabs": [{
+                    "tabRenderer": {
+                        "content": {
+                            "sectionListRenderer": {
+                                "continuations": [{
+                                    "nextContinuationData": { "continuation": "CONT_TOKEN_1" }
+                                }],
+                                "contents": [{
+                                    "musicCarouselShelfRenderer": {
+                                        "header": { "musicCarouselShelfBasicHeaderRenderer": { "title": { "runs": [{ "text": "Trending playlists" }] } } },
+                                        "contents": [{
+                                            "musicTwoRowItemRenderer": {
+                                                "title": { "runs": [{ "text": "Late Night" }] },
+                                                "subtitle": { "runs": [{ "text": "Curated" }] },
+                                                "thumbnailRenderer": {
+                                                    "musicThumbnailRenderer": {
+                                                        "thumbnail": {
+                                                            "thumbnails": [{ "url": "//yt3.googleusercontent.com/cover=s576", "width": 576, "height": 576 }]
+                                                        }
+                                                    }
+                                                },
+                                                "navigationEndpoint": {
+                                                    "browseEndpoint": { "browseId": "VLPL123" }
+                                                }
+                                            }
+                                        }]
+                                    }
+                                }]
+                            }
+                        }
+                    }
+                }]
+            }
+        }
+    });
+    let two_row_sections = parse_home_response(&home_tworow_json).unwrap();
+    assert_eq!(two_row_sections.len(), 1);
+    assert!(matches!(
+        &two_row_sections[0].items[0],
+        HomeItem::Collection { browse_id, artwork_url: Some(url), .. }
+            if browse_id == "VLPL123" && url == "https://yt3.googleusercontent.com/cover=s576"
+    ));
+    assert_eq!(
+        resonance_core::innertube::parser::extract_home_continuation(&home_tworow_json).as_deref(),
+        Some("CONT_TOKEN_1")
+    );
+
+    let all_search_json = json!({
+        "contents": {
+            "tabbedSearchResultsRenderer": {
+                "tabs": [{
+                    "tabRenderer": {
+                        "content": {
+                            "sectionListRenderer": {
+                                "contents": [
+                                    {
+                                        "musicCardShelfRenderer": {
+                                            "title": { "runs": [{ "text": "Discovery" }] },
+                                            "subtitle": { "runs": [{ "text": "Album • Daft Punk" }] },
+                                            "thumbnail": { "musicThumbnailRenderer": { "thumbnail": { "thumbnails": [{ "url": "https://yt3.googleusercontent.com/alb=s544", "width": 544 }] } } },
+                                            "onTap": { "browseEndpoint": { "browseId": "MPREb_DISCOVERY" } }
+                                        }
+                                    },
+                                    {
+                                        "itemSectionRenderer": {
+                                            "contents": [{
+                                                "musicResponsiveListItemRenderer": {
+                                                    "playlistItemData": { "videoId": "vid_item_sec" },
+                                                    "flexColumns": [
+                                                        { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "One More Time" }] } } },
+                                                        { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "Daft Punk" }, { "text": " • " }, { "text": "5:20" }] } } }
+                                                    ]
+                                                }
+                                            }]
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }]
+            }
+        }
+    });
+    let all_res = parse_search_response("daft punk", &all_search_json).unwrap();
+    assert_eq!(all_res.albums.len(), 1);
+    assert_eq!(all_res.albums[0].id, "MPREb_DISCOVERY");
+    assert_eq!(all_res.tracks.len(), 1);
+    assert_eq!(all_res.tracks[0].id, "vid_item_sec");
+
+    let album_browse_json = json!({
+        "contents": {
+            "twoColumnBrowseResultsRenderer": {
+                "tabs": [{
+                    "tabRenderer": {
+                        "content": {
+                            "sectionListRenderer": {
+                                "contents": [{
+                                    "musicResponsiveHeaderRenderer": {
+                                        "title": { "runs": [{ "text": "Random Access Memories" }] },
+                                        "thumbnail": { "musicThumbnailRenderer": { "thumbnail": { "thumbnails": [{ "url": "https://yt3.googleusercontent.com/ram=s1200", "width": 1200 }] } } }
+                                    }
+                                }]
+                            }
+                        }
+                    }
+                }],
+                "secondaryContents": {
+                    "sectionListRenderer": {
+                        "contents": [{
+                            "musicShelfRenderer": {
+                                "contents": [{
+                                    "musicResponsiveListItemRenderer": {
+                                        "playlistItemData": { "videoId": "IluRBvnYMoY" },
+                                        "flexColumns": [
+                                            { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "Give Life Back to Music" }] } } },
+                                            { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "Daft Punk" }] } } }
+                                        ]
+                                    }
+                                }]
+                            }
+                        }]
+                    }
+                }
+            }
+        }
+    });
+    let col = resonance_core::innertube::parser::parse_collection_response(
+        "MPREb_K8qWMWVqXGi",
+        &album_browse_json,
+    )
+    .unwrap();
+    assert_eq!(col.tracks.len(), 1);
+    assert_eq!(
+        col.tracks[0].artwork_url.as_deref(),
+        Some("https://yt3.googleusercontent.com/ram=s1200")
+    );
 }
 
 #[tokio::test]

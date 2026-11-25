@@ -510,6 +510,13 @@ fn collection_section_view(
     let page_size = 8;
     let header_id = section_id.clone();
 
+    let page_memo = computed({
+        let id = section_id.clone();
+        move || store::section_page(&id)
+    });
+    let page = page_memo.get();
+    let slice = paginated_slice(&collections, page, page_size);
+
     view()
         .gap_3()
         .child(section_header_with_pager(
@@ -526,7 +533,7 @@ fn collection_section_view(
                 .when(desktop, |v| v.flex_row().flex_wrap().items_start().gap_4())
                 .when(!desktop, |v| v.gap_2())
                 .py_1()
-                .children(collections.into_iter().map(|col| {
+                .children(slice.into_iter().map(|col| {
                             let mono = col
                                 .title
                                 .chars()

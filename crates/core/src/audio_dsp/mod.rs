@@ -47,6 +47,7 @@ pub struct DspPipeline {
     pub eq: TenBandEq,
     pub silence: SilenceSkipper,
     pub splicer: GaplessSplicer,
+    volume_boost: f32,
 }
 
 impl DspPipeline {
@@ -68,7 +69,17 @@ impl DspPipeline {
             eq,
             silence,
             splicer: GaplessSplicer::new(sample_rate, channels, config.crossfade_ms),
+            volume_boost: 1.0,
         }
+    }
+
+    /// Sets linear output gain boost (`1.0..=1.6`) for >100% volume amplification.
+    pub fn set_volume_boost(&mut self, volume: f32) {
+        self.volume_boost = volume.clamp(1.0, 1.6);
+    }
+
+    pub fn volume_boost(&self) -> f32 {
+        self.volume_boost
     }
 
     pub fn apply_config(&mut self, config: &DspConfig) {
@@ -92,6 +103,29 @@ impl DspPipeline {
         }
         self.loudness.process_in_place(interleaved);
         self.eq.process_interleaved(interleaved);
+        if self.volume_boost > 1.0 + 1e-6 {
+            let boost = self.volume_boost;
+            for s in interleaved.iter_mut() {
+                *s = loudness::soft_limit(*s * boost);
+            }
+        }
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn volume_boost_above_100_percent_amplifies_and_soft_limits() {
+        let mut dsp = DspPipeline::new(48_000, 2, &DspConfig::default());
+        dsp.set_volume_boost(1.6);
+        let mut samples = [0.25_f32, -0.25_f32, 0.8_f32, -0.8_f32];
+        assert!(dsp.process_interleaved(&mut samples));
+        assert!((samples[0] - 0.4).abs() < 1e-5);
+        assert!((samples[1] + 0.4).abs() < 1e-5);
+        assert!(samples[2] > 0.8 && samples[2] < 1.0);
+        assert!(samples[3] < -0.8 && samples[3] > -1.0);
     }
 }

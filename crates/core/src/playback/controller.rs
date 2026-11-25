@@ -233,10 +233,16 @@ impl PlaybackController {
                     )
                 }
                 Err(e) => {
-                    // If offline, attempt direct loopback proxy URL against cached chunks (itag 251).
+                    // If offline, attempt direct loopback proxy URL against cached chunks.
                     if matches!(e, CoreError::Provider(_) | CoreError::Offline(_)) {
+                        let fallback_itag = if cfg!(any(target_os = "macos", target_os = "ios")) {
+                            140
+                        } else {
+                            251
+                        };
                         (
-                            self.proxy.stream_url_with_gen(&track.id, 251, proxy_gen),
+                            self.proxy
+                                .stream_url_with_gen(&track.id, fallback_itag, proxy_gen),
                             track.duration_ms,
                             true,
                         )

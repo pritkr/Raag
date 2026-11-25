@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dir = data_dir();
     std::fs::create_dir_all(&dir)?;
 
-    let cache = Arc::new(SqliteCacheStore::open(&dir.join("resonance.db"))?);
+    let cache = Arc::new(SqliteCacheStore::open(&dir)?);
     let chunks = Arc::new(ChunkCache::new(
         &dir.join("chunks"),
         cache.clone(),

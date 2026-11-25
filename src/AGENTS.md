@@ -1,6 +1,6 @@
 # AGENTS.md — `src/` (Pure Rust NSH UI & Runtime Bridge)
 
-Load official `.agents/skills/nsh` and `.agents/skills/nsh-design-guides` when designing or editing UI/reactivity. Pin stays `=0.6.1` (check local Cargo crate sources if upstream docs differ).
+Load official `.agents/skills/nsh` and `.agents/skills/nsh-design-guides` when designing or editing UI/reactivity. Pin stays `=0.7.0` (check local Cargo crate sources if upstream docs differ).
 
 - **Entry & Capabilities:** `nsh.json` (`"rust": "."`, `"root": "App"`, `"theme": "theme.json"`). Add any new external domain to `nsh.json` `capabilities.network.hosts`. `src/lib.rs` exports `#[native_module("resonance/native")]` and `#[component] pub fn App()`.
 - **State & Threading:** `store.rs` (`global::<AppState>`) runs on the NSH engine thread and must stay non-blocking. `live_engine.rs` owns Tokio, `PlaybackController`, `LoopbackProxy`, and SQLite off-thread, sending `LiveUpdate` via `crossbeam_channel`.

@@ -443,7 +443,7 @@ export default function App() {
               Raag — Pure Rust NSH Live Host
             </div>
             <div className="text-[11px] text-[#9fa6b2]">
-              {tree?.engine ?? 'Connecting to Rust nsh-engine 0.6.1...'}
+              {tree?.engine ?? 'Connecting to Rust nsh-engine 0.7.0...'}
             </div>
           </div>
         </div>

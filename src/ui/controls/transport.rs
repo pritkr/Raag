@@ -20,10 +20,22 @@ pub fn seek_slider(
     duration_ms: impl Fn() -> f64 + 'static,
     on_seek: impl Fn(u64) + 'static,
 ) -> impl IntoElement {
+    let dur_rc = std::rc::Rc::new(duration_ms);
+    let dur_for_val = dur_rc.clone();
     slider()
-        .value(move || Some(SliderValue::Single(position_ms())))
+        .value(move || {
+            let d = dur_for_val();
+            if d <= 0.0 {
+                Some(SliderValue::Single(0.0))
+            } else {
+                Some(SliderValue::Single(position_ms().clamp(0.0, d)))
+            }
+        })
         .min(0.0)
-        .max(move || duration_ms().max(1.0))
+        .max(move || {
+            let d = dur_rc();
+            if d <= 0.0 { 1000.0 } else { d }
+        })
         .step(500.0)
         .accessibility_label("Playback Position")
         .track_class("w-full h-3 justify-center")
@@ -37,7 +49,7 @@ pub fn seek_slider(
         })
 }
 
-/// Interactive `nsh_base::slider` for volume control (0.0 ..= 1.0).
+/// Interactive `nsh_base::slider` for volume control (0.0 ..= 1.6).
 pub fn volume_slider(
     volume: impl Fn() -> f64 + 'static,
     on_change: impl Fn(f32) + 'static,
@@ -45,7 +57,7 @@ pub fn volume_slider(
     slider()
         .value(move || Some(SliderValue::Single(volume())))
         .min(0.0)
-        .max(1.0)
+        .max(1.6)
         .step(0.02)
         .accessibility_label("Volume")
         .track_class("w-24 h-6 justify-center")
@@ -88,12 +100,12 @@ pub fn desktop_player_bar() -> impl IntoElement {
                         .h_full()
                         .w(move || {
                             let snap = store::player_snapshot();
-                            let pct = if snap.duration_ms > 0 {
-                                (snap.position_ms as f32 / snap.duration_ms as f32) * 100.0
+                            let frac = if snap.duration_ms > 0 {
+                                snap.position_ms as f32 / snap.duration_ms as f32
                             } else {
                                 0.0
                             };
-                            percentage(pct.clamp(0.0, 100.0))
+                            percentage(frac.clamp(0.0, 1.0))
                         })
                         .bg(color_player_accent),
                 ),
@@ -143,18 +155,42 @@ pub fn desktop_player_bar() -> impl IntoElement {
                                         .justify_center()
                                         .overflow_hidden()
                                         .child(
-                                            text(move || {
-                                                SharedString::from(
+                                            when(
+                                                || {
                                                     store::player_snapshot()
                                                         .current_track
-                                                        .map(|t| t.fallback_monogram())
-                                                        .unwrap_or_else(|| "♪".into()),
-                                                )
-                                            })
-                                            .test_id("mini-player-monogram")
-                                            .text_base()
-                                            .font_weight(FontWeight::BOLD)
-                                            .text_color(move || theme().primary_foreground),
+                                                        .and_then(|t| t.artwork_url)
+                                                        .is_some()
+                                                },
+                                                || {
+                                                    image(move || {
+                                                        let raw = store::player_snapshot()
+                                                            .current_track
+                                                            .and_then(|t| t.artwork_url);
+                                                        nsh_core::element::ImageSrc::from(
+                                                            store::resolve_artwork_url(raw)
+                                                                .unwrap_or_default(),
+                                                        )
+                                                    })
+                                                    .size(px(46.0))
+                                                    .object_fit(ResizeMode::Cover)
+                                                    .rounded(px(6.0))
+                                                },
+                                            )
+                                            .otherwise(|| {
+                                                text(move || {
+                                                    SharedString::from(
+                                                        store::player_snapshot()
+                                                            .current_track
+                                                            .map(|t| t.fallback_monogram())
+                                                            .unwrap_or_else(|| "♪".into()),
+                                                    )
+                                                })
+                                                .test_id("mini-player-monogram")
+                                                .text_base()
+                                                .font_weight(FontWeight::BOLD)
+                                                .text_color(move || theme().primary_foreground)
+                                            }),
                                         ),
                                 )
                                 .child(
@@ -462,6 +498,7 @@ pub fn mini_player_bar(
     on_toggle_play: impl Fn() + 'static,
     on_next: impl Fn() + 'static,
 ) -> impl IntoElement {
+    let monogram_rc = std::rc::Rc::new(monogram);
     view()
         .backdrop_blur(px(16.0))
         .backdrop_material(BackdropMaterial::Regular)
@@ -478,7 +515,7 @@ pub fn mini_player_bar(
                     view()
                         .test_id("mini-player-progress")
                         .h_full()
-                        .w(move || percentage(progress_pct().clamp(0.0, 100.0)))
+                        .w(move || percentage((progress_pct() / 100.0).clamp(0.0, 1.0)))
                         .bg(color_player_accent),
                 ),
         )
@@ -517,12 +554,41 @@ pub fn mini_player_bar(
                                 .border_color(glass_hairline)
                                 .items_center()
                                 .justify_center()
+                                .overflow_hidden()
                                 .child(
-                                    text(monogram)
-                                        .test_id("mini-player-monogram")
-                                        .text_base()
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_color(move || theme().primary_foreground),
+                                    when(
+                                        || {
+                                            store::player_snapshot()
+                                                .current_track
+                                                .and_then(|t| t.artwork_url)
+                                                .is_some()
+                                        },
+                                        || {
+                                            image(move || {
+                                                let raw = store::player_snapshot()
+                                                    .current_track
+                                                    .and_then(|t| t.artwork_url);
+                                                nsh_core::element::ImageSrc::from(
+                                                    store::resolve_artwork_url(raw)
+                                                        .unwrap_or_default(),
+                                                )
+                                            })
+                                            .size(px(42.0))
+                                            .object_fit(ResizeMode::Cover)
+                                            .rounded_md()
+                                        },
+                                    )
+                                    .otherwise({
+                                        let m = monogram_rc.clone();
+                                        move || {
+                                            let m = m.clone();
+                                            text(move || m())
+                                                .test_id("mini-player-monogram")
+                                                .text_base()
+                                                .font_weight(FontWeight::BOLD)
+                                                .text_color(move || theme().primary_foreground)
+                                        }
+                                    }),
                                 ),
                         )
                         .child(
