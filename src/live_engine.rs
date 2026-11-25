@@ -11,11 +11,12 @@ use std::sync::{Arc, OnceLock};
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use resonance_contract::{
-    AuthSession, CacheStats, CacheStore, HomeSection, LyricsDocument, LyricsProvider,
-    MusicProvider, PlayerSnapshot, Playlist, SearchResults, Track,
+    AuthBackendStatus, AuthSession, CacheStats, CacheStore, HomeSection, LyricsDocument,
+    LyricsProvider, MusicProvider, PlayerSnapshot, Playlist, SearchResults, Track,
 };
 use resonance_core::cache::{ChunkCache, DEFAULT_MAX_AUDIO_CACHE_BYTES, SqliteCacheStore};
-use resonance_core::innertube::{FileAuthStore, InnerTubeClient};
+use resonance_core::innertube::InnerTubeClient;
+use resonance_core::innertube::auth::redact_secrets;
 use resonance_core::lyrics::CascadeLyricsProvider;
 use resonance_core::playback::PlaybackController;
 use resonance_core::proxy::LoopbackProxy;
@@ -23,7 +24,9 @@ use resonance_core::solver::QuickJsSolver;
 use resonance_core::sponsorblock::HttpSponsorBlockProvider;
 use tokio::runtime::Runtime;
 
-use crate::platform::create_platform_audio_backend;
+use crate::platform::{
+    create_platform_audio_backend, create_platform_auth_store, platform_auth_status,
+};
 
 /// Typed updates pushed from the background Tokio engine to the NSH UI thread.
 #[derive(Debug, Clone)]
@@ -47,6 +50,7 @@ pub enum LiveUpdate {
         signed_in: bool,
         banner: String,
     },
+    AuthStatus(AuthBackendStatus),
     StatusBanner(String),
 }
 
@@ -92,7 +96,7 @@ fn init_runtime() -> Result<LiveRuntime, String> {
         )
         .map_err(|e| format!("ChunkCache init failed: {e}"))?,
     );
-    let auth = Arc::new(FileAuthStore::new(&dir));
+    let auth = create_platform_auth_store(&dir);
     let solver = Arc::new(QuickJsSolver::new(&dir));
     let provider = Arc::new(
         InnerTubeClient::new(cache.clone(), auth, solver)
@@ -106,6 +110,7 @@ fn init_runtime() -> Result<LiveRuntime, String> {
     })?;
 
     let audio = create_platform_audio_backend();
+    let audio_cmd_rx = audio.take_command_receiver();
     let lyrics = Arc::new(CascadeLyricsProvider::new(provider.clone(), cache.clone()));
     let sponsorblock = Arc::new(HttpSponsorBlockProvider::new());
     let bus = resonance_contract::EventBus::new(128);
@@ -120,9 +125,31 @@ fn init_runtime() -> Result<LiveRuntime, String> {
     ));
 
     let (tx, rx) = unbounded();
+    if let Some(mut cmd_rx) = audio_cmd_rx {
+        let ctrl_for_media = controller.clone();
+        let tx_for_media = tx.clone();
+        rt.spawn(async move {
+            while let Some(cmd) = cmd_rx.recv().await {
+                match ctrl_for_media.handle_media_command(cmd).await {
+                    Ok(()) => {
+                        let snap = ctrl_for_media.snapshot().await;
+                        let _ = tx_for_media.send(LiveUpdate::PlaybackUpdated(snap));
+                    }
+                    Err(e) => {
+                        let _ = tx_for_media.send(LiveUpdate::StatusBanner(redact_secrets(
+                            &format!("Media command failed: {e}"),
+                        )));
+                    }
+                }
+            }
+        });
+    }
+
     let initial_snap = rt.block_on(controller.snapshot());
     let stats = cache.stats().unwrap_or_default();
-    let signed_in = provider.current_session().is_some();
+    let current_session = provider.current_session();
+    let signed_in = current_session.is_some();
+    let auth_status = platform_auth_status(current_session.as_ref());
     let proxy_base = format!("http://{}", proxy.addr());
     crate::store::set_proxy_base_url(&proxy_base);
     let _ = tx.send(LiveUpdate::Ready {
@@ -131,6 +158,7 @@ fn init_runtime() -> Result<LiveRuntime, String> {
         cache_stats: stats,
         signed_in,
     });
+    let _ = tx.send(LiveUpdate::AuthStatus(auth_status));
 
     Ok(LiveRuntime {
         rt,
@@ -228,13 +256,17 @@ pub fn dispatch_sign_in(cookie_header: String) {
         };
         match provider.sign_in(session) {
             Ok(()) => {
+                let status = platform_auth_status(provider.current_session().as_ref());
+                let _ = tx.send(LiveUpdate::AuthStatus(status));
                 let _ = tx.send(LiveUpdate::AuthUpdated {
                     signed_in: true,
                     banner: "Signed in securely (stored in OS Keystore)".into(),
                 });
             }
             Err(e) => {
-                let _ = tx.send(LiveUpdate::StatusBanner(format!("Sign-in failed: {e}")));
+                let _ = tx.send(LiveUpdate::StatusBanner(redact_secrets(&format!(
+                    "Sign-in failed: {e}"
+                ))));
             }
         }
     });
@@ -246,6 +278,8 @@ pub fn dispatch_sign_out() {
     let tx = rt.tx.clone();
     rt.rt.spawn(async move {
         let _ = provider.sign_out();
+        let status = platform_auth_status(provider.current_session().as_ref());
+        let _ = tx.send(LiveUpdate::AuthStatus(status));
         let _ = tx.send(LiveUpdate::AuthUpdated {
             signed_in: false,
             banner: "Signed out — running in anonymous mode".into(),

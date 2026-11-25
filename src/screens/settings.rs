@@ -4,9 +4,9 @@
 //! and `library_screen()` (`AppTab::Library`) so preferences, SAPISIDHASH account auth,
 //! and offline chunk cache controls stay unified with zero duplication.
 
-use nsh_base::{input, theme};
+use nsh_base::{button, input, theme};
 use nsh_core::prelude::*;
-use resonance_contract::{HomeItem, Track};
+use resonance_contract::{CredentialBackendKind, HomeItem, Track};
 
 use crate::store::{self, AppTab, ThemeChoice};
 use crate::ui::controls::{
@@ -42,6 +42,14 @@ fn collect_session_tracks() -> Vec<Track> {
     fallback
 }
 
+fn backend_badge_label(kind: CredentialBackendKind) -> &'static str {
+    match kind {
+        CredentialBackendKind::OsKeyring => "OS Keychain",
+        CredentialBackendKind::EncryptedFallbackFile => "Local 0600 File",
+        CredentialBackendKind::MemoryOnly => "Memory Only",
+    }
+}
+
 fn account_card(cookie_draft: Signal<String>) -> impl IntoElement {
     view()
         .p_4()
@@ -64,41 +72,66 @@ fn account_card(cookie_draft: Signal<String>) -> impl IntoElement {
                 )
                 .child(
                     view()
-                        .px_2p5()
-                        .py_1()
-                        .rounded_full()
-                        .bg(pill_glass_surface)
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
                         .child(
-                            text(move || {
-                                if store::auth_info().0 {
-                                    SharedString::from("Connected")
-                                } else {
-                                    SharedString::from("Anonymous")
-                                }
-                            })
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(move || {
-                                if store::auth_info().0 {
-                                    color_status_ok()
-                                } else {
-                                    theme().muted_foreground
-                                }
-                            }),
+                            view()
+                                .px_2p5()
+                                .py_1()
+                                .rounded_full()
+                                .bg(pill_glass_surface)
+                                .child(
+                                    text(move || {
+                                        SharedString::from(backend_badge_label(
+                                            store::auth_backend_status().backend,
+                                        ))
+                                    })
+                                    .text_xs()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(move || theme().muted_foreground),
+                                ),
+                        )
+                        .child(
+                            view()
+                                .px_2p5()
+                                .py_1()
+                                .rounded_full()
+                                .bg(pill_glass_surface)
+                                .child(
+                                    text(move || {
+                                        if store::auth_info().0 {
+                                            SharedString::from("Connected")
+                                        } else {
+                                            SharedString::from("Anonymous")
+                                        }
+                                    })
+                                    .text_xs()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(move || {
+                                        if store::auth_info().0 {
+                                            color_status_ok()
+                                        } else {
+                                            theme().muted_foreground
+                                        }
+                                    }),
+                                ),
                         ),
                 ),
         )
         .child(
             text(move || {
                 let (signed_in, acct) = store::auth_info();
+                let status = store::auth_backend_status();
                 if signed_in {
                     SharedString::from(format!(
-                        "Connected: {}",
-                        acct.unwrap_or_else(|| "Google Account".into())
+                        "Connected: {} ({})",
+                        acct.unwrap_or_else(|| "Google Account".into()),
+                        backend_badge_label(status.backend)
                     ))
                 } else {
                     SharedString::from(
-                        "Anonymous mode active. Optional Sign-In uses Android WebView with '; wv' User-Agent stripping and SAPISIDHASH isolation.",
+                        "Anonymous mode active. On Desktop, open music.youtube.com in your browser, copy the Request Cookie header (including SAPISID / __Secure-3PAPISID) from DevTools Network, and paste it below.",
                     )
                 }
             })
@@ -113,10 +146,10 @@ fn account_card(cookie_draft: Signal<String>) -> impl IntoElement {
                         .gap_2()
                         .child(
                             input()
-                                .test_id("cookie-input")
+                                .test_id("desktop-cookie-input")
                                 .value(move || cookie_draft.get())
                                 .on_change(move |v: &str| cookie_draft.set(v.to_owned()))
-                                .placeholder("SAPISID=...; __Secure-3PAPISID=...")
+                                .placeholder("Paste Cookie header (SAPISID=...; __Secure-3PAPISID=...)")
                                 .placeholder_color(|| color(theme().muted_foreground))
                                 .caret_color(|| color(theme().primary))
                                 .min_h(px(MOBILE_MIN_TOUCH_TARGET))
@@ -128,12 +161,59 @@ fn account_card(cookie_draft: Signal<String>) -> impl IntoElement {
                                 .border_1()
                                 .border_color(move || theme().input),
                         )
-                        .child(primary_button("Sign In with Cookies", move || {
-                            store::sign_in_with_cookies(&cookie_draft.get_untracked());
-                        }))
+                        .child(
+                            button()
+                                .test_id("desktop-signin-btn")
+                                .on_press(move || {
+                                    let raw = cookie_draft.get_untracked();
+                                    cookie_draft.set(String::new());
+                                    store::sign_in_with_cookies(&raw);
+                                })
+                                .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                                .px_5()
+                                .items_center()
+                                .justify_center()
+                                .rounded(move || theme().radius)
+                                .bg(move || theme().primary)
+                                .hover(|s| s.opacity(0.92))
+                                .active(|s| s.opacity(0.8))
+                                .focus_visible(|s| {
+                                    s.outline(px(2.0)).outline_color(move || theme().ring)
+                                })
+                                .child(
+                                    text("Sign In")
+                                        .text_sm()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(move || theme().primary_foreground),
+                                ),
+                        )
                 },
             )
-            .otherwise(|| secondary_button("Sign Out", store::sign_out)),
+            .otherwise(move || {
+                button()
+                    .test_id("desktop-signout-btn")
+                    .on_press(move || {
+                        cookie_draft.set(String::new());
+                        store::sign_out();
+                    })
+                    .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                    .px_4()
+                    .items_center()
+                    .justify_center()
+                    .rounded(move || theme().radius)
+                    .bg(pill_glass_surface)
+                    .border_1()
+                    .border_color(glass_hairline)
+                    .hover(|s| s.opacity(0.92))
+                    .active(|s| s.opacity(0.8))
+                    .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
+                    .child(
+                        text("Sign Out")
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(move || theme().foreground),
+                    )
+            }),
         )
 }
 

@@ -59,7 +59,9 @@ crate-type = ["rlib", "cdylib"]
 
 [features]
 default = []
+desktop-keyring = ["dep:keyring"]
 desktop-mpris = ["dep:souvlaki"]
+desktop-native = ["desktop-mpris", "desktop-keyring"]
 
 [dependencies]
 resonance-contract.workspace = true
@@ -76,6 +78,7 @@ async-trait.workspace = true
 crossbeam-channel.workspace = true
 
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
+keyring = { version = "3.6", optional = true, features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 souvlaki = { version = "0.8", optional = true }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]

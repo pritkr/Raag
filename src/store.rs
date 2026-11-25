@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use nsh_core::prelude::*;
 use resonance_contract::{
-    CacheStats, HistoryEntry, HomeSection, LyricsDocument, PlayerSnapshot, PlayerState, Playlist,
-    QueueState, RepeatMode, Track,
+    AuthBackendStatus, CacheStats, CredentialBackendKind, HistoryEntry, HomeSection,
+    LyricsDocument, PlayerSnapshot, PlayerState, Playlist, QueueState, RepeatMode, Track,
 };
 use resonance_core::fixture::{fixture_home_sections, fixture_lyrics, fixture_tracks};
 use resonance_core::palette::{AmbientPalette, palette_for_track};
@@ -193,6 +193,7 @@ pub struct AppState {
     pub cache_stats: CacheStats,
     pub signed_in: bool,
     pub account_name: Option<String>,
+    pub auth_backend_status: AuthBackendStatus,
     pub status_banner: Option<String>,
     pub selected_collection: Option<Playlist>,
     pub seek_generation: u64,
@@ -300,6 +301,20 @@ impl Default for AppState {
             },
             signed_in: false,
             account_name: None,
+            auth_backend_status: AuthBackendStatus {
+                backend: if cfg!(all(
+                    feature = "desktop-keyring",
+                    any(target_os = "linux", target_os = "macos", target_os = "windows")
+                )) {
+                    CredentialBackendKind::OsKeyring
+                } else {
+                    CredentialBackendKind::EncryptedFallbackFile
+                },
+                signed_in: false,
+                account_name: None,
+                has_sapisid: false,
+                has_3papisid: false,
+            },
             status_banner: None,
             selected_collection: None,
             seek_generation: 0,
@@ -415,7 +430,26 @@ fn apply_live_update(update: LiveUpdate) {
                 } else {
                     None
                 };
+                s.auth_backend_status.signed_in = signed_in;
+                s.auth_backend_status.account_name = s.account_name.clone();
+                if !signed_in {
+                    s.auth_backend_status.has_sapisid = false;
+                    s.auth_backend_status.has_3papisid = false;
+                }
                 s.status_banner = Some(banner);
+            });
+        }
+        LiveUpdate::AuthStatus(status) => {
+            state_signal().update(|s| {
+                s.signed_in = status.signed_in;
+                if status.account_name.is_some() {
+                    s.account_name = status.account_name.clone();
+                } else if status.signed_in && s.account_name.is_none() {
+                    s.account_name = Some("Google Account (SAPISIDHASH)".into());
+                } else if !status.signed_in {
+                    s.account_name = None;
+                }
+                s.auth_backend_status = status;
             });
         }
         LiveUpdate::StatusBanner(msg) => {
@@ -812,6 +846,10 @@ pub fn auth_info() -> (bool, Option<String>) {
     state_signal().with(|s| (s.signed_in, s.account_name.clone()))
 }
 
+pub fn auth_backend_status() -> AuthBackendStatus {
+    state_signal().with(|s| s.auth_backend_status.clone())
+}
+
 pub fn status_banner() -> Option<String> {
     state_signal().with(|s| s.status_banner.clone())
 }
@@ -1205,10 +1243,16 @@ pub fn clear_caches() {
 
 pub fn sign_in_with_cookies(cookie_input: &str) {
     let trimmed = cookie_input.trim();
-    if trimmed.contains("SAPISID=") || trimmed.contains("__Secure-3PAPISID=") {
+    let has_sapisid = trimmed.contains("SAPISID=");
+    let has_3papisid = trimmed.contains("__Secure-3PAPISID=");
+    if has_sapisid || has_3papisid {
         state_signal().update(|s| {
             s.signed_in = true;
             s.account_name = Some("Google Account (SAPISIDHASH)".into());
+            s.auth_backend_status.signed_in = true;
+            s.auth_backend_status.account_name = s.account_name.clone();
+            s.auth_backend_status.has_sapisid = has_sapisid;
+            s.auth_backend_status.has_3papisid = has_3papisid;
             s.status_banner = Some("Signed in securely (stored in OS Keystore)".into());
         });
         if !is_fixture_mode() {
@@ -1225,6 +1269,10 @@ pub fn sign_out() {
     state_signal().update(|s| {
         s.signed_in = false;
         s.account_name = None;
+        s.auth_backend_status.signed_in = false;
+        s.auth_backend_status.account_name = None;
+        s.auth_backend_status.has_sapisid = false;
+        s.auth_backend_status.has_3papisid = false;
         s.status_banner = Some("Signed out — running in anonymous mode".into());
     });
     if !is_fixture_mode() {
