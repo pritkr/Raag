@@ -152,7 +152,9 @@ fn build_new_releases() -> Vec<ReleaseCardKind> {
             }
         }
     }
-    items.extend(curated_discovery_mixes());
+    if store::is_fixture_mode() {
+        items.extend(curated_discovery_mixes());
+    }
     items
 }
 
@@ -419,9 +421,7 @@ fn moods_and_genres_section(desktop: bool) -> impl IntoElement {
                                         s.outline(px(2.0)).outline_color(move || theme().ring)
                                     })
                                     .on_press(move || {
-                                        store::set_search_filter(store::SearchFilter::All);
-                                        store::run_search(genre);
-                                        store::set_tab(AppTab::Search);
+                                        store::select_mood(genre);
                                     })
                                     .child(view().w(px(6.0)).h_full().bg(move || stripe_color))
                                     .child(

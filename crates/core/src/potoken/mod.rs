@@ -10,6 +10,8 @@ pub mod attestation;
 pub mod bgutil;
 pub mod cache;
 pub mod chain;
+pub mod rustypipe_bg;
+pub mod webview_attestation;
 
 use std::sync::RwLock;
 
@@ -28,6 +30,11 @@ pub use bgutil::{BgutilHttpPoTokenProvider, SidecarPoTokenProvider};
 pub type BgutilHttpProvider = BgutilHttpPoTokenProvider;
 pub use cache::CachingPoTokenProvider;
 pub use chain::ChainedPoTokenProvider;
+pub use rustypipe_bg::{RustyPipeBotguardProvider, validate_botguard_binding};
+pub use webview_attestation::{
+    AttestationOrchestrator, BotguardChallenge, BotguardExecutionOutput, CachedIntegrityToken,
+    EmbeddedWebViewAttestationProvider, WebViewBotguardRunner, validate_interpreter_url,
+};
 
 /// Default provider when no PO token backend is configured.
 #[derive(Debug, Default)]

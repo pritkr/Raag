@@ -4,10 +4,13 @@
 //! and `library_screen()` (`AppTab::Library`) so preferences, SAPISIDHASH account auth,
 //! and offline chunk cache controls stay unified with zero duplication.
 
+use std::rc::Rc;
+
 use nsh_base::{button, input, theme};
 use nsh_core::prelude::*;
 use resonance_contract::{CredentialBackendKind, HomeItem, PoTokenHealthStatus, Track};
 
+use crate::screens::settings_updater_card::{UpdaterCardProps, settings_updater_card};
 use crate::store::{self, AppTab, ThemeChoice};
 use crate::ui::controls::{
     artwork_box, diagnostics_badge, glass_pill_button, hero_pill_button, secondary_button,
@@ -101,7 +104,13 @@ fn account_card(cookie_draft: Signal<String>) -> impl IntoElement {
                                 .child(
                                     text(move || {
                                         if store::auth_info().0 {
-                                            SharedString::from("Connected")
+                                            if store::account_profile()
+                                                .is_some_and(|p| p.is_premium)
+                                            {
+                                                SharedString::from("Premium")
+                                            } else {
+                                                SharedString::from("Connected")
+                                            }
                                         } else {
                                             SharedString::from("Anonymous")
                                         }
@@ -123,10 +132,22 @@ fn account_card(cookie_draft: Signal<String>) -> impl IntoElement {
             text(move || {
                 let (signed_in, acct) = store::auth_info();
                 let status = store::auth_backend_status();
+                let profile = store::account_profile();
                 if signed_in {
+                    let tier = if profile.as_ref().is_some_and(|p| p.is_premium) {
+                        "YouTube Music Premium"
+                    } else {
+                        "Free Tier"
+                    };
+                    let handle = profile
+                        .and_then(|p| p.channel_handle)
+                        .map(|h| format!(" ({h})"))
+                        .unwrap_or_default();
                     SharedString::from(format!(
-                        "Connected: {} ({})",
+                        "Connected: {}{} • {} • {}",
                         acct.unwrap_or_else(|| "Google Account".into()),
+                        handle,
+                        tier,
                         backend_badge_label(status.backend)
                     ))
                 } else {
@@ -370,15 +391,44 @@ fn audio_dsp_card() -> impl IntoElement {
         .border_color(glass_hairline)
         .child(
             view()
-                .gap_0p5()
+                .gap_1()
                 .child(
-                    text("Audio DSP & Gapless")
-                        .text_base()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(move || theme().foreground),
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .justify_between()
+                        .gap_2()
+                        .child(
+                            text("Audio DSP & Gapless")
+                                .text_base()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(move || theme().foreground),
+                        )
+                        .child(
+                            view()
+                                .px_2p5()
+                                .py_1()
+                                .rounded_full()
+                                .bg(pill_glass_surface)
+                                .child(
+                                    text(move || {
+                                        SharedString::from(store::dsp_capability().badge_label())
+                                    })
+                                    .test_id("audio-dsp-capability-badge")
+                                    .text_xs()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(move || {
+                                        if store::dsp_capability().is_active() {
+                                            color_status_ok()
+                                        } else {
+                                            theme().muted_foreground
+                                        }
+                                    }),
+                                ),
+                        ),
                 )
                 .child(
-                    text("Lock-free SPSC ring buffer, ReplayGain (EBU R128), 10-band biquad EQ & crossfade")
+                    text(move || SharedString::from(store::dsp_capability().detail_text()))
                         .text_xs()
                         .text_color(move || theme().muted_foreground),
                 ),
@@ -468,6 +518,55 @@ fn stream_diagnostics_card() -> impl IntoElement {
             .text_xs()
             .text_color(move || theme().muted_foreground),
         )
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .child(
+                    text(move || {
+                        let rc = store::remote_config_status();
+                        let sig = if rc.signature_verified {
+                            "Ed25519 verified"
+                        } else {
+                            "Embedded fallback"
+                        };
+                        SharedString::from(format!(
+                            "Remote Config rev {} ({}) • Solver {} • {}",
+                            rc.matrix_revision, rc.matrix_source, rc.solver_bundle_version, sig
+                        ))
+                    })
+                    .test_id("remote-config-status-detail")
+                    .text_xs()
+                    .text_color(move || theme().muted_foreground),
+                )
+                .child(secondary_button(
+                    "Sync Config",
+                    store::refresh_remote_config,
+                )),
+        )
+}
+
+fn updater_card() -> impl IntoElement {
+    let u = store::updater_state();
+    settings_updater_card(UpdaterCardProps {
+        current_version: u.current_version,
+        channel: signal(u.channel),
+        auto_check: signal(u.auto_check),
+        phase: signal(u.phase),
+        is_playing: signal(
+            store::player_snapshot().state == resonance_contract::PlayerState::Playing,
+        ),
+        on_check_now: Rc::new(|| {}),
+        on_toggle_auto_check: Rc::new(store::set_updater_auto_check),
+        on_select_channel: Rc::new(store::set_updater_channel),
+        on_download: Rc::new(|_| {}),
+        on_open_release: Rc::new(|_| {}),
+        on_skip_version: Rc::new(store::skip_updater_version),
+        on_install_on_quit: Rc::new(|| {}),
+        on_restart_now: Rc::new(|| {}),
+    })
 }
 
 /// Reusable Settings, Account, Preferences, Audio DSP & Offline Cache sections shared with `library_screen`.
@@ -486,7 +585,8 @@ pub fn settings_sections() -> impl IntoElement {
                     .min_w(px(0.0))
                     .gap_4()
                     .child(preferences_card())
-                    .child(audio_dsp_card()),
+                    .child(audio_dsp_card())
+                    .child(updater_card()),
             )
             .child(
                 view()
@@ -506,6 +606,7 @@ pub fn settings_sections() -> impl IntoElement {
             .child(stream_diagnostics_card())
             .child(preferences_card())
             .child(audio_dsp_card())
+            .child(updater_card())
             .child(cache_card())
     })
 }

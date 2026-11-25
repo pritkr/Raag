@@ -241,7 +241,7 @@ async fn account_probe_detects_premium_and_free_accounts_and_preserves_on_networ
     let tmp = TempDir::new().unwrap();
     let paths = test_app_paths(&tmp);
     let cache = Arc::new(SqliteCacheStore::open(&paths.data_dir).unwrap());
-    let auth_store = Arc::new(FileAuthStore::new(paths.data_dir.join("auth.json")));
+    let auth_store = Arc::new(FileAuthStore::new(&paths.data_dir));
     let solver = Arc::new(QuickJsSolver::new(&paths.cache_dir));
 
     let routes: RouteMap = Arc::new(Mutex::new(HashMap::new()));

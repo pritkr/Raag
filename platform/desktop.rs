@@ -497,7 +497,9 @@ impl SystemMediaControlsBridge {
         use souvlaki::MediaMetadata;
         let duration = (meta.duration_ms > 0).then(|| Duration::from_millis(meta.duration_ms));
         let resolved_cover = meta.artwork_url.as_deref().map(|raw| {
-            if raw.starts_with("http://") || raw.starts_with("https://") || raw.starts_with("file://")
+            if raw.starts_with("http://")
+                || raw.starts_with("https://")
+                || raw.starts_with("file://")
             {
                 raw.to_owned()
             } else if Path::new(raw).is_file() {

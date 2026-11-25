@@ -1,4 +1,4 @@
-name: Scheduled InnerTube Client Probe
+name: Scheduled InnerTube Client Probe & Signed Config Publisher
 
 on:
   schedule:
@@ -7,11 +7,12 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+  issues: write
 
 jobs:
   client-probe:
-    name: Probe InnerTube Client Matrix (Every 12h)
+    name: Probe InnerTube Client Matrix & Publish Signed Config (Every 12h)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,23 +21,87 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Run client_probe drift detection
-        run: |
-          cargo run --release --bin client_probe -- \
-            --output target/probed_client_matrix.json
-        continue-on-error: true
+      - name: Run client_probe with safety canary gate
         id: live_probe
+        continue-on-error: true
+        run: |
+          mkdir -p target/dist
+          cargo run --release --bin client_probe -- \
+            --verify-canary \
+            --output target/dist/client_matrix.json
+          cp config/solver_manifest.json target/dist/solver_manifest.json
 
       - name: Fallback offline matrix sanity probe if runner egress is restricted
         if: steps.live_probe.outcome != 'success'
+        id: offline_probe
         run: |
+          mkdir -p target/dist
           cargo run --release --bin client_probe -- \
             --offline-sim \
-            --output target/probed_client_matrix.json
+            --verify-canary \
+            --output target/dist/client_matrix.json
+          cp config/solver_manifest.json target/dist/solver_manifest.json
 
-      - name: Upload probed client matrix artifact
+      - name: Sign config artifacts with Ed25519
+        if: env.HAS_SIGNING_KEY == 'true'
+        env:
+          HAS_SIGNING_KEY: ${{ secrets.RESONANCE_CONFIG_ED25519_PRIVKEY_HEX != '' }}
+          RESONANCE_CONFIG_ED25519_PRIVKEY_HEX: ${{ secrets.RESONANCE_CONFIG_ED25519_PRIVKEY_HEX }}
+        run: |
+          cargo run --release --bin sign_config -- \
+            --sign --key-env RESONANCE_CONFIG_ED25519_PRIVKEY_HEX \
+            target/dist/client_matrix.json \
+            target/dist/solver_manifest.json
+
+      - name: Upload probed & signed config artifacts
         uses: actions/upload-artifact@v4
         with:
           name: probed-client-matrix
-          path: target/probed_client_matrix.json
+          path: target/dist/
           retention-days: 14
+
+      - name: Publish atomically to gh-pages (/config/v1/)
+        if: steps.live_probe.outcome == 'success' && secrets.RESONANCE_CONFIG_ED25519_PRIVKEY_HEX != ''
+        run: |
+          git config user.name "resonance-probe-bot"
+          git config user.email "bot@resonance.invalid"
+          STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+          git fetch origin gh-pages || true
+          if git rev-parse --verify origin/gh-pages >/dev/null 2>&1; then
+            git checkout -B gh-pages origin/gh-pages
+          else
+            git checkout --orphan gh-pages
+            git rm -rf . || true
+          fi
+          mkdir -p config/v1/history/"$STAMP"
+          if [ -f config/v1/client_matrix.json ]; then
+            cp config/v1/client_matrix.json config/v1/last_known_good.json
+          fi
+          cp target/dist/client_matrix.json* config/v1/
+          cp target/dist/solver_manifest.json* config/v1/
+          cp target/dist/client_matrix.json* config/v1/history/"$STAMP"/
+          git add config/v1/
+          git commit -m "chore(config): publish signed matrix $STAMP" || true
+          git push origin gh-pages
+
+      - name: Open protocol-drift issue on canary regression
+        if: steps.live_probe.outcome != 'success'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = 'Protocol drift detected by scheduled client_probe';
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'protocol-drift',
+            });
+            if (issues.length === 0) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                labels: ['protocol-drift'],
+                body: `Scheduled \`client_probe --verify-canary\` failed on run ${context.runId}. Previous \`last_known_good.json\` remains active.`,
+              });
+            }

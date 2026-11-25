@@ -20,6 +20,7 @@ use resonance_core::unix_secs;
 async fn main() {
     let args: Vec<String> = std::env::args().collect();
     let offline_sim = args.iter().any(|a| a == "--offline-sim");
+    let verify_canary = args.iter().any(|a| a == "--verify-canary");
     let output_path = args
         .windows(2)
         .find(|w| w[0] == "--output")
@@ -114,6 +115,7 @@ async fn main() {
         }
     }
 
+    let mut ejs_smoke_ok = true;
     if !offline_sim {
         let solver_dir = std::env::temp_dir().join("raag_client_probe_ejs");
         let _ = std::fs::remove_dir_all(&solver_dir);
@@ -134,20 +136,27 @@ async fn main() {
             .await;
         let elapsed_ms = t0.elapsed().as_millis();
         match solve_res {
-            Ok(solved) => println!(
-                "rquickjs_ejs_solver=OK elapsed_ms={} manifest_ok={} n_solved={} sig_solved={} watchdog_hit=false",
-                elapsed_ms,
-                manifest.is_ok(),
-                solved.n_param.is_some(),
-                solved.sig_param.is_some()
-            ),
-            Err(e) => println!(
-                "rquickjs_ejs_solver=ERR elapsed_ms={} manifest_ok={} watchdog_hit={} err={}",
-                elapsed_ms,
-                manifest.is_ok(),
-                elapsed_ms >= 9900,
-                redact_secrets(&e.to_string())
-            ),
+            Ok(solved) => {
+                ejs_smoke_ok =
+                    manifest.is_ok() && solved.n_param.is_some() && solved.sig_param.is_some();
+                println!(
+                    "rquickjs_ejs_solver=OK elapsed_ms={} manifest_ok={} n_solved={} sig_solved={} watchdog_hit=false",
+                    elapsed_ms,
+                    manifest.is_ok(),
+                    solved.n_param.is_some(),
+                    solved.sig_param.is_some()
+                );
+            }
+            Err(e) => {
+                ejs_smoke_ok = false;
+                println!(
+                    "rquickjs_ejs_solver=ERR elapsed_ms={} manifest_ok={} watchdog_hit={} err={}",
+                    elapsed_ms,
+                    manifest.is_ok(),
+                    elapsed_ms >= 9900,
+                    redact_secrets(&e.to_string())
+                );
+            }
         }
     }
 
@@ -157,6 +166,28 @@ async fn main() {
     } else {
         "client_probe:live-nightly".into()
     };
+
+    if verify_canary {
+        if passed_clients == 0 {
+            eprintln!("CANARY_GATE_FAILED: 0 clients passed");
+            std::process::exit(1);
+        }
+        if !ejs_smoke_ok {
+            eprintln!("CANARY_GATE_FAILED: rquickjs EJS solver smoke test failed");
+            std::process::exit(1);
+        }
+        for entry in &matrix.clients {
+            if matches!(entry.kind.as_str(), "android_vr" | "ios")
+                && (entry.auth_mode != "anonymous_only" || entry.probe_pass_cookies_on)
+            {
+                eprintln!(
+                    "CANARY_GATE_FAILED: {} violated anonymous_only isolation",
+                    entry.kind
+                );
+                std::process::exit(1);
+            }
+        }
+    }
 
     matrix
         .save_atomic(&output_path)

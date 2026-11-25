@@ -124,8 +124,7 @@ impl AtrTracker {
             self.reset_session();
             if let Some(track) = &snap.current_track {
                 self.active_video_id = Some(track.id.clone());
-                self.active_duration_secs =
-                    (snap.duration_ms.max(track.duration_ms)) / 1000;
+                self.active_duration_secs = (snap.duration_ms.max(track.duration_ms)) / 1000;
             }
         }
 

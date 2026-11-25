@@ -917,6 +917,12 @@ pub extern "system" fn Java_dev_resonance_ytmusic_ResonanceNativeBridge_nativeIn
         .get_string(&cache_dir)
         .map(Into::into)
         .unwrap_or_default();
+    if !files_str.is_empty() && !cache_str.is_empty() {
+        resonance_core::storage::set_android_app_paths(
+            PathBuf::from(&files_str),
+            PathBuf::from(&cache_str),
+        );
+    }
     let _ = ANDROID_JNI_HOST.set(AndroidJniHost {
         vm,
         bridge_class: global_bridge,

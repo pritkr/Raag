@@ -9,10 +9,13 @@
 //! - Deterministic `--fixture` QA dataset
 
 pub mod audio_dsp;
+pub mod auth_flows;
 pub mod cache;
+pub mod casting;
 pub mod downloads;
 pub mod fixture;
 pub mod innertube;
+pub mod local_media;
 pub mod lyrics;
 pub mod offline;
 pub mod palette;
@@ -20,6 +23,7 @@ pub mod playback;
 pub mod potoken;
 pub mod providers;
 pub mod proxy;
+pub mod rooms;
 pub mod solver;
 pub mod sponsorblock;
 pub mod storage;

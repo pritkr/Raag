@@ -1,8 +1,8 @@
 //! Settings, Theme, Auth credentials status, Audio DSP config, and PO Token diagnostics slice.
 
 use resonance_contract::{
-    AuthBackendStatus, CredentialBackendKind, PersistedEqPreset, PersistedTheme,
-    PoTokenDiagnostics, PoTokenHealthStatus, SettingsV1,
+    AccountProfile, AuthBackendStatus, CredentialBackendKind, PersistedEqPreset, PersistedTheme,
+    PoTokenDiagnostics, PoTokenHealthStatus, RemoteConfigStatus, SettingsV1,
 };
 use resonance_core::audio_dsp::{DspConfig, EqPreset};
 
@@ -57,6 +57,8 @@ pub struct SettingsSlice {
     pub signed_in: bool,
     pub account_name: Option<String>,
     pub auth_backend_status: AuthBackendStatus,
+    pub account_profile: Option<AccountProfile>,
+    pub remote_config_status: RemoteConfigStatus,
     pub dsp_config: DspConfig,
     pub po_token_diagnostics: PoTokenDiagnostics,
     pub offline_quota_bytes: u64,
@@ -90,6 +92,18 @@ impl SettingsSlice {
                 account_name: None,
                 has_sapisid: false,
                 has_3papisid: false,
+            },
+            account_profile: None,
+            remote_config_status: RemoteConfigStatus {
+                matrix_revision: 0,
+                matrix_source: if fixture {
+                    "fixture".to_owned()
+                } else {
+                    "embedded".to_owned()
+                },
+                solver_bundle_version: "embedded".to_owned(),
+                signature_verified: false,
+                last_sync_unix_secs: None,
             },
             dsp_config: DspConfig::default(),
             po_token_diagnostics: if fixture {
@@ -199,8 +213,23 @@ impl SettingsSlice {
             self.account_name = Some("Google Account (SAPISIDHASH)".into());
         } else if !status.signed_in {
             self.account_name = None;
+            self.account_profile = None;
         }
         self.auth_backend_status = status;
+    }
+
+    pub fn apply_account_profile(&mut self, profile: Option<AccountProfile>) {
+        if let Some(ref p) = profile {
+            if !p.account_name.is_empty() {
+                self.account_name = Some(p.account_name.clone());
+                self.auth_backend_status.account_name = Some(p.account_name.clone());
+            }
+        }
+        self.account_profile = profile;
+    }
+
+    pub fn apply_remote_config_status(&mut self, status: RemoteConfigStatus) {
+        self.remote_config_status = status;
     }
 
     /// Validates pasted cookies and updates auth status. Returns `(accepted, banner)`.

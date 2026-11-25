@@ -259,11 +259,65 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
 
+      - name: Install NSH CLI (0.7.0)
+        run: |
+          curl -fsSL https://nsh.dev/install.sh | sh -s -- --version "$NSH_VERSION" || true
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Generate signed NSH updater manifest
+        env:
+          NSH_UPDATER_PRIVATE_KEY: ${{ secrets.NSH_UPDATER_PRIVATE_KEY }}
+        run: |
+          mkdir -p artifacts/manifest
+          if [ -n "$NSH_UPDATER_PRIVATE_KEY" ] && command -v nsh >/dev/null 2>&1; then
+            umask 077
+            KEY_FILE="$RUNNER_TEMP/update.secret"
+            printf '%s' "$NSH_UPDATER_PRIVATE_KEY" > "$KEY_FILE"
+            nsh update-manifest \
+              artifacts/macos-bundle/*.zip \
+              artifacts/windows-installer/*.exe \
+              artifacts/linux-bundle/*.tar.gz \
+              artifacts/android-apk/*.apk \
+              --notes CHANGELOG.md \
+              --key "$KEY_FILE" \
+              -o artifacts/manifest/ || true
+          else
+            echo "NSH_UPDATER_PRIVATE_KEY or nsh CLI unavailable; skipping manifest signing"
+          fi
+
+      - name: Cleanup ephemeral updater key
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/update.secret"
+
+      - name: Determine release tag (beta-latest vs tag)
+        id: reltag
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [[ "$TAG" == *"-beta"* || "$TAG" == *"-rc"* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "beta_sync=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "beta_sync=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: softprops/action-gh-release@v2
         with:
           files: artifacts/**/*
+          prerelease: ${{ steps.reltag.outputs.prerelease == 'true' }}
           generate_release_notes: true
+
+      - name: Publish beta-latest channel manifest
+        if: steps.reltag.outputs.beta_sync == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: beta-latest
+          prerelease: true
+          files: artifacts/manifest/*

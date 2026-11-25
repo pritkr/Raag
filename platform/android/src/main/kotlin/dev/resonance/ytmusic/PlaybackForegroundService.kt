@@ -24,22 +24,28 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.session.LibraryResult
+import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
-import androidx.media3.session.MediaSessionService
+import androidx.media3.session.SessionError
+import com.google.common.collect.ImmutableList
+import com.google.common.util.concurrent.Futures
+import com.google.common.util.concurrent.ListenableFuture
 
 /**
- * Thin Android Media Lifecycle Bridge required by Phase 0 & ST-4.
+ * Android Media3 Lifecycle & Android Auto Browse Service (`MediaLibraryService`).
  *
- * Wraps Media3 ExoPlayer + ForwardingPlayer + MediaSessionService + AudioFocus +
+ * Wraps Media3 ExoPlayer + ForwardingPlayer + MediaLibrarySession + AudioFocus +
  * ACTION_AUDIO_BECOMING_NOISY (`RECEIVER_NOT_EXPORTED`) so playback survives screen lock,
- * backgrounding, Bluetooth AVRCP, and headphone unplug.
+ * backgrounding, Bluetooth AVRCP, headphone unplug, and Android Auto head-unit browsing.
  * Streams strictly from the in-process Rust Loopback HTTP Proxy (`http://127.0.0.1:<port>/stream/...`).
  */
 @OptIn(UnstableApi::class)
-class PlaybackForegroundService : MediaSessionService() {
+class PlaybackForegroundService : MediaLibraryService() {
 
     private var player: ExoPlayer? = null
-    private var mediaSession: MediaSession? = null
+    private var mediaLibrarySession: MediaLibrarySession? = null
+    private val cachedSearchResults = mutableMapOf<String, List<MediaItem>>()
 
     @Volatile
     private var currentGeneration: Long = 0L
@@ -166,7 +172,101 @@ class PlaybackForegroundService : MediaSessionService() {
         }
 
         player = exo
-        mediaSession = MediaSession.Builder(this, forwardingPlayer).build()
+        val libraryCallback = object : MediaLibrarySession.Callback {
+            override fun onGetLibraryRoot(
+                session: MediaLibrarySession,
+                browser: MediaSession.ControllerInfo,
+                params: LibraryParams?,
+            ): ListenableFuture<LibraryResult<MediaItem>> {
+                return Futures.immediateFuture(
+                    LibraryResult.ofItem(AndroidAutoBrowseTree.rootItem(), params),
+                )
+            }
+
+            override fun onGetChildren(
+                session: MediaLibrarySession,
+                browser: MediaSession.ControllerInfo,
+                parentId: String,
+                page: Int,
+                pageSize: Int,
+                params: LibraryParams?,
+            ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
+                val items = when (parentId) {
+                    AndroidAutoBrowseTree.ROOT_ID -> AndroidAutoBrowseTree.topLevelTabs()
+                    else -> emptyList()
+                }
+                val paged = AndroidAutoBrowseTree.paginate(items, page, pageSize)
+                return Futures.immediateFuture(
+                    LibraryResult.ofItemList(ImmutableList.copyOf(paged), params),
+                )
+            }
+
+            override fun onGetItem(
+                session: MediaLibrarySession,
+                browser: MediaSession.ControllerInfo,
+                mediaId: String,
+            ): ListenableFuture<LibraryResult<MediaItem>> {
+                if (mediaId == AndroidAutoBrowseTree.ROOT_ID) {
+                    return Futures.immediateFuture(
+                        LibraryResult.ofItem(AndroidAutoBrowseTree.rootItem(), null),
+                    )
+                }
+                val tab = AndroidAutoBrowseTree.topLevelTabs().firstOrNull { it.mediaId == mediaId }
+                return if (tab != null) {
+                    Futures.immediateFuture(LibraryResult.ofItem(tab, null))
+                } else {
+                    Futures.immediateFuture(
+                        LibraryResult.ofError(SessionError.ERROR_BAD_VALUE),
+                    )
+                }
+            }
+
+            override fun onSearch(
+                session: MediaLibrarySession,
+                browser: MediaSession.ControllerInfo,
+                query: String,
+                params: LibraryParams?,
+            ): ListenableFuture<LibraryResult<Void>> {
+                val results = cachedSearchResults[query].orEmpty()
+                session.notifySearchResultChanged(browser, query, results.size, params)
+                return Futures.immediateFuture(LibraryResult.ofVoid())
+            }
+
+            override fun onGetSearchResult(
+                session: MediaLibrarySession,
+                browser: MediaSession.ControllerInfo,
+                query: String,
+                page: Int,
+                pageSize: Int,
+                params: LibraryParams?,
+            ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
+                val results = AndroidAutoBrowseTree.paginate(
+                    cachedSearchResults[query].orEmpty(),
+                    page,
+                    pageSize,
+                )
+                return Futures.immediateFuture(
+                    LibraryResult.ofItemList(ImmutableList.copyOf(results), params),
+                )
+            }
+
+            override fun onAddMediaItems(
+                mediaSession: MediaSession,
+                controller: MediaSession.ControllerInfo,
+                mediaItems: MutableList<MediaItem>,
+            ): ListenableFuture<MutableList<MediaItem>> {
+                val resolved = mediaItems.map { item ->
+                    val id = item.mediaId.removePrefix("track:")
+                    if (id.isNotBlank()) {
+                        ResonanceNativeBridge.nativeOnMediaCommand(1, 0L)
+                    }
+                    item
+                }.toMutableList()
+                return Futures.immediateFuture(resolved)
+            }
+        }
+
+        mediaLibrarySession = MediaLibrarySession.Builder(this, forwardingPlayer, libraryCallback).build()
 
         ContextCompat.registerReceiver(
             this,
@@ -185,8 +285,8 @@ class PlaybackForegroundService : MediaSessionService() {
         }
     }
 
-    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? {
-        return mediaSession
+    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? {
+        return mediaLibrarySession
     }
 
     fun playFromLoopbackProxy(
@@ -296,9 +396,9 @@ class PlaybackForegroundService : MediaSessionService() {
         stopProgressTicker()
         ResonanceNativeBridge.unregisterService(this)
         unregisterReceiver(noisyReceiver)
-        mediaSession?.run {
+        mediaLibrarySession?.run {
             release()
-            mediaSession = null
+            mediaLibrarySession = null
         }
         player?.run {
             removeListener(playerListener)

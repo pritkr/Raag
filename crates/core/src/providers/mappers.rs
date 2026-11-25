@@ -59,10 +59,11 @@ pub mod ytmapi {
     use super::*;
     use ytmapi_rs::common::{Explicit, LikeStatus, Thumbnail, YoutubeID};
     use ytmapi_rs::parse::{
-        GetAlbum, GetArtist, HistoryItem, LibraryArtist, LibraryPlaylist, LibraryPodcast,
-        Lyrics, MoodCategorySection, MoodPlaylistCategory, PlaylistItem, SearchResultAlbum,
-        SearchResultArtist, SearchResultFeaturedPlaylist, SearchResultPodcast, SearchResultSong,
-        SearchResultVideo, BasicSearchResultCommunityPlaylist, WatchPlaylistTrack,
+        BasicSearchResultCommunityPlaylist, GetAlbum, GetArtist, HistoryItem, LibraryArtist,
+        LibraryPlaylist, LibraryPodcast, Lyrics, MoodCategorySection, MoodPlaylistCategory,
+        PlaylistItem, SearchResultAlbum, SearchResultArtist, SearchResultCommunityPlaylist,
+        SearchResultFeaturedPlaylist, SearchResultPlaylist, SearchResultPodcast, SearchResultSong,
+        SearchResultVideo, WatchPlaylistTrack,
     };
 
     pub fn best_thumb(thumbs: &[Thumbnail]) -> Option<String> {
@@ -104,24 +105,34 @@ pub mod ytmapi {
         }
     }
 
-    pub fn map_search_video(v: SearchResultVideo) -> Track {
-        Track {
-            id: v.video_id.get_raw().to_owned(),
-            title: v.title,
-            artists: if v.artist.is_empty() {
-                Vec::new()
-            } else {
-                vec![ArtistRef {
-                    id: None,
-                    name: v.artist,
-                }]
-            },
-            album: None,
-            duration_ms: parse_duration_str_ms(&v.duration),
-            artwork_url: best_thumb(&v.thumbnails),
-            is_explicit: false,
-            is_liked: false,
-            is_video: true,
+    pub fn map_search_video(v: SearchResultVideo) -> Option<Track> {
+        match v {
+            SearchResultVideo::Video {
+                title,
+                channel_name,
+                video_id,
+                length,
+                thumbnails,
+                ..
+            } => Some(Track {
+                id: video_id.get_raw().to_owned(),
+                title,
+                artists: if channel_name.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![ArtistRef {
+                        id: None,
+                        name: channel_name,
+                    }]
+                },
+                album: None,
+                duration_ms: parse_duration_str_ms(&length),
+                artwork_url: best_thumb(&thumbnails),
+                is_explicit: false,
+                is_liked: false,
+                is_video: true,
+            }),
+            _ => None,
         }
     }
 
@@ -149,13 +160,44 @@ pub mod ytmapi {
         }
     }
 
-    pub fn map_search_community_playlist(p: BasicSearchResultCommunityPlaylist) -> Playlist {
+    pub fn map_search_community_playlist_item(p: SearchResultCommunityPlaylist) -> Playlist {
         Playlist {
             id: p.playlist_id.get_raw().to_owned(),
             title: p.title,
             subtitle: Some(format!("{} • {}", p.author, p.views)),
             artwork_url: best_thumb(&p.thumbnails),
             tracks: Vec::new(),
+        }
+    }
+
+    pub fn map_search_community_playlist(p: BasicSearchResultCommunityPlaylist) -> Playlist {
+        match p {
+            BasicSearchResultCommunityPlaylist::Playlist(pl) => {
+                map_search_community_playlist_item(pl)
+            }
+            BasicSearchResultCommunityPlaylist::Podcast(pod) => map_search_podcast(pod),
+            _ => Playlist {
+                id: String::new(),
+                title: String::new(),
+                subtitle: None,
+                artwork_url: None,
+                tracks: Vec::new(),
+            },
+        }
+    }
+
+    pub fn map_search_playlist(p: SearchResultPlaylist) -> Playlist {
+        match p {
+            SearchResultPlaylist::Featured(pl) => map_search_featured_playlist(pl),
+            SearchResultPlaylist::Community(pl) => map_search_community_playlist_item(pl),
+            SearchResultPlaylist::Podcast(pod) => map_search_podcast(pod),
+            _ => Playlist {
+                id: String::new(),
+                title: String::new(),
+                subtitle: None,
+                artwork_url: None,
+                tracks: Vec::new(),
+            },
         }
     }
 
@@ -269,10 +311,10 @@ pub mod ytmapi {
                 al.results
                     .into_iter()
                     .map(|a| LibraryCollectionRef {
-                        browse_id: a.browse_id.get_raw().to_owned(),
-                        playlist_id: a.playlist_id,
+                        browse_id: a.album_id.get_raw().to_owned(),
+                        playlist_id: None,
                         title: a.title,
-                        subtitle: a.year.unwrap_or_default(),
+                        subtitle: a.year,
                         artwork_url: best_thumb(&a.thumbnails),
                         track_count: None,
                     })
@@ -287,7 +329,7 @@ pub mod ytmapi {
                 sg.results
                     .into_iter()
                     .map(|s| LibraryCollectionRef {
-                        browse_id: s.browse_id.get_raw().to_owned(),
+                        browse_id: s.album_id.get_raw().to_owned(),
                         playlist_id: None,
                         title: s.title,
                         subtitle: s.year,
@@ -309,7 +351,7 @@ pub mod ytmapi {
                         playlist_id: None,
                         title: r.title,
                         subtitle: r.subscribers,
-                        artwork_url: best_thumb(&r.thumbnails),
+                        artwork_url: None,
                         track_count: None,
                     })
                     .collect()
@@ -360,12 +402,12 @@ pub mod ytmapi {
                 PlaylistItem::Video(v) => Some(Track {
                     id: v.video_id.get_raw().to_owned(),
                     title: v.title,
-                    artists: if v.author.is_empty() {
+                    artists: if v.channel_name.is_empty() {
                         Vec::new()
                     } else {
                         vec![ArtistRef {
-                            id: None,
-                            name: v.author,
+                            id: Some(v.channel_id.get_raw().to_owned()),
+                            name: v.channel_name,
                         }]
                     },
                     album: None,
@@ -407,11 +449,11 @@ pub mod ytmapi {
     pub fn map_mood_categories(sections: Vec<MoodCategorySection>) -> Vec<MoodCategory> {
         let mut out = Vec::new();
         for sec in sections {
-            for cat in sec.categories {
+            for cat in sec.mood_categories {
                 out.push(MoodCategory {
                     title: cat.title,
                     params: cat.params.get_raw().to_owned(),
-                    accent_hint: Some(sec.title.clone()),
+                    accent_hint: Some(sec.section_name.clone()),
                 });
             }
         }
@@ -464,7 +506,11 @@ pub mod ytmapi {
             title: p.title,
             subtitle: format!("{} • {}", p.author, p.tracks),
             artwork_url: best_thumb(&p.thumbnails),
-            track_count: p.tracks.split_whitespace().next().and_then(|n| n.parse().ok()),
+            track_count: p
+                .tracks
+                .split_whitespace()
+                .next()
+                .and_then(|n| n.parse().ok()),
         }
     }
 
@@ -524,12 +570,12 @@ pub mod ytmapi {
                     HistoryItem::Video(v) => out.push(Track {
                         id: v.video_id.get_raw().to_owned(),
                         title: v.title,
-                        artists: if v.author.is_empty() {
+                        artists: if v.channel_name.is_empty() {
                             Vec::new()
                         } else {
                             vec![ArtistRef {
-                                id: None,
-                                name: v.author,
+                                id: Some(v.channel_id.get_raw().to_owned()),
+                                name: v.channel_name,
                             }]
                         },
                         album: None,
@@ -664,7 +710,14 @@ pub mod rustypipe_map {
                 .collect(),
             release_year: alb.year.map(|y| y.to_string()),
             release_type: format!("{:?}", alb.album_type),
-            description: alb.description.map(|d| d.to_string()),
+            description: alb.description.map(|d| {
+                d.0.into_iter()
+                    .filter_map(|c| match c {
+                        rustypipe::model::richtext::TextComponent::Text { text, .. } => Some(text),
+                        _ => None,
+                    })
+                    .collect::<String>()
+            }),
             artwork_url: artwork,
             total_duration_ms,
             tracks,

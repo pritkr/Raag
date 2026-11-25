@@ -5,8 +5,13 @@
 //! (`Queued -> Downloading -> Verified -> Available`) with resumable range fetches
 //! and artwork/lyrics bundling.
 
+pub mod quota;
 pub mod state;
 pub mod vault;
 
+pub use quota::{
+    CollectionOfflineProgress, DEFAULT_ESTIMATED_OPUS_BYTES, DEFAULT_ESTIMATED_PREMIUM_BYTES,
+    QUOTA_PRESETS_BYTES, QuotaEvaluator, UnpinCleanupReport, compute_collection_progress,
+};
 pub use state::VaultTrackState;
 pub use vault::{OfflineVault, PinnedCollection, PinnedCollectionKind, VaultSummary};

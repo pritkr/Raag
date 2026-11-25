@@ -5,14 +5,20 @@
 //! - Android / Mobile (< 820px): Top safe-area header + main content + Mini-Player strictly
 //!   stacked ABOVE the bottom navigation bar + `.pb_safe_area_plus(px(4.0))` (>= 48dp targets).
 
+use std::rc::Rc;
+
 use nsh_base::{avatar, button, input, tab, tabs, theme};
 use nsh_core::prelude::*;
 
-use crate::screens::{explore, home, library, lyrics, now_playing, queue, search, settings};
+use crate::screens::{
+    auth_sign_in_sheet::{AuthSignInCallbacks, auth_sign_in_sheet},
+    explore, home, library, lyrics, now_playing, queue, search, settings,
+    settings_updater_card::updater_top_banner,
+};
 use crate::store::{self, AppTab, DesktopSidePanel, LibraryFilter, SidebarPlaylist};
 use crate::ui::controls::{
-    add_to_playlist_sheet, artwork_box, desktop_player_bar, mini_player_bar, svg_icon_button,
-    track_action_sheet,
+    add_to_playlist_sheet, artwork_box, cast_picker_sheet, desktop_player_bar, mini_player_bar,
+    svg_icon_button, track_action_sheet,
 };
 use crate::ui::icons::{IconKind, icon, liked_music_tile_svg, yt_music_icon};
 use crate::ui::tokens::{
@@ -409,7 +415,7 @@ fn desktop_sidebar() -> impl IntoElement {
         ))
         .child(desktop_nav_item(
             AppTab::ListenTogether,
-            "Radio Mix",
+            "Radio & Rooms",
             IconKind::ListenTogether,
         ))
         .child(desktop_nav_item(
@@ -1029,6 +1035,11 @@ pub fn app_shell() -> impl IntoElement {
                                         },
                                     ))
                                     .child(desktop_top_header())
+                                    .child(updater_top_banner(
+                                        store::updater_available(),
+                                        Rc::new(|| store::set_tab(AppTab::Settings)),
+                                        Rc::new(store::dismiss_updater_banner),
+                                    ))
                                     .child(active_screen())
                                     .child(status_toast()),
                             )
@@ -1049,4 +1060,24 @@ pub fn app_shell() -> impl IntoElement {
         )
         .child(track_action_sheet())
         .child(add_to_playlist_sheet())
+        .child(auth_sign_in_sheet(
+            signal(store::auth_sheet_open()),
+            signal(store::rooms_snapshot().tv_oauth_user_code),
+            signal(store::rooms_snapshot().tv_oauth_verification_url),
+            signal(store::rooms_snapshot().tv_oauth_expires_in_secs),
+            AuthSignInCallbacks {
+                on_close: std::sync::Arc::new(store::close_auth_sheet),
+                ..AuthSignInCallbacks::default()
+            },
+        ))
+        .child(when(store::cast_sheet_open, || {
+            cast_picker_sheet(
+                store::cast_devices(),
+                store::cast_session(),
+                |_| {},
+                || {},
+                |_| {},
+                || store::set_cast_sheet_open(false),
+            )
+        }))
 }

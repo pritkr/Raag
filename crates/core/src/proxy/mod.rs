@@ -11,6 +11,8 @@
 
 pub mod buffer;
 pub mod coalesce;
+pub mod lan_relay;
+pub mod local_route;
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -33,6 +35,7 @@ use tokio::sync::oneshot;
 
 use crate::cache::artwork::ArtworkCache;
 use crate::cache::chunks::{CHUNK_SIZE, ChunkCache};
+use crate::local_media::store::LocalMediaStore;
 use crate::offline::{resolve_confined_path, validate_video_id};
 use crate::unix_secs;
 
@@ -53,6 +56,7 @@ struct ProxyState {
     chunks: Arc<ChunkCache>,
     offline: Option<Arc<dyn OfflineStore>>,
     artwork: Option<Arc<ArtworkCache>>,
+    local_store: RwLock<Option<Arc<LocalMediaStore>>>,
     http: reqwest::Client,
     slots: RwLock<DualBufferSlots>,
     coalescer: ChunkCoalescer,
@@ -98,6 +102,7 @@ impl LoopbackProxy {
             chunks,
             offline,
             artwork,
+            local_store: RwLock::new(None),
             http,
             slots: RwLock::new(DualBufferSlots::default()),
             coalescer: ChunkCoalescer::new(),
@@ -138,6 +143,18 @@ impl LoopbackProxy {
 
     pub fn addr(&self) -> SocketAddr {
         self.addr
+    }
+
+    pub fn set_local_media_store(&self, store: Arc<LocalMediaStore>) {
+        *self.state.local_store.write().unwrap() = Some(store);
+    }
+
+    pub fn local_url(&self, track_id: &str) -> String {
+        format!("http://{}/local/{track_id}", self.addr)
+    }
+
+    pub fn local_art_url(&self, art_hash: &str) -> String {
+        format!("http://{}/local-art/{art_hash}", self.addr)
     }
 
     /// Registers a resolved stream so the proxy can immediately serve it without an extra resolve.
@@ -399,6 +416,15 @@ async fn handle_request(
     let path = req.uri().path();
     if path == "/artwork" {
         return Ok(handle_artwork_request(req, state).await);
+    }
+    if path.starts_with("/local/") || path.starts_with("/local-art/") {
+        let local_store = state.local_store.read().unwrap().clone();
+        if let Some(resp) =
+            local_route::handle_local_request(&req, local_store.as_ref(), state.artwork.as_ref())
+                .await
+        {
+            return Ok(resp);
+        }
     }
     let Some(video_id_raw) = path.strip_prefix("/stream/") else {
         return Ok(simple_response(StatusCode::NOT_FOUND, "not found"));

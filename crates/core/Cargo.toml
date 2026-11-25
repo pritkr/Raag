@@ -5,9 +5,10 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-default = ["provider-ytmapi", "provider-rustypipe"]
+default = ["provider-ytmapi", "provider-rustypipe", "lan-casting"]
 provider-ytmapi = ["dep:ytmapi-rs"]
 provider-rustypipe = ["dep:rustypipe"]
+lan-casting = []
 
 [dependencies]
 resonance-contract.workspace = true
@@ -37,6 +38,11 @@ futures-util.workspace = true
 lofty.workspace = true
 directories.workspace = true
 ed25519-dalek.workspace = true
+tokio-tungstenite.workspace = true
+mdns-sd.workspace = true
+prost.workspace = true
+tokio-rustls.workspace = true
+rupnp.workspace = true
 
 [target.'cfg(target_os = "android")'.dependencies]
 rquickjs = { workspace = true, features = ["bindgen"] }

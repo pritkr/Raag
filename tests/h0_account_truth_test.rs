@@ -403,14 +403,14 @@ async fn offline_vault_pinned_collections_surface_and_honest_radio_mix_label() {
     assert_eq!(pinned.len(), 1);
     assert_eq!(pinned[0].title, "Midnight Vault");
 
-    // Verify UI renders "Radio Mix" (not "Listen Together") and Library Downloads surface works
+    // Verify UI renders "Radio & Rooms" (not "Listen Together") and Library Downloads surface works
     store::enable_fixture_mode(true);
     let mut app = Headless::start(EngineConfig {
         viewport: Size::new(Points(1200.0), Points(800.0)),
         ..EngineConfig::new(Root::of::<resonance::App>())
     })
     .unwrap();
-    app.wait_for("Radio Mix").unwrap();
+    app.wait_for("Radio & Rooms").unwrap();
 
     app.press("Library").unwrap();
     app.wait_for("lib-filter-downloads").unwrap();

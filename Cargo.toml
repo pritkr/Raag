@@ -4,6 +4,7 @@ members = [
     ".",
     "crates/contract",
     "crates/core",
+    "crates/room-relay",
 ]
 exclude = ["_refs"]
 
@@ -73,6 +74,9 @@ default = []
 desktop-keyring = ["dep:keyring"]
 desktop-mpris = ["dep:souvlaki"]
 desktop-native = ["desktop-mpris", "desktop-keyring"]
+provider-ytmapi = ["resonance-core/provider-ytmapi"]
+provider-rustypipe = ["resonance-core/provider-rustypipe"]
+lan-casting = ["resonance-core/lan-casting"]
 
 [dependencies]
 resonance-contract.workspace = true
@@ -87,6 +91,9 @@ log.workspace = true
 env_logger.workspace = true
 async-trait.workspace = true
 crossbeam-channel.workspace = true
+ed25519-dalek.workspace = true
+hex.workspace = true
+rand.workspace = true
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni.workspace = true
@@ -99,8 +106,10 @@ hyper.workspace = true
 hyper-util.workspace = true
 http-body-util.workspace = true
 bytes.workspace = true
+rustypipe.workspace = true
 
 [dev-dependencies]
+resonance-room-relay = { path = "crates/room-relay" }
 nsh-engine.workspace = true
 nsh-testing.workspace = true
 tempfile.workspace = true
@@ -112,6 +121,7 @@ hyper.workspace = true
 hyper-util.workspace = true
 http-body-util.workspace = true
 bytes.workspace = true
+rustypipe.workspace = true
 
 [profile.release]
 lto = "thin"

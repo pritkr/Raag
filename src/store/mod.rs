@@ -10,10 +10,13 @@
 
 pub mod catalog_slice;
 pub mod library_slice;
+pub mod local_media_slice;
 pub mod mutation_slice;
 pub mod playback_slice;
+pub mod rooms_slice;
 pub mod settings_slice;
 pub mod ui_slice;
+pub mod updater_slice;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{OnceLock, RwLock};
@@ -21,9 +24,11 @@ use std::time::Duration;
 
 use nsh_core::prelude::*;
 use resonance_contract::{
-    AuthBackendStatus, CacheStats, DownloadRecord, HistoryEntry, HomeSection, LibraryCollectionRef,
-    LyricsDocument, PlayerSnapshot, PlayerState, Playlist, PlaylistEditOp, PoTokenDiagnostics,
-    Track,
+    AccountProfile, AuthBackendStatus, CacheStats, CastDevice, CastSessionState, DownloadRecord,
+    ExplorePage, HistoryEntry, HomeSection, LibraryCollectionRef, LocalFolderRoot,
+    LocalScanProgress, LocalTrackRecord, LyricsDocument, PlayerSnapshot, PlayerState, Playlist,
+    PlaylistEditOp, PoTokenDiagnostics, RemoteConfigStatus, Track, UpdateChannel, UpdateInfo,
+    UpdatePhase,
 };
 use resonance_core::audio_dsp::DspConfig;
 use resonance_core::downloads::{PinnedCollection, PinnedCollectionKind};
@@ -34,10 +39,15 @@ use crate::live_engine::{self, LiveUpdate};
 
 pub use catalog_slice::{CatalogSlice, SearchFilter, SidebarPlaylist};
 pub use library_slice::{LibraryFilter, LibrarySlice};
+pub use local_media_slice::{
+    LocalAlbumGroup, LocalArtistGroup, LocalLibrarySubTab, LocalMediaSlice,
+};
 pub use mutation_slice::MutationSlice;
 pub use playback_slice::{AudioDriverSnapshot, PlaybackSlice, ShortcutAction, map_shortcut_key};
-pub use settings_slice::{SettingsSlice, ThemeChoice};
+pub use rooms_slice::{EntityRoute, ListenTogetherSubMode, RoomsSlice};
+pub use settings_slice::{AudioDspCapability, SettingsSlice, ThemeChoice};
 pub use ui_slice::{AppTab, DesktopSidePanel, UiSlice};
+pub use updater_slice::UpdaterSlice;
 
 static FIXTURE_MODE_FLAG: AtomicBool = AtomicBool::new(false);
 static PROXY_BASE_URL: OnceLock<RwLock<String>> = OnceLock::new();
@@ -136,6 +146,12 @@ pub struct AppState {
     pub library: LibrarySlice,
     pub mutations: MutationSlice,
     pub settings: SettingsSlice,
+    pub rooms: RoomsSlice,
+    pub local_media: LocalMediaSlice,
+    pub updater: UpdaterSlice,
+    pub cast_sheet_open: bool,
+    pub cast_devices: Vec<CastDevice>,
+    pub cast_session: CastSessionState,
 }
 
 impl Default for AppState {
@@ -155,6 +171,12 @@ impl Default for AppState {
             library: LibrarySlice::new(fixture, liked_tracks),
             mutations: MutationSlice::default(),
             settings: SettingsSlice::new(fixture),
+            rooms: RoomsSlice::default(),
+            local_media: LocalMediaSlice::new(),
+            updater: UpdaterSlice::new(),
+            cast_sheet_open: false,
+            cast_devices: Vec::new(),
+            cast_session: CastSessionState::Disconnected,
         }
     }
 }
@@ -207,12 +229,27 @@ fn apply_live_update(update: LiveUpdate) {
         LiveUpdate::ExploreLoaded(res) => {
             state_signal().update(|s| s.catalog.apply_explore_loaded(res));
         }
+        LiveUpdate::ExplorePageLoaded(res) => {
+            state_signal().update(|s| s.catalog.apply_explore_page(res));
+        }
+        LiveUpdate::MoodPlaylistsLoaded { mood, result } => {
+            state_signal().update(|s| s.catalog.apply_mood_playlists(Some(mood), result));
+        }
         LiveUpdate::SearchLoaded {
             query,
             result,
             plays,
         } => {
             state_signal().update(|s| s.catalog.apply_search_loaded(&query, result, plays));
+        }
+        LiveUpdate::SearchSuggestionsLoaded {
+            prefix,
+            suggestions,
+        } => {
+            state_signal().update(|s| s.catalog.apply_search_suggestions(&prefix, suggestions));
+        }
+        LiveUpdate::SearchContinuationLoaded { query, result } => {
+            state_signal().update(|s| s.catalog.append_search_page(&query, result));
         }
         LiveUpdate::CollectionLoaded(res) => {
             state_signal().update(|s| match res {
@@ -290,6 +327,12 @@ fn apply_live_update(update: LiveUpdate) {
         }
         LiveUpdate::AuthStatus(status) => {
             state_signal().update(|s| s.settings.apply_auth_status(status));
+        }
+        LiveUpdate::AccountProfileUpdated(profile) => {
+            state_signal().update(|s| s.settings.apply_account_profile(profile));
+        }
+        LiveUpdate::RemoteConfigUpdated(status) => {
+            state_signal().update(|s| s.settings.apply_remote_config_status(status));
         }
         LiveUpdate::PoTokenDiagnostics(diag) => {
             state_signal().update(|s| {
@@ -510,6 +553,24 @@ pub fn dsp_config() -> DspConfig {
     state_signal().with(|s| s.settings.dsp_config.clone())
 }
 
+pub fn dsp_capability() -> AudioDspCapability {
+    state_signal().with(|s| s.settings.dsp_capability())
+}
+
+pub fn account_profile() -> Option<AccountProfile> {
+    state_signal().with(|s| s.settings.account_profile.clone())
+}
+
+pub fn remote_config_status() -> RemoteConfigStatus {
+    state_signal().with(|s| s.settings.remote_config_status.clone())
+}
+
+pub fn refresh_remote_config() {
+    if !is_fixture_mode() {
+        live_engine::dispatch_refresh_remote_config();
+    }
+}
+
 pub fn set_loudness_normalization(enabled: bool) {
     state_signal().update(|s| {
         s.settings.set_loudness_normalization(enabled);
@@ -519,6 +580,9 @@ pub fn set_loudness_normalization(enabled: bool) {
             "ReplayGain / EBU R128 loudness normalization disabled"
         });
     });
+    if !is_fixture_mode() {
+        live_engine::dispatch_update_dsp_config(dsp_config());
+    }
     persist_settings_now(true);
 }
 
@@ -531,6 +595,9 @@ pub fn set_silence_skip(enabled: bool) {
             "Silence skipping disabled"
         });
     });
+    if !is_fixture_mode() {
+        live_engine::dispatch_update_dsp_config(dsp_config());
+    }
     persist_settings_now(true);
 }
 
@@ -539,6 +606,9 @@ pub fn cycle_eq_preset() {
         let label = s.settings.cycle_eq_preset();
         s.ui.set_status_banner(format!("10-band EQ preset: {label}"));
     });
+    if !is_fixture_mode() {
+        live_engine::dispatch_update_dsp_config(dsp_config());
+    }
     persist_settings_now(true);
 }
 
@@ -552,6 +622,9 @@ pub fn cycle_crossfade_ms() {
         };
         s.ui.set_status_banner(label);
     });
+    if !is_fixture_mode() {
+        live_engine::dispatch_update_dsp_config(dsp_config());
+    }
     persist_settings_now(true);
 }
 
@@ -571,6 +644,57 @@ pub fn home_sections() -> Vec<HomeSection> {
 
 pub fn explore_sections() -> Vec<HomeSection> {
     state_signal().with(|s| s.catalog.explore_sections.clone())
+}
+
+pub fn explore_page() -> Option<ExplorePage> {
+    state_signal().with(|s| s.catalog.explore_page.clone())
+}
+
+pub fn mood_playlists() -> Vec<LibraryCollectionRef> {
+    state_signal().with(|s| s.catalog.mood_playlists.clone())
+}
+
+pub fn load_mood_playlists(mood: &str, params: &str) {
+    state_signal().update(|s| {
+        s.catalog.selected_mood = Some(mood.to_owned());
+    });
+    if is_fixture_mode() {
+        run_search(mood);
+        set_tab(AppTab::Search);
+    } else {
+        live_engine::dispatch_load_mood_playlists(mood.to_owned(), params.to_owned());
+    }
+}
+
+pub fn search_suggestions() -> Vec<String> {
+    state_signal().with(|s| s.catalog.search_suggestions.clone())
+}
+
+pub fn search_continuation() -> Option<String> {
+    state_signal().with(|s| s.catalog.search_continuation.clone())
+}
+
+pub fn load_more_search() {
+    if is_fixture_mode() {
+        return;
+    }
+    let (query, category, cont) = state_signal().with(|s| {
+        (
+            s.catalog.search_query.clone(),
+            s.catalog.search_filter.as_search_category(),
+            s.catalog.search_continuation.clone(),
+        )
+    });
+    if let Some(continuation) = cont {
+        state_signal().update(|s| s.catalog.search_loading = true);
+        live_engine::dispatch_search_continuation(query, category, continuation);
+    }
+}
+
+pub fn fetch_search_suggestions(prefix: &str) {
+    if !is_fixture_mode() && !prefix.trim().is_empty() {
+        live_engine::dispatch_search_suggestions(prefix.to_owned());
+    }
 }
 
 pub fn is_home_loading() -> bool {
@@ -1311,4 +1435,90 @@ pub fn on_native_audio_ended() {
 
 pub fn on_native_audio_error(message: String) {
     state_signal().update(|s| s.ui.set_status_banner(message));
+}
+
+pub fn rooms_snapshot() -> RoomsSlice {
+    state_signal().with(|s| s.rooms.clone())
+}
+
+pub fn open_auth_sheet() {
+    state_signal().update(|s| s.rooms.auth_sheet_open = true);
+}
+
+pub fn close_auth_sheet() {
+    state_signal().update(|s| s.rooms.auth_sheet_open = false);
+}
+
+pub fn auth_sheet_open() -> bool {
+    state_signal().with(|s| s.rooms.auth_sheet_open)
+}
+
+pub fn local_media_roots() -> Vec<LocalFolderRoot> {
+    state_signal().with(|s| s.local_media.roots.clone())
+}
+
+pub fn local_media_tracks() -> Vec<LocalTrackRecord> {
+    state_signal().with(|s| s.local_media.tracks.clone())
+}
+
+pub fn local_media_progress() -> LocalScanProgress {
+    state_signal().with(|s| s.local_media.scan_progress.clone())
+}
+
+pub fn updater_state() -> UpdaterSlice {
+    state_signal().with(|s| s.updater.clone())
+}
+
+pub fn updater_channel() -> UpdateChannel {
+    state_signal().with(|s| s.updater.channel)
+}
+
+pub fn set_updater_channel(channel: UpdateChannel) {
+    state_signal().update(|s| s.updater.channel = channel);
+}
+
+pub fn updater_auto_check() -> bool {
+    state_signal().with(|s| s.updater.auto_check)
+}
+
+pub fn set_updater_auto_check(enabled: bool) {
+    state_signal().update(|s| s.updater.auto_check = enabled);
+}
+
+pub fn updater_phase() -> UpdatePhase {
+    state_signal().with(|s| s.updater.phase.clone())
+}
+
+pub fn updater_available() -> Option<UpdateInfo> {
+    state_signal().with(|s| match &s.updater.phase {
+        UpdatePhase::Available(info) if !s.updater.banner_dismissed => Some(info.clone()),
+        _ => None,
+    })
+}
+
+pub fn dismiss_updater_banner() {
+    state_signal().update(|s| s.updater.banner_dismissed = true);
+}
+
+pub fn skip_updater_version(version: String) {
+    state_signal().update(|s| {
+        s.updater.skipped_version = Some(version);
+        s.updater.phase = UpdatePhase::Idle;
+    });
+}
+
+pub fn cast_sheet_open() -> bool {
+    state_signal().with(|s| s.cast_sheet_open)
+}
+
+pub fn set_cast_sheet_open(open: bool) {
+    state_signal().update(|s| s.cast_sheet_open = open);
+}
+
+pub fn cast_devices() -> Vec<CastDevice> {
+    state_signal().with(|s| s.cast_devices.clone())
+}
+
+pub fn cast_session() -> CastSessionState {
+    state_signal().with(|s| s.cast_session.clone())
 }

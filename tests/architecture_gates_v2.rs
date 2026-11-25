@@ -70,8 +70,9 @@ async fn req1_walking_skeleton_gate0_and_exact_nsh_pin_and_fallbacks() {
         "platform/android/src/main/kotlin/dev/resonance/ytmusic/PlaybackForegroundService.kt",
     ))
     .unwrap();
-    let proof_1 =
-        svc_kt.contains("MediaSessionService") && svc_kt.contains("playFromLoopbackProxy");
+    let proof_1 = (svc_kt.contains("MediaSessionService")
+        || svc_kt.contains("MediaLibraryService"))
+        && svc_kt.contains("playFromLoopbackProxy");
 
     // Proof 2: WebView cookie capture strips `; wv`
     let sanitized = sanitize_android_webview_ua(

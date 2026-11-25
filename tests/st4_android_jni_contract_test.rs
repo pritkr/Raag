@@ -9,14 +9,14 @@ use resonance::platform::android::{
 };
 use resonance_contract::{
     AudioBackend, AuthError, AuthSession, AuthStore, CredentialBackendKind, MediaCommand,
-    NowPlayingMetadata, TrackId,
+    NowPlayingMetadata,
 };
 use resonance_core::innertube::FileAuthStore;
 use tempfile::tempdir;
 
 fn sample_meta() -> NowPlayingMetadata {
     NowPlayingMetadata {
-        track_id: TrackId("st4-track-1".to_owned()),
+        track_id: "st4-track-1".to_owned(),
         title: "Raag Yaman".to_owned(),
         artist: "Resonance Ensemble".to_owned(),
         album: Some("Evening Sessions".to_owned()),
@@ -85,8 +85,11 @@ fn android_keystore_auth_store_encrypts_loads_falls_back_and_prevents_resurrecti
     // Missing required SAPISID / __Secure-3PAPISID cookie must be rejected.
     let bad_session = AuthSession {
         cookie_header: "PREF=tz=UTC".to_owned(),
+        auth_user: 0,
+        page_id: None,
+        visitor_data: None,
         account_name: Some("Tester".to_owned()),
-        saved_at_unix_secs: 1_700_000_000,
+        is_premium: false,
     };
     assert!(matches!(
         store.save_session(&bad_session),
@@ -96,8 +99,11 @@ fn android_keystore_auth_store_encrypts_loads_falls_back_and_prevents_resurrecti
     // Healthy Keystore path saves to Keystore and reports OsKeyring.
     let session = AuthSession {
         cookie_header: "SAPISID=abc123; __Secure-3PAPISID=xyz789".to_owned(),
+        auth_user: 0,
+        page_id: None,
+        visitor_data: None,
         account_name: Some("Tester".to_owned()),
-        saved_at_unix_secs: 1_700_000_100,
+        is_premium: false,
     };
     store.save_session(&session).unwrap();
     assert_eq!(store.backend_kind(), CredentialBackendKind::OsKeyring);

@@ -273,12 +273,14 @@ pub fn mount_nsh_audio_driver() {
                             .telemetry_tx
                             .send(NshAudioTelemetry::Ended { generation });
                     }
-                    AudioEvent::Failed { error, message }
-                        if error != AudioError::Unavailable =>
-                    {
+                    AudioEvent::Failed { error, message } if error != AudioError::Unavailable => {
                         let _ = bus.telemetry_tx.send(NshAudioTelemetry::Failed {
                             generation,
-                            message: format!("Native audio error ({}): {}", error.as_str(), message),
+                            message: format!(
+                                "Native audio error ({}): {}",
+                                error.as_str(),
+                                message
+                            ),
                         });
                     }
                     _ => {}
@@ -472,12 +474,12 @@ pub fn mount_nsh_audio_driver() {
     }
 
     cleanup(move || {
-        let (waker, gen) = {
+        let (waker, generation) = {
             let mut state = driver.borrow_mut();
             state.shutdown = true;
-            let gen = state.active.as_ref().map_or(0, |a| a.generation);
+            let generation = state.active.as_ref().map_or(0, |a| a.generation);
             state.active.take();
-            (state.pump_waker.take(), gen)
+            (state.pump_waker.take(), generation)
         };
         if let Some(w) = waker {
             w.wake();
@@ -485,9 +487,9 @@ pub fn mount_nsh_audio_driver() {
         if !fixture_mode {
             let bus = nsh_audio_bus();
             bus.wake_control();
-            if gen > 0 {
+            if generation > 0 {
                 let _ = bus.telemetry_tx.send(NshAudioTelemetry::StateChanged {
-                    generation: gen,
+                    generation,
                     state: PlayerState::Idle,
                 });
             }
@@ -722,8 +724,11 @@ impl AudioBackend for NshAudioBackend {
         self.playing.store(false, Ordering::SeqCst);
         let has_track =
             self.active_url.lock().unwrap().is_some() || self.last_meta.lock().unwrap().is_some();
-        self.media_controls
-            .sync_playback(false, self.position_ms.load(Ordering::SeqCst), has_track);
+        self.media_controls.sync_playback(
+            false,
+            self.position_ms.load(Ordering::SeqCst),
+            has_track,
+        );
         self.emit_control(NshAudioControl::Pause);
         Ok(())
     }

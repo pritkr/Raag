@@ -8,6 +8,7 @@ pub mod platform;
 pub mod screens;
 pub mod store;
 pub mod ui;
+pub mod updater;
 
 use nsh_base::theme;
 use nsh_core::keymap::When;

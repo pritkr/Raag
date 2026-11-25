@@ -12,19 +12,23 @@ use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use resonance_contract::{
-    AppEvent, AuthBackendStatus, AuthSession, CacheStats, CacheStore, DownloadRecord, HomeSection,
-    LIBRARY_SNAPSHOT_METADATA_KEY, LibraryCollectionRef, LibrarySnapshot, LikeAction,
-    LyricsDocument, LyricsProvider, MusicProvider, MutationCommand, OfflineStore, PlayerSnapshot,
-    Playlist, PlaylistEditOp, PoTokenDiagnostics, PoTokenProvider, SETTINGS_METADATA_KEY,
-    SETTINGS_TTL_SECS, SearchResults, SettingsV1, Track, TrackId, WatchtimeReport,
+    AccountProfile, AppEvent, AuthBackendStatus, AuthSession, CacheStats, CacheStore,
+    CatalogExtProvider, DownloadRecord, ExplorePage, HomeSection, LIBRARY_SNAPSHOT_METADATA_KEY,
+    LibraryCollectionRef, LibrarySnapshot, LikeAction, LyricsDocument, LyricsProvider,
+    MusicProvider, MutationCommand, OfflineStore, PlayerSnapshot, Playlist, PlaylistEditOp,
+    PoTokenDiagnostics, PoTokenProvider, RemoteConfigStatus, SETTINGS_METADATA_KEY,
+    SETTINGS_TTL_SECS, SearchCategory, SearchResults, SettingsV1, Track, TrackId, WatchtimeReport,
 };
+use resonance_core::audio_dsp::DspConfig;
 use resonance_core::cache::{
     ArtworkCache, ChunkCache, DEFAULT_ARTWORK_DISK_CAP, DEFAULT_MAX_AUDIO_CACHE_BYTES,
     SqliteCacheStore,
 };
 use resonance_core::downloads::{OfflineVault, PinnedCollection, PinnedCollectionKind};
 use resonance_core::innertube::auth::redact_secrets;
-use resonance_core::innertube::{InnerTubeClient, MutationWorker};
+use resonance_core::innertube::{
+    AccountProfileProbe, InnerTubeClient, MutationWorker, RemoteConfigSyncService,
+};
 use resonance_core::lyrics::CascadeLyricsProvider;
 use resonance_core::offline::DownloadManager;
 use resonance_core::playback::PlaybackController;
@@ -32,15 +36,14 @@ use resonance_core::potoken::{
     CachingPoTokenProvider, ChainedPoTokenProvider, PlatformAttestationPoTokenProvider,
     QuickJsVmAttestationBridge, SidecarPoTokenProvider,
 };
+use resonance_core::providers::{AtrReporter, HybridMusicProvider};
 use resonance_core::proxy::LoopbackProxy;
-use resonance_core::solver::QuickJsSolver;
+use resonance_core::solver::PlayerScriptFetcher;
 use resonance_core::sponsorblock::HttpSponsorBlockProvider;
-use resonance_core::storage::resolve_app_paths;
+use resonance_core::storage::{bootstrap_st1_services, resolve_app_paths};
 use tokio::runtime::Runtime;
 
-use crate::platform::{
-    create_platform_audio_backend, create_platform_auth_store, platform_auth_status,
-};
+use crate::platform::{create_platform_auth_store, platform_auth_status};
 
 /// Typed updates pushed from the background Tokio engine to the NSH UI thread.
 #[derive(Debug, Clone)]
@@ -53,10 +56,23 @@ pub enum LiveUpdate {
     },
     HomeLoaded(Result<Vec<HomeSection>, String>),
     ExploreLoaded(Result<Vec<HomeSection>, String>),
+    ExplorePageLoaded(Result<ExplorePage, String>),
+    MoodPlaylistsLoaded {
+        mood: String,
+        result: Result<Vec<LibraryCollectionRef>, String>,
+    },
     SearchLoaded {
         query: String,
         result: Result<SearchResults, String>,
         plays: HashMap<String, String>,
+    },
+    SearchSuggestionsLoaded {
+        prefix: String,
+        suggestions: Vec<String>,
+    },
+    SearchContinuationLoaded {
+        query: String,
+        result: Result<SearchResults, String>,
     },
     CollectionLoaded(Result<Playlist, String>),
     PlaybackUpdated(PlayerSnapshot),
@@ -71,6 +87,8 @@ pub enum LiveUpdate {
         banner: String,
     },
     AuthStatus(AuthBackendStatus),
+    AccountProfileUpdated(Option<AccountProfile>),
+    RemoteConfigUpdated(RemoteConfigStatus),
     PoTokenDiagnostics(PoTokenDiagnostics),
     MutationFailed {
         command: MutationCommand,
@@ -88,6 +106,9 @@ pub enum LiveUpdate {
 struct LiveRuntime {
     rt: Runtime,
     provider: Arc<InnerTubeClient>,
+    hybrid: Arc<HybridMusicProvider>,
+    _player_fetcher: Arc<PlayerScriptFetcher>,
+    remote_config: Arc<RemoteConfigSyncService>,
     cache: Arc<SqliteCacheStore>,
     chunks: Arc<ChunkCache>,
     lyrics: Arc<CascadeLyricsProvider>,
@@ -133,11 +154,21 @@ fn init_runtime() -> Result<LiveRuntime, String> {
             .map_err(|e| format!("ArtworkCache init failed: {e}"))?,
     );
     let auth = create_platform_auth_store(&dir);
-    let solver = Arc::new(QuickJsSolver::new(&dir).with_sqlite_cache(cache.clone()));
+    let config_base_url = std::env::var("RESONANCE_REMOTE_CONFIG_URL")
+        .ok()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty());
+    let st1 = bootstrap_st1_services(&paths, cache.clone(), config_base_url)
+        .map_err(|e| format!("ST-1 bootstrap failed: {e}"))?;
+    let solver = st1.solver.clone();
     let provider = Arc::new(
         InnerTubeClient::new(cache.clone(), auth, solver)
             .map_err(|e| format!("InnerTubeClient init failed: {e}"))?,
     );
+    if let Ok(matrix) = st1.remote_config.load_cached_matrix_sync() {
+        provider.update_client_matrix(matrix);
+    }
+    let hybrid = Arc::new(HybridMusicProvider::new(provider.clone(), cache.clone()));
     let mut po_chain: Vec<Arc<dyn PoTokenProvider>> = Vec::new();
     if let Ok(pot_url) = std::env::var("RESONANCE_POTOKEN_URL")
         && !pot_url.trim().is_empty()
@@ -178,7 +209,15 @@ fn init_runtime() -> Result<LiveRuntime, String> {
         .map_err(|e| format!("LoopbackProxy start failed: {e}"))
     })?;
 
-    let audio = create_platform_audio_backend();
+    #[cfg(target_os = "android")]
+    let (audio, android_telemetry_rx) = {
+        let bridge = Arc::new(crate::platform::android::AndroidMediaBridge::new());
+        let rx = bridge.take_telemetry_receiver();
+        (bridge as Arc<dyn resonance_contract::AudioBackend>, rx)
+    };
+    #[cfg(not(target_os = "android"))]
+    let audio: Arc<dyn resonance_contract::AudioBackend> =
+        Arc::new(crate::platform::nsh_audio::NshAudioBackend::new());
     let audio_cmd_rx = audio.take_command_receiver();
     let lyrics = Arc::new(CascadeLyricsProvider::new(provider.clone(), cache.clone()));
     let sponsorblock = Arc::new(HttpSponsorBlockProvider::new());
@@ -203,7 +242,7 @@ fn init_runtime() -> Result<LiveRuntime, String> {
 
     let controller = Arc::new(
         PlaybackController::new(
-            provider.clone(),
+            hybrid.clone(),
             audio,
             cache.clone(),
             proxy.clone(),
@@ -215,6 +254,88 @@ fn init_runtime() -> Result<LiveRuntime, String> {
     );
 
     let (tx, rx) = unbounded();
+    #[cfg(not(target_os = "android"))]
+    {
+        let ctrl_for_audio = controller.clone();
+        let tx_for_audio = tx.clone();
+        let rt_handle = rt.handle().clone();
+        let _ = std::thread::Builder::new()
+            .name("resonance-audio-telemetry".to_owned())
+            .spawn(move || {
+                let bus = crate::platform::nsh_audio::nsh_audio_bus();
+                while let Ok(ev) = bus.telemetry_rx.recv() {
+                    if rt_handle
+                        .block_on(ctrl_for_audio.handle_audio_telemetry(ev))
+                        .is_ok()
+                    {
+                        let snap = rt_handle.block_on(ctrl_for_audio.snapshot());
+                        let _ = tx_for_audio.send(LiveUpdate::PlaybackUpdated(snap));
+                    }
+                }
+            });
+    }
+    #[cfg(target_os = "android")]
+    if let Some(mut android_rx) = android_telemetry_rx {
+        let ctrl_for_android = controller.clone();
+        let tx_for_android = tx.clone();
+        rt.spawn(async move {
+            use crate::platform::android::AndroidTelemetryEvent;
+            use resonance_core::playback::AudioTelemetry;
+            while let Some(ev) = android_rx.recv().await {
+                match ev {
+                    AndroidTelemetryEvent::Progress {
+                        generation,
+                        position_ms,
+                        ..
+                    } => {
+                        if ctrl_for_android
+                            .handle_audio_telemetry(AudioTelemetry::Progress {
+                                generation,
+                                position_ms,
+                            })
+                            .await
+                            .is_ok()
+                        {
+                            let snap = ctrl_for_android.snapshot().await;
+                            let _ = tx_for_android.send(LiveUpdate::PlaybackUpdated(snap));
+                        }
+                    }
+                    AndroidTelemetryEvent::PlaybackState {
+                        generation,
+                        state_code,
+                        error_msg,
+                    } => {
+                        let state = match state_code {
+                            1 => resonance_contract::PlayerState::Buffering,
+                            2 => resonance_contract::PlayerState::Playing,
+                            3 => resonance_contract::PlayerState::Paused,
+                            _ => resonance_contract::PlayerState::Idle,
+                        };
+                        if let Some(msg) = error_msg {
+                            let _ = ctrl_for_android
+                                .handle_audio_telemetry(AudioTelemetry::Error {
+                                    generation,
+                                    message: msg,
+                                })
+                                .await;
+                        } else {
+                            let _ = ctrl_for_android
+                                .handle_audio_telemetry(AudioTelemetry::StateChanged {
+                                    generation,
+                                    state,
+                                })
+                                .await;
+                        }
+                        let snap = ctrl_for_android.snapshot().await;
+                        let _ = tx_for_android.send(LiveUpdate::PlaybackUpdated(snap));
+                    }
+                    AndroidTelemetryEvent::AuthCookiesCaptured { cookie_header } => {
+                        dispatch_sign_in(cookie_header);
+                    }
+                }
+            }
+        });
+    }
     if let Some(mut cmd_rx) = audio_cmd_rx {
         let ctrl_for_media = controller.clone();
         let tx_for_media = tx.clone();
@@ -270,6 +391,10 @@ fn init_runtime() -> Result<LiveRuntime, String> {
     let initial_downloads = cache.list_downloads().unwrap_or_default();
     let current_session = provider.current_session();
     let signed_in = current_session.is_some();
+    {
+        let _guard = rt.enter();
+        let _atr_handle = AtrReporter::spawn(bus.clone(), mutations.clone(), signed_in);
+    }
     let auth_status = platform_auth_status(current_session.as_ref());
     let proxy_base = format!("http://{}", proxy.addr());
     crate::store::set_proxy_base_url(&proxy_base);
@@ -281,6 +406,7 @@ fn init_runtime() -> Result<LiveRuntime, String> {
     });
     let _ = tx.send(LiveUpdate::SettingsLoaded(persisted_settings.clone()));
     let _ = tx.send(LiveUpdate::AuthStatus(auth_status));
+    let _ = tx.send(LiveUpdate::RemoteConfigUpdated(st1.remote_config.status()));
     let _ = tx.send(LiveUpdate::PoTokenDiagnostics(
         provider.po_token_diagnostics(),
     ));
@@ -292,14 +418,37 @@ fn init_runtime() -> Result<LiveRuntime, String> {
     if let Some(cached_lib) = load_cached_library_snapshot(cache.as_ref()) {
         let _ = tx.send(LiveUpdate::LibraryLoaded(cached_lib));
     }
-    // H0.1 Step 2: Async network refresh when signed in and not in offline mode.
+    // ST-1: Background Remote Config sync + AccountProfileProbe when online.
+    if !persisted_settings.offline_mode {
+        let rc_for_sync = st1.remote_config.clone();
+        let provider_for_rc = provider.clone();
+        let tx_for_rc = tx.clone();
+        rt.spawn(async move {
+            if let Ok(Some(matrix)) = rc_for_sync.sync_client_matrix(false).await {
+                provider_for_rc.update_client_matrix(matrix);
+            }
+            let _ = rc_for_sync.sync_solver_manifest(false).await;
+            let _ = tx_for_rc.send(LiveUpdate::RemoteConfigUpdated(rc_for_sync.status()));
+        });
+    }
+    // H0.1 Step 2: Async network refresh + session sync when signed in and not in offline mode.
     if signed_in && !persisted_settings.offline_mode {
         let provider_for_lib = provider.clone();
+        let hybrid_for_lib = hybrid.clone();
         let cache_for_lib = cache.clone();
         let tx_for_lib = tx.clone();
+        let session_for_sync = current_session.clone();
         rt.spawn(async move {
+            let _ = hybrid_for_lib.sync_session(session_for_sync.as_ref()).await;
+            if let Ok(profile) =
+                AccountProfileProbe::probe_and_update(provider_for_lib.as_ref()).await
+            {
+                let _ = tx_for_lib.send(LiveUpdate::AccountProfileUpdated(Some(profile)));
+                let status = platform_auth_status(provider_for_lib.current_session().as_ref());
+                let _ = tx_for_lib.send(LiveUpdate::AuthStatus(status));
+            }
             let snap =
-                refresh_library_snapshot(provider_for_lib.as_ref(), cache_for_lib.as_ref()).await;
+                refresh_library_snapshot(hybrid_for_lib.as_ref(), cache_for_lib.as_ref()).await;
             let _ = tx_for_lib.send(LiveUpdate::LibraryLoaded(snap));
         });
     }
@@ -329,6 +478,9 @@ fn init_runtime() -> Result<LiveRuntime, String> {
     Ok(LiveRuntime {
         rt,
         provider,
+        hybrid,
+        _player_fetcher: st1.player_fetcher,
+        remote_config: st1.remote_config,
         cache,
         chunks,
         lyrics,
@@ -368,21 +520,89 @@ pub fn dispatch_load_home() {
             return;
         }
     };
-    let provider = rt.provider.clone();
+    let hybrid = rt.hybrid.clone();
     let tx = rt.tx.clone();
     rt.rt.spawn(async move {
-        let res = provider.home().await.map_err(|e| e.to_string());
+        let res = hybrid.home().await.map_err(|e| e.to_string());
         let _ = tx.send(LiveUpdate::HomeLoaded(res));
     });
 }
 
 pub fn dispatch_load_explore() {
     let Ok(rt) = runtime() else { return };
+    let hybrid = rt.hybrid.clone();
+    let tx = rt.tx.clone();
+    rt.rt.spawn(async move {
+        let res = CatalogExtProvider::explore(hybrid.as_ref())
+            .await
+            .map_err(|e| e.to_string());
+        let _ = tx.send(LiveUpdate::ExplorePageLoaded(res));
+    });
+}
+
+pub fn dispatch_load_mood_playlists(mood: String, params: String) {
+    let Ok(rt) = runtime() else { return };
+    let hybrid = rt.hybrid.clone();
+    let tx = rt.tx.clone();
+    rt.rt.spawn(async move {
+        let res = hybrid
+            .mood_playlists(&params)
+            .await
+            .map_err(|e| e.to_string());
+        let _ = tx.send(LiveUpdate::MoodPlaylistsLoaded { mood, result: res });
+    });
+}
+
+pub fn dispatch_search_suggestions(prefix: String) {
+    let Ok(rt) = runtime() else { return };
+    if prefix.trim().is_empty() {
+        return;
+    }
+    let hybrid = rt.hybrid.clone();
+    let tx = rt.tx.clone();
+    rt.rt.spawn(async move {
+        if let Ok(suggestions) = hybrid.search_suggestions(&prefix).await {
+            let _ = tx.send(LiveUpdate::SearchSuggestionsLoaded {
+                prefix,
+                suggestions,
+            });
+        }
+    });
+}
+
+pub fn dispatch_search_continuation(query: String, category: SearchCategory, continuation: String) {
+    let Ok(rt) = runtime() else { return };
+    let hybrid = rt.hybrid.clone();
+    let tx = rt.tx.clone();
+    rt.rt.spawn(async move {
+        let res = hybrid
+            .search_categorized(&query, category, Some(&continuation))
+            .await
+            .map_err(|e| e.to_string());
+        let _ = tx.send(LiveUpdate::SearchContinuationLoaded { query, result: res });
+    });
+}
+
+pub fn dispatch_update_dsp_config(config: DspConfig) {
+    #[cfg(not(target_os = "android"))]
+    crate::platform::nsh_audio::nsh_audio_bus().send_control(
+        crate::platform::nsh_audio::NshAudioControl::UpdateDsp(config),
+    );
+    #[cfg(target_os = "android")]
+    let _ = config;
+}
+
+pub fn dispatch_refresh_remote_config() {
+    let Ok(rt) = runtime() else { return };
+    let rc = rt.remote_config.clone();
     let provider = rt.provider.clone();
     let tx = rt.tx.clone();
     rt.rt.spawn(async move {
-        let res = provider.explore().await.map_err(|e| e.to_string());
-        let _ = tx.send(LiveUpdate::ExploreLoaded(res));
+        if let Ok(Some(matrix)) = rc.sync_client_matrix(true).await {
+            provider.update_client_matrix(matrix);
+        }
+        let _ = rc.sync_solver_manifest(true).await;
+        let _ = tx.send(LiveUpdate::RemoteConfigUpdated(rc.status()));
     });
 }
 
@@ -582,6 +802,7 @@ pub async fn refresh_library_snapshot(
 pub fn dispatch_sign_in(cookie_header: String) {
     let Ok(rt) = runtime() else { return };
     let provider = rt.provider.clone();
+    let hybrid = rt.hybrid.clone();
     let cache = rt.cache.clone();
     let tx = rt.tx.clone();
     rt.rt.spawn(async move {
@@ -595,13 +816,20 @@ pub fn dispatch_sign_in(cookie_header: String) {
         };
         match provider.sign_in(session) {
             Ok(()) => {
+                let _ = hybrid
+                    .sync_session(provider.current_session().as_ref())
+                    .await;
+                if let Ok(profile) = AccountProfileProbe::probe_and_update(provider.as_ref()).await
+                {
+                    let _ = tx.send(LiveUpdate::AccountProfileUpdated(Some(profile)));
+                }
                 let status = platform_auth_status(provider.current_session().as_ref());
                 let _ = tx.send(LiveUpdate::AuthStatus(status));
                 let _ = tx.send(LiveUpdate::AuthUpdated {
                     signed_in: true,
                     banner: "Signed in securely (stored in OS Keystore)".into(),
                 });
-                let snap = refresh_library_snapshot(provider.as_ref(), cache.as_ref()).await;
+                let snap = refresh_library_snapshot(hybrid.as_ref(), cache.as_ref()).await;
                 let _ = tx.send(LiveUpdate::LibraryLoaded(snap));
             }
             Err(e) => {
@@ -616,12 +844,15 @@ pub fn dispatch_sign_in(cookie_header: String) {
 pub fn dispatch_sign_out() {
     let Ok(rt) = runtime() else { return };
     let provider = rt.provider.clone();
+    let hybrid = rt.hybrid.clone();
     let cache = rt.cache.clone();
     let tx = rt.tx.clone();
     rt.rt.spawn(async move {
         let _ = provider.sign_out();
+        let _ = hybrid.sync_session(None).await;
         let _ = cache.evict_metadata(LIBRARY_SNAPSHOT_METADATA_KEY);
         let status = platform_auth_status(provider.current_session().as_ref());
+        let _ = tx.send(LiveUpdate::AccountProfileUpdated(None));
         let _ = tx.send(LiveUpdate::AuthStatus(status));
         let _ = tx.send(LiveUpdate::AuthUpdated {
             signed_in: false,

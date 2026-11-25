@@ -1,9 +1,12 @@
 //! Catalog, Home shelves, Mood filters, Search, and Collection detail slice (`CatalogSlice`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use nsh_core::prelude::SharedString;
-use resonance_contract::{HomeItem, HomeSection, Playlist, SearchResults, Track};
+use resonance_contract::{
+    ExplorePage, HomeItem, HomeSection, LibraryCollectionRef, Playlist, SearchCategory,
+    SearchResults, Track,
+};
 use resonance_core::fixture::{fixture_home_sections, fixture_tracks};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -15,6 +18,7 @@ pub enum SearchFilter {
     Albums,
     Playlists,
     Artists,
+    Podcasts,
 }
 
 impl SearchFilter {
@@ -26,11 +30,26 @@ impl SearchFilter {
             Self::Albums => "Albums",
             Self::Playlists => "Playlists",
             Self::Artists => "Artists",
+            Self::Podcasts => "Podcasts",
         }
     }
 
     pub fn is_collection_only(self) -> bool {
-        matches!(self, Self::Albums | Self::Playlists | Self::Artists)
+        matches!(
+            self,
+            Self::Albums | Self::Playlists | Self::Artists | Self::Podcasts
+        )
+    }
+
+    pub fn as_search_category(self) -> SearchCategory {
+        match self {
+            Self::All => SearchCategory::All,
+            Self::Songs | Self::Videos => SearchCategory::Songs,
+            Self::Albums => SearchCategory::Albums,
+            Self::Playlists => SearchCategory::Playlists,
+            Self::Artists => SearchCategory::Artists,
+            Self::Podcasts => SearchCategory::Podcasts,
+        }
     }
 
     pub fn params(self) -> Option<&'static str> {
@@ -41,6 +60,7 @@ impl SearchFilter {
             Self::Albums => Some("EgWKAQIYAWoKEAMQBBAJEAoQBQ%3D%3D"),
             Self::Playlists => Some("EgeKAQQoAEABagoQAxAEEAkQChAF"),
             Self::Artists => Some("EgWKAQIgAWoKEAMQBBAJEAoQBQ%3D%3D"),
+            Self::Podcasts => Some("EgWKAQJQAWoKEAMQBBAJEAoQBQ%3D%3D"),
         }
     }
 }
@@ -62,7 +82,10 @@ pub fn filter_tracks_for_mode(tracks: &[Track], filter: SearchFilter) -> Vec<Tra
             .filter(|t| t.duration_ms > 0)
             .cloned()
             .collect(),
-        SearchFilter::Albums | SearchFilter::Playlists | SearchFilter::Artists => tracks
+        SearchFilter::Albums
+        | SearchFilter::Playlists
+        | SearchFilter::Artists
+        | SearchFilter::Podcasts => tracks
             .iter()
             .filter(|t| t.album.as_ref().is_some_and(|a| !a.title.is_empty()))
             .cloned()
@@ -74,6 +97,8 @@ pub fn filter_tracks_for_mode(tracks: &[Track], filter: SearchFilter) -> Vec<Tra
 pub struct CatalogSlice {
     pub home_sections: Vec<HomeSection>,
     pub explore_sections: Vec<HomeSection>,
+    pub explore_page: Option<ExplorePage>,
+    pub mood_playlists: Vec<LibraryCollectionRef>,
     pub home_loading: bool,
     pub home_error: Option<String>,
     pub selected_mood: Option<String>,
@@ -83,6 +108,8 @@ pub struct CatalogSlice {
     pub search_all_tracks: Vec<Track>,
     pub search_results: Vec<Track>,
     pub search_albums: Vec<Playlist>,
+    pub search_suggestions: Vec<String>,
+    pub search_continuation: Option<String>,
     pub search_plays: HashMap<String, String>,
     pub search_generation: u64,
     pub search_loading: bool,
@@ -108,6 +135,8 @@ impl CatalogSlice {
         Self {
             home_sections,
             explore_sections: Vec::new(),
+            explore_page: None,
+            mood_playlists: Vec::new(),
             home_loading: !fixture,
             home_error: None,
             selected_mood: None,
@@ -117,6 +146,8 @@ impl CatalogSlice {
             search_all_tracks: initial_search.clone(),
             search_results: initial_search,
             search_albums: Vec::new(),
+            search_suggestions: Vec::new(),
+            search_continuation: None,
             search_plays: HashMap::new(),
             search_generation: 0,
             search_loading: false,
@@ -146,6 +177,32 @@ impl CatalogSlice {
         }
     }
 
+    pub fn apply_explore_page(&mut self, res: Result<ExplorePage, String>) {
+        if let Ok(page) = res {
+            if !page.charts.is_empty() {
+                self.explore_sections = page.charts.clone();
+            }
+            self.explore_page = Some(page);
+        }
+    }
+
+    pub fn apply_mood_playlists(
+        &mut self,
+        mood: Option<String>,
+        res: Result<Vec<LibraryCollectionRef>, String>,
+    ) {
+        self.selected_mood = mood;
+        if let Ok(playlists) = res {
+            self.mood_playlists = playlists;
+        }
+    }
+
+    pub fn apply_search_suggestions(&mut self, prefix: &str, suggestions: Vec<String>) {
+        if self.search_query == prefix {
+            self.search_suggestions = suggestions;
+        }
+    }
+
     pub fn apply_search_loaded(
         &mut self,
         query: &str,
@@ -160,6 +217,7 @@ impl CatalogSlice {
             Ok(res) => {
                 self.search_all_tracks = res.tracks;
                 self.search_albums = res.albums;
+                self.search_continuation = res.continuation;
                 self.search_plays = plays;
                 self.search_results =
                     filter_tracks_for_mode(&self.search_all_tracks, self.search_filter);
@@ -168,6 +226,36 @@ impl CatalogSlice {
             Err(err) => {
                 self.search_error = Some(err);
             }
+        }
+    }
+
+    pub fn append_search_page(&mut self, query: &str, result: Result<SearchResults, String>) {
+        if self.search_query != query {
+            return;
+        }
+        self.search_loading = false;
+        if let Ok(res) = result {
+            let mut seen_tracks: HashSet<String> = self
+                .search_all_tracks
+                .iter()
+                .map(|t| t.id.clone())
+                .collect();
+            for track in res.tracks {
+                if !track.id.is_empty() && seen_tracks.insert(track.id.clone()) {
+                    self.search_all_tracks.push(track);
+                }
+            }
+            let mut seen_albums: HashSet<String> =
+                self.search_albums.iter().map(|a| a.id.clone()).collect();
+            for album in res.albums {
+                if !album.id.is_empty() && seen_albums.insert(album.id.clone()) {
+                    self.search_albums.push(album);
+                }
+            }
+            self.search_continuation = res.continuation;
+            self.search_results =
+                filter_tracks_for_mode(&self.search_all_tracks, self.search_filter);
+            self.search_error = None;
         }
     }
 

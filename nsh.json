@@ -8,6 +8,13 @@
   "theme": "theme.json",
   "rust": ".",
   "root": "App",
+  "updater": {
+    "url": "https://github.com/aashishpandey/Raag/releases/latest/download/latest.json",
+    "publicKey": "XCAFjL7IAgZEX/PkPjQal+br//wftMJxl+Gstj9+0zU=",
+    "channels": {
+      "beta": "https://github.com/aashishpandey/Raag/releases/download/beta-latest/latest.json"
+    }
+  },
   "capabilities": {
     "network": {
       "hosts": [
@@ -26,7 +33,15 @@
         "lrclib.net",
         "unison.betterlyrics.org",
         "lyrics.api.dacubeking.com",
-        "sponsor.ajay.app"
+        "sponsor.ajay.app",
+        "github.com",
+        "objects.githubusercontent.com",
+        "release-assets.githubusercontent.com"
+      ]
+    },
+    "openUrl": {
+      "schemes": [
+        "https"
       ]
     },
     "webview": {

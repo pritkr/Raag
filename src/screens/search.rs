@@ -234,6 +234,7 @@ pub fn search_screen() -> impl IntoElement {
     scroll().flex_1().min_h(px(0.0)).child(
         view()
             .p_4()
+            .pb_safe_area()
             .when(is_desktop_layout(), |v| v.px_8().py_5())
             .gap_4()
             .child(
@@ -351,7 +352,8 @@ pub fn search_screen() -> impl IntoElement {
                         SearchFilter::Playlists,
                         "search-filter-playlists",
                     ))
-                    .child(filter_tab(SearchFilter::Artists, "search-filter-artists")),
+                    .child(filter_tab(SearchFilter::Artists, "search-filter-artists"))
+                    .child(filter_tab(SearchFilter::Podcasts, "search-filter-podcasts")),
             )
             .child(when(store::is_search_loading, || {
                 view()
@@ -399,6 +401,7 @@ pub fn search_screen() -> impl IntoElement {
                     let section_label = match filter {
                         SearchFilter::Playlists => "Playlists",
                         SearchFilter::Artists => "Artists",
+                        SearchFilter::Podcasts => "Podcasts",
                         _ => "Albums & Collections",
                     };
                     out = out.child(
