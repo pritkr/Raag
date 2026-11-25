@@ -20,12 +20,24 @@ pub const EMBEDDED_CLIENT_MATRIX_JSON: &str =
 #[serde(rename_all = "snake_case")]
 pub enum PoTokenPolicy {
     NotRequired,
+    #[serde(rename = "required")]
+    Required,
     /// Web clients (`WEB_REMIX`) require a GVS PO token for free/anonymous sessions,
     /// while YouTube Music Premium subscribers bypass the GVS PO token requirement.
     RequiredForWebFreeBypassedByPremium,
     /// iOS clients require an `iOSGuard` PoToken.
     RequiredIosGuard,
     Optional,
+}
+
+impl PoTokenPolicy {
+    pub fn requires_gvs_po_token(self, tier: AccountTier) -> bool {
+        match self {
+            Self::Required => true,
+            Self::RequiredForWebFreeBypassedByPremium => !tier.is_premium(),
+            Self::NotRequired | Self::Optional | Self::RequiredIosGuard => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,6 +125,7 @@ impl ClientMatrixEntry {
         // Enforce explicit PO-token policy
         match self.po_token_policy {
             PoTokenPolicy::NotRequired | PoTokenPolicy::Optional => true,
+            PoTokenPolicy::Required => has_gvs_po_token,
             PoTokenPolicy::RequiredForWebFreeBypassedByPremium => {
                 tier.is_premium() || has_gvs_po_token
             }
@@ -181,6 +194,13 @@ impl ClientMatrix {
             )))
         })?;
         Ok(())
+    }
+
+    /// Looks up the matrix entry for a given [`ClientKind`].
+    pub fn entry_for(&self, kind: ClientKind) -> Option<&ClientMatrixEntry> {
+        self.clients
+            .iter()
+            .find(|entry| entry.client_kind() == Some(kind))
     }
 
     /// Computes the ordered playback resolution chain from the matrix for the given
