@@ -128,8 +128,10 @@ fn binary_visual_rubric_touch_targets_reduced_motion_and_zero_raw_colors() {
             .unwrap();
     assert!(net_cfg.contains("cleartextTrafficPermitted=\"false\""));
     assert!(net_cfg.contains("127.0.0.1"));
-    let svc =
-        fs::read_to_string(root.join("platform/android/PlaybackForegroundService.kt")).unwrap();
+    let svc = fs::read_to_string(root.join(
+        "platform/android/src/main/kotlin/dev/resonance/ytmusic/PlaybackForegroundService.kt",
+    ))
+    .unwrap();
     assert!(svc.contains("RECEIVER_NOT_EXPORTED"));
     assert!(
         svc.contains("FOREGROUND_SERVICE_MEDIA_PLAYBACK")

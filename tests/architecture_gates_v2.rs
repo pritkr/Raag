@@ -53,16 +53,23 @@ async fn req1_walking_skeleton_gate0_and_exact_nsh_pin_and_fallbacks() {
     let fallbacks = documented_platform_fallbacks();
     assert!(fallbacks.len() >= 4);
     assert!(
-        root.join("platform/android/PlaybackForegroundService.kt")
+        root.join(
+            "platform/android/src/main/kotlin/dev/resonance/ytmusic/PlaybackForegroundService.kt"
+        )
+        .exists()
+    );
+    assert!(
+        root.join("platform/android/src/main/kotlin/dev/resonance/ytmusic/KeystoreBridge.kt")
             .exists()
     );
-    assert!(root.join("platform/android/KeystoreBridge.kt").exists());
     assert!(root.join("platform/desktop.rs").exists());
 
     // Execute all 4 Walking-Skeleton Gate 0 proofs:
     // Proof 1: Media3 Foreground Service + lock-screen notification controls present
-    let svc_kt =
-        fs::read_to_string(root.join("platform/android/PlaybackForegroundService.kt")).unwrap();
+    let svc_kt = fs::read_to_string(root.join(
+        "platform/android/src/main/kotlin/dev/resonance/ytmusic/PlaybackForegroundService.kt",
+    ))
+    .unwrap();
     let proof_1 =
         svc_kt.contains("MediaSessionService") && svc_kt.contains("playFromLoopbackProxy");
 
@@ -73,7 +80,10 @@ async fn req1_walking_skeleton_gate0_and_exact_nsh_pin_and_fallbacks() {
     let proof_2 = !sanitized.contains("; wv") && svc_kt.contains("configureGoogleSignInWebView");
 
     // Proof 3: Android Keystore AES-256-GCM shim present
-    let ks_kt = fs::read_to_string(root.join("platform/android/KeystoreBridge.kt")).unwrap();
+    let ks_kt = fs::read_to_string(
+        root.join("platform/android/src/main/kotlin/dev/resonance/ytmusic/KeystoreBridge.kt"),
+    )
+    .unwrap();
     let proof_3 = ks_kt.contains("AndroidKeyStore")
         && ks_kt.contains("AES/GCM/NoPadding")
         && ks_kt.contains("writeSecret")
