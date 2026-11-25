@@ -18,6 +18,7 @@ pub mod offline;
 pub mod palette;
 pub mod playback;
 pub mod potoken;
+pub mod providers;
 pub mod proxy;
 pub mod solver;
 pub mod sponsorblock;
