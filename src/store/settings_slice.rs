@@ -1,9 +1,12 @@
 //! Settings, Theme, Auth credentials status, Audio DSP config, and PO Token diagnostics slice.
 
 use resonance_contract::{
-    AuthBackendStatus, CredentialBackendKind, PoTokenDiagnostics, PoTokenHealthStatus,
+    AuthBackendStatus, CredentialBackendKind, PersistedEqPreset, PersistedTheme,
+    PoTokenDiagnostics, PoTokenHealthStatus, SettingsV1,
 };
-use resonance_core::audio_dsp::DspConfig;
+use resonance_core::audio_dsp::{DspConfig, EqPreset};
+
+use super::playback_slice::PlaybackSlice;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ThemeChoice {
@@ -22,10 +25,14 @@ pub struct SettingsSlice {
     pub auth_backend_status: AuthBackendStatus,
     pub dsp_config: DspConfig,
     pub po_token_diagnostics: PoTokenDiagnostics,
+    pub offline_quota_bytes: u64,
+    pub update_channel: String,
+    pub local_music_dirs: Vec<String>,
 }
 
 impl SettingsSlice {
     pub fn new(fixture: bool) -> Self {
+        let defaults = SettingsV1::default();
         Self {
             theme_choice: ThemeChoice::System,
             reduced_motion: false,
@@ -35,7 +42,11 @@ impl SettingsSlice {
                 backend: if cfg!(all(
                     not(target_os = "android"),
                     feature = "desktop-keyring",
-                    any(target_os = "linux", target_os = "macos", target_os = "windows")
+                    any(
+                        target_os = "linux",
+                        target_os = "macos",
+                        target_os = "windows"
+                    )
                 )) {
                     CredentialBackendKind::OsKeyring
                 } else {
@@ -65,7 +76,70 @@ impl SettingsSlice {
                     last_checked_unix_secs: 0,
                 }
             },
+            offline_quota_bytes: defaults.offline_quota_bytes,
+            update_channel: defaults.update_channel,
+            local_music_dirs: defaults.local_music_dirs,
         }
+    }
+
+    pub fn apply_persisted_settings(
+        &mut self,
+        persisted: &SettingsV1,
+        playback: &mut PlaybackSlice,
+    ) {
+        self.theme_choice = match persisted.theme {
+            PersistedTheme::System => ThemeChoice::System,
+            PersistedTheme::Light => ThemeChoice::Light,
+            PersistedTheme::Dark => ThemeChoice::Dark,
+        };
+        self.reduced_motion = persisted.reduced_motion;
+        self.dsp_config.loudness_normalization = persisted.loudness_normalization;
+        self.dsp_config.silence_skip_enabled = persisted.silence_skip_enabled;
+        self.dsp_config.eq_preset = match persisted.eq_preset {
+            PersistedEqPreset::Flat => EqPreset::Flat,
+            PersistedEqPreset::BassBoost => EqPreset::BassBoost,
+            PersistedEqPreset::VocalBoost => EqPreset::Vocal,
+            PersistedEqPreset::TrebleBoost => EqPreset::Acoustic,
+            PersistedEqPreset::LateNight => EqPreset::LateNight,
+            PersistedEqPreset::Custom => EqPreset::Flat,
+        };
+        self.dsp_config.eq_gains_db = persisted.eq_gains_db;
+        self.dsp_config.crossfade_ms = persisted.crossfade_ms;
+        self.offline_quota_bytes = persisted.offline_quota_bytes;
+        self.update_channel = persisted.update_channel.clone();
+        self.local_music_dirs = persisted.local_music_dirs.clone();
+
+        playback.player.sponsorblock_enabled = persisted.sponsorblock_enabled;
+        playback.player.offline_mode = persisted.offline_mode;
+        playback.player.volume = persisted.volume.clamp(0.0, 1.0);
+    }
+
+    pub fn to_persisted_settings(&self, playback: &PlaybackSlice) -> SettingsV1 {
+        let mut settings = SettingsV1::default();
+        settings.theme = match self.theme_choice {
+            ThemeChoice::System => PersistedTheme::System,
+            ThemeChoice::Light => PersistedTheme::Light,
+            ThemeChoice::Dark => PersistedTheme::Dark,
+        };
+        settings.reduced_motion = self.reduced_motion;
+        settings.sponsorblock_enabled = playback.player.sponsorblock_enabled;
+        settings.loudness_normalization = self.dsp_config.loudness_normalization;
+        settings.silence_skip_enabled = self.dsp_config.silence_skip_enabled;
+        settings.eq_preset = match self.dsp_config.eq_preset {
+            EqPreset::Flat => PersistedEqPreset::Flat,
+            EqPreset::BassBoost => PersistedEqPreset::BassBoost,
+            EqPreset::Vocal => PersistedEqPreset::VocalBoost,
+            EqPreset::Acoustic => PersistedEqPreset::TrebleBoost,
+            EqPreset::LateNight => PersistedEqPreset::LateNight,
+        };
+        settings.eq_gains_db = self.dsp_config.eq_gains_db;
+        settings.crossfade_ms = self.dsp_config.crossfade_ms;
+        settings.offline_mode = playback.player.offline_mode;
+        settings.volume = playback.player.volume.clamp(0.0, 1.0);
+        settings.offline_quota_bytes = self.offline_quota_bytes;
+        settings.update_channel = self.update_channel.clone();
+        settings.local_music_dirs = self.local_music_dirs.clone();
+        settings
     }
 
     pub fn apply_auth_updated(&mut self, signed_in: bool) {

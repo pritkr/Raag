@@ -93,9 +93,7 @@ pub fn resolve_confined_path(root: &Path, relative_name: &str) -> CoreResult<Pat
     let canon_root = std::fs::canonicalize(root)
         .map_err(|e| CoreError::OfflineStorage(OfflineStorageError::Io(e.to_string())))?;
     let parent = joined.parent().ok_or_else(|| {
-        CoreError::OfflineStorage(OfflineStorageError::PathTraversal(
-            relative_name.to_owned(),
-        ))
+        CoreError::OfflineStorage(OfflineStorageError::PathTraversal(relative_name.to_owned()))
     })?;
     let canon_parent = std::fs::canonicalize(parent)
         .map_err(|e| CoreError::OfflineStorage(OfflineStorageError::Io(e.to_string())))?;

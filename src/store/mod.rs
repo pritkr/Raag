@@ -21,10 +21,12 @@ use std::time::Duration;
 
 use nsh_core::prelude::*;
 use resonance_contract::{
-    AuthBackendStatus, CacheStats, DownloadRecord, HistoryEntry, HomeSection, LyricsDocument,
-    PlayerSnapshot, PlayerState, Playlist, PoTokenDiagnostics, Track,
+    AuthBackendStatus, CacheStats, DownloadRecord, HistoryEntry, HomeSection, LibraryCollectionRef,
+    LyricsDocument, PlayerSnapshot, PlayerState, Playlist, PlaylistEditOp, PoTokenDiagnostics,
+    Track,
 };
 use resonance_core::audio_dsp::DspConfig;
+use resonance_core::downloads::{PinnedCollection, PinnedCollectionKind};
 use resonance_core::fixture::{fixture_home_sections, fixture_tracks};
 use resonance_core::palette::{AmbientPalette, palette_for_track};
 
@@ -296,8 +298,12 @@ fn apply_live_update(update: LiveUpdate) {
         }
         LiveUpdate::MutationFailed { command, reason } => {
             state_signal().update(|s| {
-                s.mutations
-                    .rollback_mutation(command, &mut s.playback, &mut s.library);
+                s.mutations.rollback_mutation(
+                    command,
+                    &mut s.playback,
+                    &mut s.library,
+                    &mut s.catalog,
+                );
                 s.ui.set_status_banner(format!("Action failed: {reason}"));
             });
         }
@@ -312,6 +318,23 @@ fn apply_live_update(update: LiveUpdate) {
         LiveUpdate::DownloadRemoved(video_id) => {
             state_signal().update(|s| {
                 s.library.downloads.remove(&video_id);
+            });
+        }
+        LiveUpdate::PinnedCollectionsLoaded(list) => {
+            state_signal().update(|s| {
+                s.library.pinned_collections = list;
+            });
+        }
+        LiveUpdate::LibraryLoaded(snapshot) => {
+            state_signal().update(|s| {
+                let cur = s.playback.player.current_track.as_mut();
+                s.library.apply_snapshot(snapshot, cur);
+            });
+        }
+        LiveUpdate::SettingsLoaded(settings) => {
+            state_signal().update(|s| {
+                s.settings
+                    .apply_persisted_settings(&settings, &mut s.playback);
             });
         }
         LiveUpdate::StatusBanner(msg) => {
@@ -397,7 +420,42 @@ pub fn dismiss_banner() {
     state_signal().update(|s| s.ui.dismiss_banner());
 }
 
+pub fn open_track_sheet(track: Track, playlist_id: Option<String>) {
+    state_signal().update(|s| s.ui.active_track_sheet = Some((track, playlist_id)));
+}
+
+pub fn close_track_sheet() {
+    state_signal().update(|s| s.ui.active_track_sheet = None);
+}
+
+pub fn active_track_sheet() -> Option<(Track, Option<String>)> {
+    state_signal().with(|s| s.ui.active_track_sheet.clone())
+}
+
+pub fn open_add_to_playlist_sheet(track: Track) {
+    state_signal().update(|s| {
+        s.ui.active_track_sheet = None;
+        s.ui.add_to_playlist_track = Some(track);
+    });
+}
+
+pub fn close_add_to_playlist_sheet() {
+    state_signal().update(|s| s.ui.add_to_playlist_track = None);
+}
+
+pub fn add_to_playlist_track() -> Option<Track> {
+    state_signal().with(|s| s.ui.add_to_playlist_track.clone())
+}
+
 // ── Settings, Auth, DSP & PO Token Diagnostics delegates ─────────────────────
+
+fn persist_settings_now(immediate: bool) {
+    if is_fixture_mode() {
+        return;
+    }
+    let persisted = state_signal().with(|s| s.settings.to_persisted_settings(&s.playback));
+    live_engine::dispatch_persist_settings(persisted, immediate);
+}
 
 pub fn theme_choice() -> ThemeChoice {
     state_signal().with(|s| s.settings.theme_choice)
@@ -405,6 +463,7 @@ pub fn theme_choice() -> ThemeChoice {
 
 pub fn set_theme_choice(choice: ThemeChoice) {
     state_signal().update(|s| s.settings.theme_choice = choice);
+    persist_settings_now(true);
 }
 
 pub fn reduced_motion() -> bool {
@@ -413,6 +472,7 @@ pub fn reduced_motion() -> bool {
 
 pub fn set_reduced_motion(enabled: bool) {
     state_signal().update(|s| s.settings.reduced_motion = enabled);
+    persist_settings_now(true);
 }
 
 pub fn auth_info() -> (bool, Option<String>) {
@@ -459,6 +519,7 @@ pub fn set_loudness_normalization(enabled: bool) {
             "ReplayGain / EBU R128 loudness normalization disabled"
         });
     });
+    persist_settings_now(true);
 }
 
 pub fn set_silence_skip(enabled: bool) {
@@ -470,6 +531,7 @@ pub fn set_silence_skip(enabled: bool) {
             "Silence skipping disabled"
         });
     });
+    persist_settings_now(true);
 }
 
 pub fn cycle_eq_preset() {
@@ -477,6 +539,7 @@ pub fn cycle_eq_preset() {
         let label = s.settings.cycle_eq_preset();
         s.ui.set_status_banner(format!("10-band EQ preset: {label}"));
     });
+    persist_settings_now(true);
 }
 
 pub fn cycle_crossfade_ms() {
@@ -489,6 +552,7 @@ pub fn cycle_crossfade_ms() {
         };
         s.ui.set_status_banner(label);
     });
+    persist_settings_now(true);
 }
 
 pub fn po_token_diagnostics() -> PoTokenDiagnostics {
@@ -553,7 +617,13 @@ pub fn select_mood(mood: &str) {
 }
 
 pub fn section_page(section_id: &str) -> usize {
-    state_signal().with(|s| s.catalog.section_pages.get(section_id).copied().unwrap_or(0))
+    state_signal().with(|s| {
+        s.catalog
+            .section_pages
+            .get(section_id)
+            .copied()
+            .unwrap_or(0)
+    })
 }
 
 pub fn shift_section_page(section_id: &str, delta: isize, total_items: usize, page_size: usize) {
@@ -726,6 +796,18 @@ pub fn toggle_collection_sort() {
 
 // ── Library, Cache & Downloads delegates ─────────────────────────────────────
 
+pub fn library_playlists() -> Vec<LibraryCollectionRef> {
+    state_signal().with(|s| s.library.playlists.clone())
+}
+
+pub fn library_albums() -> Vec<LibraryCollectionRef> {
+    state_signal().with(|s| s.library.albums.clone())
+}
+
+pub fn library_artists() -> Vec<LibraryCollectionRef> {
+    state_signal().with(|s| s.library.artists.clone())
+}
+
 pub fn liked_tracks() -> Vec<Track> {
     state_signal().with(|s| s.library.liked_tracks.clone())
 }
@@ -820,6 +902,124 @@ pub fn delete_download(video_id: &str) {
         return;
     }
     live_engine::dispatch_delete_download(video_id.to_owned());
+}
+
+pub fn pinned_collections() -> Vec<PinnedCollection> {
+    state_signal().with(|s| s.library.pinned_collections.clone())
+}
+
+pub fn pin_collection(
+    id: String,
+    kind: PinnedCollectionKind,
+    title: String,
+    subtitle: Option<String>,
+    artwork_url: Option<String>,
+    tracks: Vec<Track>,
+) {
+    if is_fixture_mode() {
+        let now = resonance_core::unix_secs();
+        state_signal().update(|s| {
+            s.library.pinned_collections.retain(|c| c.id != id);
+            s.library.pinned_collections.push(PinnedCollection {
+                id,
+                kind,
+                title,
+                subtitle,
+                artwork_url,
+                pinned_at_unix_secs: now,
+                tracks,
+            });
+        });
+        return;
+    }
+    live_engine::dispatch_pin_collection(id, kind, title, subtitle, artwork_url, tracks);
+}
+
+pub fn unpin_collection(collection_id: &str) {
+    if is_fixture_mode() {
+        state_signal().update(|s| {
+            s.library
+                .pinned_collections
+                .retain(|c| c.id != collection_id);
+        });
+        return;
+    }
+    live_engine::dispatch_unpin_collection(collection_id.to_owned());
+}
+
+pub fn add_track_to_playlist(playlist_id: String, playlist_title: String, track: Track) {
+    let live = !is_fixture_mode();
+    let op = PlaylistEditOp::AddVideo {
+        video_id: track.id.clone(),
+    };
+    let mut dispatch = None;
+    state_signal().update(|s| {
+        dispatch = s.mutations.apply_playlist_edit(
+            &playlist_id,
+            &op,
+            Some(track),
+            &mut s.catalog,
+            &mut s.library,
+            live,
+            s.settings.signed_in,
+        );
+        s.ui.add_to_playlist_track = None;
+        s.ui.set_status_banner(format!("Added to {playlist_title}"));
+    });
+    if let Some((pid, edit_op)) = dispatch {
+        live_engine::dispatch_edit_playlist(pid, edit_op);
+    }
+}
+
+pub fn remove_track_from_playlist(playlist_id: String, video_id: String) {
+    let live = !is_fixture_mode();
+    let op = PlaylistEditOp::RemoveVideo {
+        video_id: video_id.clone(),
+        set_video_id: video_id,
+    };
+    let mut dispatch = None;
+    state_signal().update(|s| {
+        dispatch = s.mutations.apply_playlist_edit(
+            &playlist_id,
+            &op,
+            None,
+            &mut s.catalog,
+            &mut s.library,
+            live,
+            s.settings.signed_in,
+        );
+        s.ui.set_status_banner("Removed from playlist");
+    });
+    if let Some((pid, edit_op)) = dispatch {
+        live_engine::dispatch_edit_playlist(pid, edit_op);
+    }
+}
+
+pub fn move_playlist_track(
+    playlist_id: String,
+    video_id: String,
+    predecessor_video_id: Option<String>,
+) {
+    let live = !is_fixture_mode();
+    let op = PlaylistEditOp::MoveVideoBefore {
+        set_video_id: video_id,
+        predecessor_set_video_id: predecessor_video_id,
+    };
+    let mut dispatch = None;
+    state_signal().update(|s| {
+        dispatch = s.mutations.apply_playlist_edit(
+            &playlist_id,
+            &op,
+            None,
+            &mut s.catalog,
+            &mut s.library,
+            live,
+            s.settings.signed_in,
+        );
+    });
+    if let Some((pid, edit_op)) = dispatch {
+        live_engine::dispatch_edit_playlist(pid, edit_op);
+    }
 }
 
 // ── Optimistic Mutation delegates ────────────────────────────────────────────
@@ -1008,6 +1208,7 @@ pub fn set_autoplay_radio(enabled: bool) {
 
 pub fn set_sponsorblock_enabled(enabled: bool) {
     state_signal().update(|s| s.playback.player.sponsorblock_enabled = enabled);
+    persist_settings_now(true);
 }
 
 pub fn set_offline_mode(enabled: bool) {
@@ -1019,14 +1220,17 @@ pub fn set_offline_mode(enabled: bool) {
             "Online mode restored — streaming via Loopback Proxy"
         });
     });
+    persist_settings_now(true);
 }
 
 pub fn set_volume(volume: f32) {
     state_signal().update(|s| s.playback.set_volume(volume));
+    persist_settings_now(false);
 }
 
 pub fn adjust_volume(delta: f32) {
     state_signal().update(|s| s.playback.adjust_volume(delta));
+    persist_settings_now(false);
 }
 
 pub fn toggle_mute() {
@@ -1088,7 +1292,10 @@ pub fn on_native_audio_buffering(buffering: bool) {
 }
 
 pub fn on_native_audio_progress(position_ms: u64, duration_ms: Option<u64>) {
-    state_signal().update(|s| s.playback.on_native_audio_progress(position_ms, duration_ms));
+    state_signal().update(|s| {
+        s.playback
+            .on_native_audio_progress(position_ms, duration_ms)
+    });
 }
 
 pub fn on_native_audio_ended() {

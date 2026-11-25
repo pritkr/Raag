@@ -21,6 +21,7 @@ pub mod potoken;
 pub mod proxy;
 pub mod solver;
 pub mod sponsorblock;
+pub mod storage;
 pub mod walking_skeleton;
 
 use std::time::{SystemTime, UNIX_EPOCH};

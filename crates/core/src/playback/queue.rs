@@ -12,7 +12,11 @@ pub struct QueueManager;
 
 impl QueueManager {
     /// Replaces the queue with `tracks` and focuses `start_index`.
-    pub fn replace(queue: &mut QueueState, tracks: Vec<Track>, start_index: usize) -> CoreResult<()> {
+    pub fn replace(
+        queue: &mut QueueState,
+        tracks: Vec<Track>,
+        start_index: usize,
+    ) -> CoreResult<()> {
         if tracks.is_empty() {
             return Err(CoreError::Playback(PlaybackError::EmptyQueue));
         }
@@ -213,7 +217,10 @@ mod tests {
         QueueManager::cycle_repeat(&mut q);
         assert_eq!(q.repeat, RepeatMode::All);
         assert_eq!(QueueManager::resolve_next_index(&q).unwrap(), Some(0));
-        assert_eq!(QueueManager::peek_upcoming_track_id(&q).as_deref(), Some("a"));
+        assert_eq!(
+            QueueManager::peek_upcoming_track_id(&q).as_deref(),
+            Some("a")
+        );
 
         let added_idx = QueueManager::merge_radio_tracks(&mut q, vec![track("a"), track("c")]);
         assert_eq!(added_idx, Some(2));

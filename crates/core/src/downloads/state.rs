@@ -44,7 +44,9 @@ impl VaultTrackState {
         if self.can_transition_to(next) {
             Ok(next)
         } else {
-            Err(format!("invalid offline vault transition: {self:?} -> {next:?}"))
+            Err(format!(
+                "invalid offline vault transition: {self:?} -> {next:?}"
+            ))
         }
     }
 
@@ -92,7 +94,11 @@ mod tests {
         assert_eq!(s, VaultTrackState::Available);
 
         // Skipping Downloading -> Available directly without Verified is rejected
-        assert!(VaultTrackState::Queued.transition(VaultTrackState::Available).is_err());
+        assert!(
+            VaultTrackState::Queued
+                .transition(VaultTrackState::Available)
+                .is_err()
+        );
         assert!(
             VaultTrackState::Downloading
                 .transition(VaultTrackState::Available)

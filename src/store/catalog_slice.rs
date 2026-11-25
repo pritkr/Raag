@@ -99,7 +99,11 @@ impl CatalogSlice {
         } else {
             Vec::new()
         };
-        let initial_search = if fixture { fixture_tracks() } else { Vec::new() };
+        let initial_search = if fixture {
+            fixture_tracks()
+        } else {
+            Vec::new()
+        };
 
         Self {
             home_sections,

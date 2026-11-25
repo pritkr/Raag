@@ -217,15 +217,20 @@ impl SqliteCacheStore {
 
     pub fn get_kv(&self, key: &str) -> CoreResult<Option<String>> {
         let conn = self.conn.lock().unwrap();
-        conn.query_row("SELECT value FROM kv_store WHERE key = ?1", params![key], |r| {
-            r.get(0)
-        })
+        conn.query_row(
+            "SELECT value FROM kv_store WHERE key = ?1",
+            params![key],
+            |r| r.get(0),
+        )
         .optional()
         .map_err(|e| CoreError::Cache(CacheError::Sqlite(e.to_string())))
     }
 
     /// Transitions any rows in `'downloading'` or `'tagging'` to `'paused'` on startup.
-    pub fn recover_interrupted_downloads(&self, now_unix_secs: u64) -> CoreResult<Vec<DownloadRecord>> {
+    pub fn recover_interrupted_downloads(
+        &self,
+        now_unix_secs: u64,
+    ) -> CoreResult<Vec<DownloadRecord>> {
         let conn = self.conn.lock().unwrap();
         conn.execute_batch("BEGIN IMMEDIATE;")
             .map_err(|e| CoreError::OfflineStorage(OfflineStorageError::Sqlite(e.to_string())))?;
@@ -239,11 +244,13 @@ impl SqliteCacheStore {
                      FROM downloads
                      WHERE status IN ('downloading', 'tagging')",
                 )
-                .map_err(|e| CoreError::OfflineStorage(OfflineStorageError::Sqlite(e.to_string())))?;
+                .map_err(|e| {
+                    CoreError::OfflineStorage(OfflineStorageError::Sqlite(e.to_string()))
+                })?;
 
-            let rows = stmt
-                .query_map([], row_to_download_record)
-                .map_err(|e| CoreError::OfflineStorage(OfflineStorageError::Sqlite(e.to_string())))?;
+            let rows = stmt.query_map([], row_to_download_record).map_err(|e| {
+                CoreError::OfflineStorage(OfflineStorageError::Sqlite(e.to_string()))
+            })?;
 
             let mut recovered = Vec::new();
             for mut rec in rows.flatten() {
@@ -408,7 +415,17 @@ impl SqliteCacheStore {
 
     pub fn list_pinned_collection_rows(
         &self,
-    ) -> CoreResult<Vec<(String, String, String, Option<String>, Option<String>, u64, Vec<Track>)>> {
+    ) -> CoreResult<
+        Vec<(
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            u64,
+            Vec<Track>,
+        )>,
+    > {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare(
@@ -446,9 +463,7 @@ impl SqliteCacheStore {
                 })?;
             let tracks: Vec<Track> = tstmt
                 .query_map(params![&cid], |r| r.get::<_, String>(0))
-                .map_err(|e| {
-                    CoreError::OfflineStorage(OfflineStorageError::Sqlite(e.to_string()))
-                })?
+                .map_err(|e| CoreError::OfflineStorage(OfflineStorageError::Sqlite(e.to_string())))?
                 .flatten()
                 .filter_map(|json| serde_json::from_str::<Track>(&json).ok())
                 .collect();
@@ -728,8 +743,11 @@ impl CacheStore for SqliteCacheStore {
 
     fn evict_metadata(&self, key: &str) -> CoreResult<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM metadata_cache WHERE cache_key = ?1", params![key])
-            .map_err(|e| CoreError::Cache(CacheError::Sqlite(e.to_string())))?;
+        conn.execute(
+            "DELETE FROM metadata_cache WHERE cache_key = ?1",
+            params![key],
+        )
+        .map_err(|e| CoreError::Cache(CacheError::Sqlite(e.to_string())))?;
         Ok(())
     }
 
@@ -814,8 +832,10 @@ impl CacheStore for SqliteCacheStore {
 
     fn clear_all_caches(&self) -> CoreResult<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute_batch("DELETE FROM metadata_cache; DELETE FROM audio_chunks;")
-            .map_err(|e| CoreError::Cache(CacheError::Sqlite(e.to_string())))?;
+        conn.execute_batch(
+            "DELETE FROM metadata_cache WHERE cache_key NOT LIKE 'settings:%'; DELETE FROM audio_chunks;",
+        )
+        .map_err(|e| CoreError::Cache(CacheError::Sqlite(e.to_string())))?;
         Ok(())
     }
 }
@@ -1022,10 +1042,11 @@ impl OfflineStore for SqliteCacheStore {
                     CoreError::OfflineStorage(OfflineStorageError::Sqlite(e.to_string()))
                 })?;
 
-            conn.execute("DELETE FROM downloads WHERE video_id = ?1", params![video_id])
-                .map_err(|e| {
-                    CoreError::OfflineStorage(OfflineStorageError::Sqlite(e.to_string()))
-                })?;
+            conn.execute(
+                "DELETE FROM downloads WHERE video_id = ?1",
+                params![video_id],
+            )
+            .map_err(|e| CoreError::OfflineStorage(OfflineStorageError::Sqlite(e.to_string())))?;
 
             Ok(existing)
         })();

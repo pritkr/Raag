@@ -42,7 +42,9 @@ pub fn seek_slider(
         .indicator_class("w-full h-1 rounded-full bg-muted")
         .range_class("rounded-full")
         .range_style(|s| s.bg(color_player_accent))
-        .thumb_class("size-3 rounded-full opacity-0 group-hover:opacity-100 group-active:opacity-100")
+        .thumb_class(
+            "size-3 rounded-full opacity-0 group-hover:opacity-100 group-active:opacity-100",
+        )
         .thumb_style(|s| s.bg(color_player_accent))
         .on_change(move |v: &SliderValue| {
             on_seek(v.start().max(0.0).round() as u64);
@@ -204,7 +206,9 @@ pub fn desktop_player_bar() -> impl IntoElement {
                                                     store::player_snapshot()
                                                         .current_track
                                                         .map(|t| t.title)
-                                                        .unwrap_or_else(|| "Nothing playing".into()),
+                                                        .unwrap_or_else(|| {
+                                                            "Nothing playing".into()
+                                                        }),
                                                 )
                                             })
                                             .number_of_lines(1)

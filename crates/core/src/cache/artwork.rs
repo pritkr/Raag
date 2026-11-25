@@ -65,8 +65,8 @@ impl ArtworkCache {
         let path = self.dir.join(format!("{key}.img"));
         let tmp = self.dir.join(format!("{key}.img.tmp"));
 
-        let mut f = fs::File::create(&tmp)
-            .map_err(|e| CoreError::Cache(CacheError::Io(e.to_string())))?;
+        let mut f =
+            fs::File::create(&tmp).map_err(|e| CoreError::Cache(CacheError::Io(e.to_string())))?;
         f.write_all(&bytes)
             .map_err(|e| CoreError::Cache(CacheError::Io(e.to_string())))?;
         f.sync_all()

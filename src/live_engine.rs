@@ -6,22 +6,23 @@
 //! `PlaybackController` on a dedicated background Tokio runtime and streams typed updates
 //! back to the NSH reactive store via a non-blocking channel.
 
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use resonance_contract::{
     AppEvent, AuthBackendStatus, AuthSession, CacheStats, CacheStore, DownloadRecord, HomeSection,
-    LikeAction, LyricsDocument, LyricsProvider, MusicProvider, MutationCommand, OfflineStore,
-    PlayerSnapshot, Playlist, PlaylistEditOp, PoTokenDiagnostics, PoTokenProvider, SearchResults,
-    Track, TrackId, WatchtimeReport,
+    LIBRARY_SNAPSHOT_METADATA_KEY, LibraryCollectionRef, LibrarySnapshot, LikeAction,
+    LyricsDocument, LyricsProvider, MusicProvider, MutationCommand, OfflineStore, PlayerSnapshot,
+    Playlist, PlaylistEditOp, PoTokenDiagnostics, PoTokenProvider, SETTINGS_METADATA_KEY,
+    SETTINGS_TTL_SECS, SearchResults, SettingsV1, Track, TrackId, WatchtimeReport,
 };
 use resonance_core::cache::{
     ArtworkCache, ChunkCache, DEFAULT_ARTWORK_DISK_CAP, DEFAULT_MAX_AUDIO_CACHE_BYTES,
     SqliteCacheStore,
 };
-use resonance_core::downloads::OfflineVault;
+use resonance_core::downloads::{OfflineVault, PinnedCollection, PinnedCollectionKind};
 use resonance_core::innertube::auth::redact_secrets;
 use resonance_core::innertube::{InnerTubeClient, MutationWorker};
 use resonance_core::lyrics::CascadeLyricsProvider;
@@ -34,6 +35,7 @@ use resonance_core::potoken::{
 use resonance_core::proxy::LoopbackProxy;
 use resonance_core::solver::QuickJsSolver;
 use resonance_core::sponsorblock::HttpSponsorBlockProvider;
+use resonance_core::storage::resolve_app_paths;
 use tokio::runtime::Runtime;
 
 use crate::platform::{
@@ -77,6 +79,9 @@ pub enum LiveUpdate {
     DownloadsLoaded(Vec<DownloadRecord>),
     DownloadUpdated(DownloadRecord),
     DownloadRemoved(TrackId),
+    PinnedCollectionsLoaded(Vec<PinnedCollection>),
+    LibraryLoaded(LibrarySnapshot),
+    SettingsLoaded(SettingsV1),
     StatusBanner(String),
 }
 
@@ -87,21 +92,15 @@ struct LiveRuntime {
     chunks: Arc<ChunkCache>,
     lyrics: Arc<CascadeLyricsProvider>,
     downloads: Arc<DownloadManager>,
-    #[allow(dead_code)]
     vault: Arc<OfflineVault>,
     controller: Arc<PlaybackController>,
     mutations: MutationWorker,
+    settings_tx: tokio::sync::mpsc::UnboundedSender<(SettingsV1, bool)>,
     tx: Sender<LiveUpdate>,
     rx: Receiver<LiveUpdate>,
 }
 
 static LIVE_RUNTIME: OnceLock<Result<LiveRuntime, String>> = OnceLock::new();
-
-fn data_dir() -> PathBuf {
-    std::env::var_os("RESONANCE_DATA_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("resonance-ytmusic-live"))
-}
 
 fn init_runtime() -> Result<LiveRuntime, String> {
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -111,8 +110,8 @@ fn init_runtime() -> Result<LiveRuntime, String> {
         .build()
         .map_err(|e| format!("failed to build Tokio runtime: {e}"))?;
 
-    let dir = data_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create data dir: {e}"))?;
+    let paths = resolve_app_paths().map_err(|e| format!("failed to resolve app paths: {e}"))?;
+    let dir = paths.data_dir.clone();
     #[cfg(target_os = "android")]
     let _ = crate::platform::android::ensure_downloads_dir(&dir);
     #[cfg(not(target_os = "android"))]
@@ -123,7 +122,7 @@ fn init_runtime() -> Result<LiveRuntime, String> {
     );
     let chunks = Arc::new(
         ChunkCache::new(
-            &dir.join("chunks"),
+            &paths.cache_dir.join("chunks"),
             cache.clone(),
             DEFAULT_MAX_AUDIO_CACHE_BYTES,
         )
@@ -245,8 +244,7 @@ fn init_runtime() -> Result<LiveRuntime, String> {
                         let _ = ui_tx.send(LiveUpdate::MutationFailed { command, reason });
                     }
                     AppEvent::AuthStateChanged {
-                        signed_in: false,
-                        ..
+                        signed_in: false, ..
                     } => {
                         let _ = ui_tx.send(LiveUpdate::AuthUpdated {
                             signed_in: false,
@@ -265,6 +263,9 @@ fn init_runtime() -> Result<LiveRuntime, String> {
         });
     }
     let initial_snap = rt.block_on(controller.snapshot());
+    let persisted_settings = load_persisted_settings(cache.as_ref());
+    rt.block_on(controller.set_sponsorblock_enabled(persisted_settings.sponsorblock_enabled));
+
     let stats = cache.stats().unwrap_or_default();
     let initial_downloads = cache.list_downloads().unwrap_or_default();
     let current_session = provider.current_session();
@@ -278,11 +279,52 @@ fn init_runtime() -> Result<LiveRuntime, String> {
         cache_stats: stats,
         signed_in,
     });
+    let _ = tx.send(LiveUpdate::SettingsLoaded(persisted_settings.clone()));
     let _ = tx.send(LiveUpdate::AuthStatus(auth_status));
     let _ = tx.send(LiveUpdate::PoTokenDiagnostics(
         provider.po_token_diagnostics(),
     ));
     let _ = tx.send(LiveUpdate::DownloadsLoaded(initial_downloads));
+    let initial_pinned = vault.list_pinned_collections().unwrap_or_default();
+    let _ = tx.send(LiveUpdate::PinnedCollectionsLoaded(initial_pinned));
+
+    // H0.1 Step 1: Synchronous local library hydration (< 10ms) before touching the network.
+    if let Some(cached_lib) = load_cached_library_snapshot(cache.as_ref()) {
+        let _ = tx.send(LiveUpdate::LibraryLoaded(cached_lib));
+    }
+    // H0.1 Step 2: Async network refresh when signed in and not in offline mode.
+    if signed_in && !persisted_settings.offline_mode {
+        let provider_for_lib = provider.clone();
+        let cache_for_lib = cache.clone();
+        let tx_for_lib = tx.clone();
+        rt.spawn(async move {
+            let snap =
+                refresh_library_snapshot(provider_for_lib.as_ref(), cache_for_lib.as_ref()).await;
+            let _ = tx_for_lib.send(LiveUpdate::LibraryLoaded(snap));
+        });
+    }
+
+    // H0.2: Debounced background settings persistence (250ms coalesce for sliders, immediate for toggles).
+    let (settings_tx, mut settings_rx) =
+        tokio::sync::mpsc::unbounded_channel::<(SettingsV1, bool)>();
+    {
+        let cache_for_settings = cache.clone();
+        rt.spawn(async move {
+            while let Some((mut latest, immediate)) = settings_rx.recv().await {
+                if !immediate {
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                    while let Ok((newer, _)) = settings_rx.try_recv() {
+                        latest = newer;
+                    }
+                } else {
+                    while let Ok((newer, _)) = settings_rx.try_recv() {
+                        latest = newer;
+                    }
+                }
+                save_persisted_settings(cache_for_settings.as_ref(), &latest);
+            }
+        });
+    }
 
     Ok(LiveRuntime {
         rt,
@@ -294,6 +336,7 @@ fn init_runtime() -> Result<LiveRuntime, String> {
         vault,
         controller,
         mutations,
+        settings_tx,
         tx,
         rx,
     })
@@ -423,9 +466,123 @@ pub fn dispatch_play_track(track: Track) {
     });
 }
 
+pub fn load_persisted_settings(cache: &dyn CacheStore) -> SettingsV1 {
+    let now = resonance_core::unix_secs();
+    match cache.get_metadata(SETTINGS_METADATA_KEY, now) {
+        Ok(Some((json, _))) => match serde_json::from_str::<SettingsV1>(&json) {
+            Ok(mut s) => {
+                s.volume = s.volume.clamp(0.0, 1.0);
+                s
+            }
+            Err(e) => {
+                log::warn!("corrupt persisted settings: {e}; falling back to defaults");
+                SettingsV1::default()
+            }
+        },
+        _ => SettingsV1::default(),
+    }
+}
+
+pub fn save_persisted_settings(cache: &dyn CacheStore, settings: &SettingsV1) {
+    if let Ok(json) = serde_json::to_string(settings) {
+        let now = resonance_core::unix_secs();
+        if let Err(e) = cache.put_metadata(SETTINGS_METADATA_KEY, &json, SETTINGS_TTL_SECS, now) {
+            log::warn!("failed to persist settings: {e}");
+        }
+    }
+}
+
+pub fn dispatch_persist_settings(settings: SettingsV1, immediate: bool) {
+    let Ok(rt) = runtime() else { return };
+    let _ = rt.settings_tx.send((settings, immediate));
+}
+
+pub fn load_cached_library_snapshot(cache: &dyn CacheStore) -> Option<LibrarySnapshot> {
+    let now = resonance_core::unix_secs();
+    let mut snap = cache
+        .get_metadata(LIBRARY_SNAPSHOT_METADATA_KEY, now)
+        .ok()
+        .flatten()
+        .and_then(|(json, _)| serde_json::from_str::<LibrarySnapshot>(&json).ok())?;
+
+    if let Ok(local_history) = cache.load_history(200) {
+        let mut seen: HashSet<(String, u64)> = snap
+            .history
+            .iter()
+            .map(|t| (t.id.clone(), snap.fetched_at_unix_secs / 60))
+            .collect();
+        for entry in local_history {
+            let bucket = entry.played_at_unix_secs / 60;
+            if seen.insert((entry.track.id.clone(), bucket)) {
+                snap.history.push(entry.track);
+            }
+        }
+    }
+    Some(snap)
+}
+
+pub async fn refresh_library_snapshot(
+    provider: &dyn MusicProvider,
+    cache: &dyn CacheStore,
+) -> LibrarySnapshot {
+    let (liked_res, playlists_res) = tokio::join!(
+        provider.liked_songs(),
+        provider.browse_collection("FEmusic_liked_playlists"),
+    );
+
+    let liked_songs = liked_res.unwrap_or_default();
+    let playlists = match playlists_res {
+        Ok(pl) => pl
+            .tracks
+            .into_iter()
+            .map(|t| {
+                let subtitle = t.artist_display();
+                LibraryCollectionRef {
+                    browse_id: t.id.clone(),
+                    playlist_id: Some(t.id),
+                    title: t.title,
+                    subtitle,
+                    artwork_url: t.artwork_url,
+                    track_count: None,
+                }
+            })
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+
+    let now = resonance_core::unix_secs();
+    let mut history = Vec::new();
+    let mut seen = HashSet::new();
+    if let Ok(local_history) = cache.load_history(200) {
+        for entry in local_history {
+            let bucket = entry.played_at_unix_secs / 60;
+            if seen.insert((entry.track.id.clone(), bucket)) {
+                history.push(entry.track);
+            }
+        }
+    }
+
+    let snap = LibrarySnapshot {
+        liked_songs,
+        playlists,
+        albums: Vec::new(),
+        artists: Vec::new(),
+        history,
+        podcasts: Vec::new(),
+        uploads: Vec::new(),
+        fetched_at_unix_secs: now,
+    };
+
+    if let Ok(json) = serde_json::to_string(&snap) {
+        let _ = cache.put_metadata(LIBRARY_SNAPSHOT_METADATA_KEY, &json, 300, now);
+    }
+    snap
+}
+
 pub fn dispatch_sign_in(cookie_header: String) {
     let Ok(rt) = runtime() else { return };
     let provider = rt.provider.clone();
+    let cache = rt.cache.clone();
     let tx = rt.tx.clone();
     rt.rt.spawn(async move {
         let session = AuthSession {
@@ -444,6 +601,8 @@ pub fn dispatch_sign_in(cookie_header: String) {
                     signed_in: true,
                     banner: "Signed in securely (stored in OS Keystore)".into(),
                 });
+                let snap = refresh_library_snapshot(provider.as_ref(), cache.as_ref()).await;
+                let _ = tx.send(LiveUpdate::LibraryLoaded(snap));
             }
             Err(e) => {
                 let _ = tx.send(LiveUpdate::StatusBanner(redact_secrets(&format!(
@@ -457,15 +616,18 @@ pub fn dispatch_sign_in(cookie_header: String) {
 pub fn dispatch_sign_out() {
     let Ok(rt) = runtime() else { return };
     let provider = rt.provider.clone();
+    let cache = rt.cache.clone();
     let tx = rt.tx.clone();
     rt.rt.spawn(async move {
         let _ = provider.sign_out();
+        let _ = cache.evict_metadata(LIBRARY_SNAPSHOT_METADATA_KEY);
         let status = platform_auth_status(provider.current_session().as_ref());
         let _ = tx.send(LiveUpdate::AuthStatus(status));
         let _ = tx.send(LiveUpdate::AuthUpdated {
             signed_in: false,
             banner: "Signed out — running in anonymous mode".into(),
         });
+        let _ = tx.send(LiveUpdate::LibraryLoaded(LibrarySnapshot::default()));
     });
 }
 
@@ -558,5 +720,47 @@ pub fn dispatch_delete_download(video_id: TrackId) {
     let downloads = rt.downloads.clone();
     rt.rt.spawn(async move {
         let _ = downloads.delete(&video_id).await;
+    });
+}
+
+pub fn dispatch_pin_collection(
+    id: String,
+    kind: PinnedCollectionKind,
+    title: String,
+    subtitle: Option<String>,
+    artwork_url: Option<String>,
+    tracks: Vec<Track>,
+) {
+    let Ok(rt) = runtime() else { return };
+    let vault = rt.vault.clone();
+    let tx = rt.tx.clone();
+    rt.rt.spawn(async move {
+        if let Err(e) = vault
+            .pin_collection(
+                &id,
+                kind,
+                &title,
+                subtitle.as_deref(),
+                artwork_url.as_deref(),
+                &tracks,
+            )
+            .await
+        {
+            let _ = tx.send(LiveUpdate::StatusBanner(format!("Pin failed: {e}")));
+        } else if let Ok(list) = vault.list_pinned_collections() {
+            let _ = tx.send(LiveUpdate::PinnedCollectionsLoaded(list));
+        }
+    });
+}
+
+pub fn dispatch_unpin_collection(collection_id: String) {
+    let Ok(rt) = runtime() else { return };
+    let vault = rt.vault.clone();
+    let tx = rt.tx.clone();
+    rt.rt.spawn(async move {
+        let _ = vault.unpin_collection(&collection_id);
+        if let Ok(list) = vault.list_pinned_collections() {
+            let _ = tx.send(LiveUpdate::PinnedCollectionsLoaded(list));
+        }
     });
 }

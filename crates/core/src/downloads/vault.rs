@@ -207,7 +207,8 @@ impl OfflineVault {
             ));
         }
 
-        let verified = VaultTrackState::Downloading.transition(VaultTrackState::Verified)
+        let verified = VaultTrackState::Downloading
+            .transition(VaultTrackState::Verified)
             .map_err(|e| CoreError::OfflineStorage(OfflineStorageError::Io(e)))?;
         verified
             .transition(VaultTrackState::Available)

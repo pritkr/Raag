@@ -305,14 +305,21 @@ impl PlaybackController {
         let bus = self.bus.clone();
         let track_for_bg = track.clone();
         tokio::spawn(async move {
-            let lyrics = lyrics_provider.fetch_lyrics(&track_for_bg).await.ok().flatten();
+            let lyrics = lyrics_provider
+                .fetch_lyrics(&track_for_bg)
+                .await
+                .ok()
+                .flatten();
             bus.publish(AppEvent::LyricsLoaded {
                 video_id: track_for_bg.id.clone(),
                 lyrics,
             });
         });
 
-        let segs = sb_provider.fetch_segments(&track.id).await.unwrap_or_default();
+        let segs = sb_provider
+            .fetch_segments(&track.id)
+            .await
+            .unwrap_or_default();
         if !segs.is_empty() {
             let mut fsm = self.fsm.lock().await;
             if fsm

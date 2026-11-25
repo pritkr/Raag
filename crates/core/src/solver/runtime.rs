@@ -158,8 +158,7 @@ fn load_quickjs_context(script_path: &Path) -> CoreResult<(Runtime, Context)> {
         .map_err(|e| CoreError::Solver(format!("read solver script: {e}")))?;
     let rt = Runtime::new().map_err(|e| CoreError::Solver(format!("QuickJS runtime: {e}")))?;
     rt.set_memory_limit(64 * 1024 * 1024);
-    let ctx =
-        Context::full(&rt).map_err(|e| CoreError::Solver(format!("QuickJS context: {e}")))?;
+    let ctx = Context::full(&rt).map_err(|e| CoreError::Solver(format!("QuickJS context: {e}")))?;
     ctx.with(|ctx| {
         ctx.eval::<(), _>(source.as_bytes())
             .map_err(|e| CoreError::Solver(format!("QuickJS eval error: {e}")))

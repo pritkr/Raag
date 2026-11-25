@@ -18,8 +18,7 @@ use crate::innertube::clients::{AuthMode, ClientConfig, ClientKind};
 
 /// Embedded baseline matrix shipped with the app; overridden at runtime whenever
 /// a fresher `client_matrix.json` exists in `<data_dir>/config/client_matrix.json`.
-pub const EMBEDDED_CLIENT_MATRIX_JSON: &str =
-    include_str!("../../../../config/client_matrix.json");
+pub const EMBEDDED_CLIENT_MATRIX_JSON: &str = include_str!("../../../../config/client_matrix.json");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -216,9 +215,7 @@ impl ClientMatrix {
         let mut candidates: Vec<(u32, &'static ClientConfig)> = self
             .clients
             .iter()
-            .filter(|e| {
-                e.is_eligible(tier, has_gvs_po_token, has_ios_guard_po_token, has_tv_oauth)
-            })
+            .filter(|e| e.is_eligible(tier, has_gvs_po_token, has_ios_guard_po_token, has_tv_oauth))
             .filter_map(|e| {
                 let kind = e.client_kind()?;
                 let prio = if tier.is_signed_in() {
@@ -375,7 +372,11 @@ impl ClientCircuitBreaker {
     pub fn record_success(&self, kind: ClientKind, latency_ms: u64) {
         let mut guard = self.clients.write().unwrap();
         let entry = guard.entry(kind).or_default();
-        Self::push_sample(entry, OutcomeSample::Success { latency_ms }, self.config.window_size);
+        Self::push_sample(
+            entry,
+            OutcomeSample::Success { latency_ms },
+            self.config.window_size,
+        );
         entry.consecutive_failures = 0;
         entry.opened_at = None;
         entry.half_open_probe_in_flight = false;
@@ -457,9 +458,21 @@ impl ClientCircuitBreaker {
             kind,
             state,
             sample_count: entry.samples.len(),
-            success_rate: if entry.samples.is_empty() { 1.0 } else { ok_cnt / total },
-            rate_403: if entry.samples.is_empty() { 0.0 } else { c403 / total },
-            rate_429: if entry.samples.is_empty() { 0.0 } else { c429 / total },
+            success_rate: if entry.samples.is_empty() {
+                1.0
+            } else {
+                ok_cnt / total
+            },
+            rate_403: if entry.samples.is_empty() {
+                0.0
+            } else {
+                c403 / total
+            },
+            rate_429: if entry.samples.is_empty() {
+                0.0
+            } else {
+                c429 / total
+            },
             ewma_latency_ms: entry.ewma_latency_ms,
             consecutive_failures: entry.consecutive_failures,
         }
@@ -523,13 +536,19 @@ mod tests {
 
         // After cooldown -> HalfOpen allows single probe
         let t_after = t0 + Duration::from_secs(31);
-        assert_eq!(cb.state_at(ClientKind::WebRemix, t_after), CircuitState::HalfOpen);
+        assert_eq!(
+            cb.state_at(ClientKind::WebRemix, t_after),
+            CircuitState::HalfOpen
+        );
         assert!(cb.allow_request_at(ClientKind::WebRemix, t_after));
         assert!(!cb.allow_request_at(ClientKind::WebRemix, t_after));
 
         // Probe succeeds -> Closed
         cb.record_success(ClientKind::WebRemix, 80);
-        assert_eq!(cb.state_at(ClientKind::WebRemix, t_after), CircuitState::Closed);
+        assert_eq!(
+            cb.state_at(ClientKind::WebRemix, t_after),
+            CircuitState::Closed
+        );
         let snap = cb.health_snapshot(ClientKind::WebRemix);
         assert!(snap.rate_403 > 0.0);
         assert!(snap.rate_429 > 0.0);

@@ -2,9 +2,9 @@
 //!
 //! Targets Android (API 26+) and Desktop with zero TSX in the app.
 
+pub mod live_engine;
 #[path = "../platform/mod.rs"]
 pub mod platform;
-pub mod live_engine;
 pub mod screens;
 pub mod store;
 pub mod ui;

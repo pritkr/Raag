@@ -149,19 +149,16 @@ fn search_track_row(
                                 .text_color(move || theme().muted_foreground),
                         ),
                 )
-                .when_some(
-                    if desktop { album_title } else { None },
-                    |b, alb| {
-                        b.child(
-                            view().w(px(160.0)).px_2().child(
-                                text(alb)
-                                    .number_of_lines(1)
-                                    .text_xs()
-                                    .text_color(move || theme().muted_foreground),
-                            ),
-                        )
-                    },
-                )
+                .when_some(if desktop { album_title } else { None }, |b, alb| {
+                    b.child(
+                        view().w(px(160.0)).px_2().child(
+                            text(alb)
+                                .number_of_lines(1)
+                                .text_xs()
+                                .text_color(move || theme().muted_foreground),
+                        ),
+                    )
+                })
                 .when_some(plays_text, |b, plays| {
                     b.child(
                         view().w(px(88.0)).px_1().child(
@@ -222,9 +219,7 @@ fn search_track_row(
                 .hover(|s| s.bg(pill_glass_hover))
                 .active(|s| s.opacity(0.75))
                 .on_press(move || store::play_next(t_next.clone()))
-                .child(icon(IconKind::Plus, 16.0, move || {
-                    theme().muted_foreground
-                })),
+                .child(icon(IconKind::Plus, 16.0, move || theme().muted_foreground)),
         )
 }
 
@@ -236,275 +231,257 @@ pub fn search_screen() -> impl IntoElement {
     let albums_memo = computed(store::search_albums);
     let filter_memo = computed(store::search_filter);
 
-    scroll()
-        .flex_1()
-        .min_h(px(0.0))
-        .child(
-            view()
-                .p_4()
-                .when(is_desktop_layout(), |v| v.px_8().py_5())
-                .gap_4()
-                .child(
-                    view()
-                        .gap_1()
-                        .child(
-                            text("Search")
-                                .text_2xl()
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(move || theme().foreground),
-                        )
-                        .child(
-                            text(move || {
-                                let track_count = store::search_results_len();
-                                let album_count = store::search_albums().len();
-                                let filter = store::search_filter();
-                                let count = if filter.is_collection_only() {
-                                    album_count
-                                } else if filter == SearchFilter::All {
-                                    track_count + album_count
-                                } else {
-                                    track_count
-                                };
-                                let q = store::search_query();
-                                if q.is_empty() {
-                                    SharedString::from(
-                                        "Find songs, videos, albums, playlists, and artists",
-                                    )
-                                } else {
-                                    SharedString::from(format!("{count} results for \"{q}\""))
-                                }
-                            })
-                            .number_of_lines(1)
-                            .text_xs()
-                            .text_color(move || theme().muted_foreground),
-                        ),
-                )
-                .child(
-                    view()
-                        .flex_row()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            view()
-                                .flex_1()
-                                .min_w(px(0.0))
-                                .min_h(px(MOBILE_MIN_TOUCH_TARGET))
-                                .flex_row()
-                                .items_center()
-                                .gap_2()
-                                .px_3p5()
-                                .rounded(radius_pill)
-                                .bg(pill_glass_surface)
-                                .border_1()
-                                .border_color(glass_hairline)
-                                .child(icon(IconKind::Search, 16.0, move || {
-                                    theme().muted_foreground
-                                }))
-                                .child(
-                                    input()
-                                        .test_id("search-input")
-                                        .value(move || query_sig.get())
-                                        .on_change(move |txt: &str| {
-                                            query_sig.set(txt.to_owned());
-                                            store::run_search_debounced(txt);
-                                        })
-                                        .on_submit(move |txt: &str| {
-                                            query_sig.set(txt.to_owned());
-                                            store::run_search(txt);
-                                        })
-                                        .placeholder("Search songs, artists, albums...")
-                                        .placeholder_color(|| color(theme().muted_foreground))
-                                        .caret_color(|| color(theme().primary))
-                                        .return_key_type(ReturnKeyType::Search)
-                                        .flex_1()
-                                        .min_h(px(MOBILE_MIN_TOUCH_TARGET))
-                                        .text_sm()
-                                        .text_color(move || theme().foreground),
+    scroll().flex_1().min_h(px(0.0)).child(
+        view()
+            .p_4()
+            .when(is_desktop_layout(), |v| v.px_8().py_5())
+            .gap_4()
+            .child(
+                view()
+                    .gap_1()
+                    .child(
+                        text("Search")
+                            .text_2xl()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(move || theme().foreground),
+                    )
+                    .child(
+                        text(move || {
+                            let track_count = store::search_results_len();
+                            let album_count = store::search_albums().len();
+                            let filter = store::search_filter();
+                            let count = if filter.is_collection_only() {
+                                album_count
+                            } else if filter == SearchFilter::All {
+                                track_count + album_count
+                            } else {
+                                track_count
+                            };
+                            let q = store::search_query();
+                            if q.is_empty() {
+                                SharedString::from(
+                                    "Find songs, videos, albums, playlists, and artists",
                                 )
-                                .child(when(
-                                    move || !query_sig.with(String::is_empty),
-                                    move || {
-                                        button()
-                                            .accessibility_label("Clear search")
-                                            .w(px(MOBILE_MIN_TOUCH_TARGET))
-                                            .h(px(MOBILE_MIN_TOUCH_TARGET))
-                                            .items_center()
-                                            .justify_center()
-                                            .rounded_full()
-                                            .hover(|s| s.bg(pill_glass_hover))
-                                            .on_press(move || {
-                                                query_sig.set(String::new());
-                                                store::run_search("");
-                                            })
-                                            .child(icon(IconKind::Close, 15.0, move || {
-                                                theme().muted_foreground
-                                            }))
-                                    },
-                                )),
-                        )
-                        .child(primary_button("Go", move || {
-                            store::run_search(&query_sig.get_untracked());
+                            } else {
+                                SharedString::from(format!("{count} results for \"{q}\""))
+                            }
+                        })
+                        .number_of_lines(1)
+                        .text_xs()
+                        .text_color(move || theme().muted_foreground),
+                    ),
+            )
+            .child(
+                view()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        view()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                            .flex_row()
+                            .items_center()
+                            .gap_2()
+                            .px_3p5()
+                            .rounded(radius_pill)
+                            .bg(pill_glass_surface)
+                            .border_1()
+                            .border_color(glass_hairline)
+                            .child(icon(IconKind::Search, 16.0, move || {
+                                theme().muted_foreground
+                            }))
+                            .child(
+                                input()
+                                    .test_id("search-input")
+                                    .value(move || query_sig.get())
+                                    .on_change(move |txt: &str| {
+                                        query_sig.set(txt.to_owned());
+                                        store::run_search_debounced(txt);
+                                    })
+                                    .on_submit(move |txt: &str| {
+                                        query_sig.set(txt.to_owned());
+                                        store::run_search(txt);
+                                    })
+                                    .placeholder("Search songs, artists, albums...")
+                                    .placeholder_color(|| color(theme().muted_foreground))
+                                    .caret_color(|| color(theme().primary))
+                                    .return_key_type(ReturnKeyType::Search)
+                                    .flex_1()
+                                    .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                                    .text_sm()
+                                    .text_color(move || theme().foreground),
+                            )
+                            .child(when(
+                                move || !query_sig.with(String::is_empty),
+                                move || {
+                                    button()
+                                        .accessibility_label("Clear search")
+                                        .w(px(MOBILE_MIN_TOUCH_TARGET))
+                                        .h(px(MOBILE_MIN_TOUCH_TARGET))
+                                        .items_center()
+                                        .justify_center()
+                                        .rounded_full()
+                                        .hover(|s| s.bg(pill_glass_hover))
+                                        .on_press(move || {
+                                            query_sig.set(String::new());
+                                            store::run_search("");
+                                        })
+                                        .child(icon(IconKind::Close, 15.0, move || {
+                                            theme().muted_foreground
+                                        }))
+                                },
+                            )),
+                    )
+                    .child(primary_button("Go", move || {
+                        store::run_search(&query_sig.get_untracked());
+                    })),
+            )
+            .child(
+                view()
+                    .flex_row()
+                    .flex_wrap()
+                    .gap_2()
+                    .child(filter_tab(SearchFilter::All, "search-filter-all"))
+                    .child(filter_tab(SearchFilter::Songs, "search-filter-songs"))
+                    .child(filter_tab(SearchFilter::Videos, "search-filter-videos"))
+                    .child(filter_tab(SearchFilter::Albums, "search-filter-albums"))
+                    .child(filter_tab(
+                        SearchFilter::Playlists,
+                        "search-filter-playlists",
+                    ))
+                    .child(filter_tab(SearchFilter::Artists, "search-filter-artists")),
+            )
+            .child(when(store::is_search_loading, || {
+                view()
+                    .gap_2()
+                    .child(skeleton_row())
+                    .child(skeleton_row())
+                    .child(skeleton_row())
+            }))
+            .child(when(
+                || store::search_error().is_some(),
+                move || {
+                    let q_retry = query_sig;
+                    status_card(
+                        "Search unavailable",
+                        move || SharedString::from(store::search_error().unwrap_or_default()),
+                        Some("Retry"),
+                        Some(Box::new(move || {
+                            store::run_search(&q_retry.get_untracked());
                         })),
-                )
-                .child(
-                    view()
-                        .flex_row()
-                        .flex_wrap()
-                        .gap_2()
-                        .child(filter_tab(SearchFilter::All, "search-filter-all"))
-                        .child(filter_tab(SearchFilter::Songs, "search-filter-songs"))
-                        .child(filter_tab(SearchFilter::Videos, "search-filter-videos"))
-                        .child(filter_tab(SearchFilter::Albums, "search-filter-albums"))
-                        .child(filter_tab(
-                            SearchFilter::Playlists,
-                            "search-filter-playlists",
-                        ))
-                        .child(filter_tab(SearchFilter::Artists, "search-filter-artists")),
-                )
-                .child(when(store::is_search_loading, || {
-                    view()
-                        .gap_2()
-                        .child(skeleton_row())
-                        .child(skeleton_row())
-                        .child(skeleton_row())
-                }))
-                .child(when(
-                    || store::search_error().is_some(),
-                    move || {
-                        let q_retry = query_sig;
-                        status_card(
-                            "Search unavailable",
-                            move || SharedString::from(store::search_error().unwrap_or_default()),
-                            Some("Retry"),
-                            Some(Box::new(move || {
-                                store::run_search(&q_retry.get_untracked());
-                            })),
-                        )
-                    },
-                ))
-                .child(dynamic(move || {
-                    let filter = filter_memo.get();
-                    let tracks = tracks_memo.get();
-                    let albums = albums_memo.get();
-                    let desktop = desktop_memo.get();
-                    let collection_only = filter.is_collection_only();
-                    let show_albums =
-                        !albums.is_empty() && (filter == SearchFilter::All || collection_only);
+                    )
+                },
+            ))
+            .child(dynamic(move || {
+                let filter = filter_memo.get();
+                let tracks = tracks_memo.get();
+                let albums = albums_memo.get();
+                let desktop = desktop_memo.get();
+                let collection_only = filter.is_collection_only();
+                let show_albums =
+                    !albums.is_empty() && (filter == SearchFilter::All || collection_only);
 
-                    if tracks.is_empty() && (!show_albums || albums.is_empty()) {
-                        return status_card(
-                            "No matching results",
-                            "Try searching for another song, artist, album, or playlist.",
-                            None,
-                            None,
-                        )
-                        .into_element();
-                    }
+                if tracks.is_empty() && (!show_albums || albums.is_empty()) {
+                    return status_card(
+                        "No matching results",
+                        "Try searching for another song, artist, album, or playlist.",
+                        None,
+                        None,
+                    )
+                    .into_element();
+                }
 
-                    let mut out = view().gap_4();
+                let mut out = view().gap_4();
 
-                    if show_albums {
-                        let section_label = match filter {
-                            SearchFilter::Playlists => "Playlists",
-                            SearchFilter::Artists => "Artists",
-                            _ => "Albums & Collections",
-                        };
-                        out = out.child(
-                            view()
-                                .gap_2()
-                                .child(
-                                    text(section_label)
-                                        .text_xs()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(move || theme().muted_foreground),
-                                )
-                                .child(
-                                    scroll()
-                                        .when(!collection_only, |s| s.horizontal())
-                                        .w_full()
-                                        .child(
-                                            view()
-                                                .when(!collection_only, |v| {
-                                                    v.flex_row().gap_3().py_1()
-                                                })
-                                                .when(collection_only, |v| {
-                                                    v.flex_row().flex_wrap().gap_4().py_1()
-                                                })
-                                                .children(albums.into_iter().take(24).map(
-                                                    |alb| {
-                                                        let mono = alb
-                                                            .title
-                                                            .chars()
-                                                            .find(|c| c.is_alphanumeric())
-                                                            .map(|c| {
-                                                                c.to_uppercase().to_string()
-                                                            })
-                                                            .unwrap_or_else(|| "♫".into());
-                                                        let id_btn = alb.id.clone();
-                                                        let title_btn = alb.title.clone();
-                                                        let sub_btn = alb
-                                                            .subtitle
-                                                            .clone()
-                                                            .unwrap_or_default();
-                                                        let art_btn = alb.artwork_url.clone();
-                                                        button()
-                                                            .w(px(136.0))
-                                                            .gap_1p5()
-                                                            .active(|s| s.opacity(0.8))
-                                                            .on_press(move || {
-                                                                store::open_collection(
-                                                                    id_btn.clone(),
-                                                                    title_btn.clone(),
-                                                                    sub_btn.clone(),
-                                                                    art_btn.clone(),
-                                                                );
-                                                            })
-                                                            .child(artwork_box(
-                                                                alb.artwork_url,
-                                                                mono,
-                                                                136.0,
-                                                                10.0,
-                                                            ))
-                                                            .child(
-                                                                text(alb.title)
-                                                                    .number_of_lines(1)
-                                                                    .text_xs()
-                                                                    .font_weight(
-                                                                        FontWeight::SEMIBOLD,
-                                                                    )
-                                                                    .text_color(move || {
-                                                                        theme().foreground
-                                                                    }),
-                                                            )
-                                                            .child(
-                                                                text(
-                                                                    alb.subtitle
-                                                                        .unwrap_or_default(),
-                                                                )
-                                                                .number_of_lines(1)
-                                                                .text_xs()
-                                                                .text_color(move || {
-                                                                    theme().muted_foreground
-                                                                }),
-                                                            )
-                                                    },
-                                                )),
-                                        ),
-                                ),
-                        );
-                    }
-
-                    if !collection_only && !tracks.is_empty() {
-                        out = out.child(
-                            view().gap_1().children(
-                                tracks
-                                    .into_iter()
-                                    .map(|t| search_track_row(t, current_id_memo, desktop)),
+                if show_albums {
+                    let section_label = match filter {
+                        SearchFilter::Playlists => "Playlists",
+                        SearchFilter::Artists => "Artists",
+                        _ => "Albums & Collections",
+                    };
+                    out = out.child(
+                        view()
+                            .gap_2()
+                            .child(
+                                text(section_label)
+                                    .text_xs()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(move || theme().muted_foreground),
+                            )
+                            .child(
+                                scroll()
+                                    .when(!collection_only, |s| s.horizontal())
+                                    .w_full()
+                                    .child(
+                                        view()
+                                            .when(!collection_only, |v| v.flex_row().gap_3().py_1())
+                                            .when(collection_only, |v| {
+                                                v.flex_row().flex_wrap().gap_4().py_1()
+                                            })
+                                            .children(albums.into_iter().take(24).map(|alb| {
+                                                let mono = alb
+                                                    .title
+                                                    .chars()
+                                                    .find(|c| c.is_alphanumeric())
+                                                    .map(|c| c.to_uppercase().to_string())
+                                                    .unwrap_or_else(|| "♫".into());
+                                                let id_btn = alb.id.clone();
+                                                let title_btn = alb.title.clone();
+                                                let sub_btn =
+                                                    alb.subtitle.clone().unwrap_or_default();
+                                                let art_btn = alb.artwork_url.clone();
+                                                button()
+                                                    .w(px(136.0))
+                                                    .gap_1p5()
+                                                    .active(|s| s.opacity(0.8))
+                                                    .on_press(move || {
+                                                        store::open_collection(
+                                                            id_btn.clone(),
+                                                            title_btn.clone(),
+                                                            sub_btn.clone(),
+                                                            art_btn.clone(),
+                                                        );
+                                                    })
+                                                    .child(artwork_box(
+                                                        alb.artwork_url,
+                                                        mono,
+                                                        136.0,
+                                                        10.0,
+                                                    ))
+                                                    .child(
+                                                        text(alb.title)
+                                                            .number_of_lines(1)
+                                                            .text_xs()
+                                                            .font_weight(FontWeight::SEMIBOLD)
+                                                            .text_color(move || theme().foreground),
+                                                    )
+                                                    .child(
+                                                        text(alb.subtitle.unwrap_or_default())
+                                                            .number_of_lines(1)
+                                                            .text_xs()
+                                                            .text_color(move || {
+                                                                theme().muted_foreground
+                                                            }),
+                                                    )
+                                            })),
+                                    ),
                             ),
-                        );
-                    }
+                    );
+                }
 
-                    out.into_element()
-                })),
-        )
+                if !collection_only && !tracks.is_empty() {
+                    out = out.child(
+                        view().gap_1().children(
+                            tracks
+                                .into_iter()
+                                .map(|t| search_track_row(t, current_id_memo, desktop)),
+                        ),
+                    );
+                }
+
+                out.into_element()
+            })),
+    )
 }

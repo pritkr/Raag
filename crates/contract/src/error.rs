@@ -90,7 +90,9 @@ pub enum OfflineStorageError {
     PathTraversal(String),
     #[error("offline quota exceeded (used {used_bytes}, limit {limit_bytes})")]
     QuotaExceeded { used_bytes: u64, limit_bytes: u64 },
-    #[error("insufficient free disk space (available {available_bytes}, required {required_bytes})")]
+    #[error(
+        "insufficient free disk space (available {available_bytes}, required {required_bytes})"
+    )]
     InsufficientSpace {
         available_bytes: u64,
         required_bytes: u64,

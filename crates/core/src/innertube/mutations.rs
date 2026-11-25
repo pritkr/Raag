@@ -334,9 +334,7 @@ async fn execute_once(
 ) -> Result<MutationReceipt, MutationError> {
     match cmd {
         MutationCommand::ReportAtr(report) => client.report_atr(report).await,
-        MutationCommand::SetLike { video_id, action } => {
-            client.set_like(video_id, *action).await
-        }
+        MutationCommand::SetLike { video_id, action } => client.set_like(video_id, *action).await,
         MutationCommand::EditPlaylist { playlist_id, op } => {
             client.edit_playlist(playlist_id, op).await
         }
@@ -398,7 +396,10 @@ async fn run_worker(
                 Ok(receipt) => {
                     bus.publish(AppEvent::MutationCompleted(receipt));
                 }
-                Err(err @ (MutationError::Http { status: 401, .. } | MutationError::NotAuthenticated)) => {
+                Err(
+                    err @ (MutationError::Http { status: 401, .. }
+                    | MutationError::NotAuthenticated),
+                ) => {
                     let _ = client.sign_out();
                     bus.publish(AppEvent::AuthStateChanged {
                         signed_in: false,

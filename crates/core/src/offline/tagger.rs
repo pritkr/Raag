@@ -7,7 +7,9 @@ use lofty::file::{FileType, TaggedFileExt};
 use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::probe::Probe;
 use lofty::tag::{Accessor, ItemKey, Tag, TagExt, TagType};
-use resonance_contract::{CoreError, CoreResult, LyricSyncKind, LyricsDocument, OfflineStorageError, Track};
+use resonance_contract::{
+    CoreError, CoreResult, LyricSyncKind, LyricsDocument, OfflineStorageError, Track,
+};
 
 pub const MAX_EMBEDDED_ARTWORK_BYTES: usize = 4 * 1024 * 1024; // 4 MB
 
@@ -117,12 +119,7 @@ pub fn embed_metadata(
     if let Some(bytes) = artwork
         && let Some(mime) = mime_from_magic(bytes)
     {
-        let pic = Picture::new_unchecked(
-            PictureType::CoverFront,
-            Some(mime),
-            None,
-            bytes.to_vec(),
-        );
+        let pic = Picture::new_unchecked(PictureType::CoverFront, Some(mime), None, bytes.to_vec());
         tag.push_picture(pic);
     }
 

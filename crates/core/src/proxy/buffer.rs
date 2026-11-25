@@ -83,7 +83,11 @@ impl DualBufferSlots {
     }
 
     pub fn record_warmed_chunk(&mut self, video_id: &str, chunk_count: u64) {
-        if self.current.as_ref().is_some_and(|c| c.video_id == video_id) {
+        if self
+            .current
+            .as_ref()
+            .is_some_and(|c| c.video_id == video_id)
+        {
             self.current_warmed_chunks = self.current_warmed_chunks.max(chunk_count);
         }
         if self.next.as_ref().is_some_and(|n| n.video_id == video_id) {
@@ -106,7 +110,11 @@ impl DualBufferSlots {
     }
 
     pub fn remove(&mut self, video_id: &str) {
-        if self.current.as_ref().is_some_and(|c| c.video_id == video_id) {
+        if self
+            .current
+            .as_ref()
+            .is_some_and(|c| c.video_id == video_id)
+        {
             self.current = None;
             self.current_warmed_chunks = 0;
         }

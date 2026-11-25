@@ -119,20 +119,59 @@ mod tests {
 
     #[test]
     fn cache_key_separates_gvs_player_subs_and_session_hashes() {
-        let gvs_a = PoTokenRequest::new("WEB_REMIX", PoTokenScope::Gvs, "v1", Some("vd".into()), true)
-            .with_session_hash(Some("sess_a".into()));
-        let gvs_b = PoTokenRequest::new("WEB_REMIX", PoTokenScope::Gvs, "v2", Some("vd".into()), true)
-            .with_session_hash(Some("sess_a".into()));
-        let gvs_other = PoTokenRequest::new("WEB_REMIX", PoTokenScope::Gvs, "v1", Some("vd".into()), true)
-            .with_session_hash(Some("sess_b".into()));
-        let subs_v1 = PoTokenRequest::new("WEB_REMIX", PoTokenScope::Subs, "v1", Some("vd".into()), false);
-        let subs_v2 = PoTokenRequest::new("WEB_REMIX", PoTokenScope::Subs, "v2", Some("vd".into()), false);
+        let gvs_a = PoTokenRequest::new(
+            "WEB_REMIX",
+            PoTokenScope::Gvs,
+            "v1",
+            Some("vd".into()),
+            true,
+        )
+        .with_session_hash(Some("sess_a".into()));
+        let gvs_b = PoTokenRequest::new(
+            "WEB_REMIX",
+            PoTokenScope::Gvs,
+            "v2",
+            Some("vd".into()),
+            true,
+        )
+        .with_session_hash(Some("sess_a".into()));
+        let gvs_other = PoTokenRequest::new(
+            "WEB_REMIX",
+            PoTokenScope::Gvs,
+            "v1",
+            Some("vd".into()),
+            true,
+        )
+        .with_session_hash(Some("sess_b".into()));
+        let subs_v1 = PoTokenRequest::new(
+            "WEB_REMIX",
+            PoTokenScope::Subs,
+            "v1",
+            Some("vd".into()),
+            false,
+        );
+        let subs_v2 = PoTokenRequest::new(
+            "WEB_REMIX",
+            PoTokenScope::Subs,
+            "v2",
+            Some("vd".into()),
+            false,
+        );
 
         // Same session hash shares GVS token across videos
-        assert_eq!(CacheKey::from_request(&gvs_a), CacheKey::from_request(&gvs_b));
+        assert_eq!(
+            CacheKey::from_request(&gvs_a),
+            CacheKey::from_request(&gvs_b)
+        );
         // Different session hashes never collide
-        assert_ne!(CacheKey::from_request(&gvs_a), CacheKey::from_request(&gvs_other));
+        assert_ne!(
+            CacheKey::from_request(&gvs_a),
+            CacheKey::from_request(&gvs_other)
+        );
         // Subs scope is bound per video_id
-        assert_ne!(CacheKey::from_request(&subs_v1), CacheKey::from_request(&subs_v2));
+        assert_ne!(
+            CacheKey::from_request(&subs_v1),
+            CacheKey::from_request(&subs_v2)
+        );
     }
 }

@@ -7,7 +7,6 @@
 //!   LoopbackProxy (`127.0.0.1`), `PlaybackController`, and `DesktopAudioBridge`, logs
 //!   cold-launch latency, and exits cleanly.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -21,12 +20,7 @@ use resonance_core::playback::PlaybackController;
 use resonance_core::proxy::LoopbackProxy;
 use resonance_core::solver::QuickJsSolver;
 use resonance_core::sponsorblock::HttpSponsorBlockProvider;
-
-fn data_dir() -> PathBuf {
-    std::env::var_os("RESONANCE_DATA_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("resonance-ytmusic"))
-}
+use resonance_core::storage::resolve_app_paths;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -41,17 +35,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         store::enable_fixture_mode(true);
     }
 
-    let dir = data_dir();
-    std::fs::create_dir_all(&dir)?;
-
-    let cache = Arc::new(SqliteCacheStore::open(&dir)?);
+    let paths = resolve_app_paths()?;
+    let cache = Arc::new(SqliteCacheStore::open(&paths.data_dir)?);
     let chunks = Arc::new(ChunkCache::new(
-        &dir.join("chunks"),
+        &paths.cache_dir.join("chunks"),
         cache.clone(),
         DEFAULT_MAX_AUDIO_CACHE_BYTES,
     )?);
-    let auth = Arc::new(FileAuthStore::new(&dir));
-    let solver = Arc::new(QuickJsSolver::new(&dir));
+    let auth = Arc::new(FileAuthStore::new(&paths.data_dir));
+    let solver = Arc::new(QuickJsSolver::new(&paths.cache_dir.join("js_solver")));
     let provider = Arc::new(InnerTubeClient::new(cache.clone(), auth, solver)?);
     let proxy = Arc::new(LoopbackProxy::start(provider.clone(), chunks).await?);
     store::set_proxy_base_url(format!("http://{}", proxy.addr()));

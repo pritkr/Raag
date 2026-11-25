@@ -96,9 +96,8 @@ impl MockInnerTubeServer {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let base_url = format!("http://{addr}");
-        let default_player_url = format!(
-            "{base_url}/videoplayback?expire=1999999999&n=abc123&sig=RAW_SIG"
-        );
+        let default_player_url =
+            format!("{base_url}/videoplayback?expire=1999999999&n=abc123&sig=RAW_SIG");
         let requests = Arc::new(Mutex::new(Vec::new()));
         let scripted = Arc::new(Mutex::new(VecDeque::new()));
         let (tx, mut rx) = oneshot::channel();
@@ -281,7 +280,13 @@ impl PoTokenProvider for MockPoTokenProvider {
     }
 }
 
-fn make_test_client(base_url: &str) -> (tempfile::TempDir, Arc<SqliteCacheStore>, Arc<InnerTubeClient>) {
+fn make_test_client(
+    base_url: &str,
+) -> (
+    tempfile::TempDir,
+    Arc<SqliteCacheStore>,
+    Arc<InnerTubeClient>,
+) {
     let dir = tempdir().unwrap();
     let cache = Arc::new(SqliteCacheStore::open(&dir.path().join("test.db")).unwrap());
     let auth = Arc::new(FileAuthStore::new(dir.path()));
@@ -293,7 +298,8 @@ fn make_test_client(base_url: &str) -> (tempfile::TempDir, Arc<SqliteCacheStore>
 
 fn test_session() -> AuthSession {
     AuthSession {
-        cookie_header: "SAPISID=test_sapisid_secret; __Secure-3PAPISID=test_3p_secret; SID=abc".to_owned(),
+        cookie_header: "SAPISID=test_sapisid_secret; __Secure-3PAPISID=test_3p_secret; SID=abc"
+            .to_owned(),
         auth_user: 0,
         page_id: None,
         visitor_data: Some("CgtTestVisitorData".to_owned()),
@@ -327,7 +333,10 @@ fn matrix_with_only(kind: ClientKind, policy: PoTokenPolicy) -> ClientMatrix {
 async fn web_remix_required_policy_mints_and_attaches_pot_param_and_integrity_dim() {
     let server = MockInnerTubeServer::start().await;
     let (_dir, _cache, client) = make_test_client(&server.base_url);
-    client.update_client_matrix(matrix_with_only(ClientKind::WebRemix, PoTokenPolicy::Required));
+    client.update_client_matrix(matrix_with_only(
+        ClientKind::WebRemix,
+        PoTokenPolicy::Required,
+    ));
 
     let mock_pot = Arc::new(MockPoTokenProvider::new("MOCK_POT"));
     client.set_po_token_provider(Some(mock_pot.clone()));
@@ -388,14 +397,20 @@ async fn android_vr_and_ios_never_receive_cookies_sapisidhash_or_pot() {
     client.set_po_token_provider(Some(mock_pot.clone()));
 
     // Force ANDROID_VR (even if matrix policy were misconfigured to Required, hard guard blocks it)
-    client.update_client_matrix(matrix_with_only(ClientKind::AndroidVr, PoTokenPolicy::Required));
+    client.update_client_matrix(matrix_with_only(
+        ClientKind::AndroidVr,
+        PoTokenPolicy::Required,
+    ));
     let info = client.resolve_stream("vid_avr_01").await.unwrap();
     assert_eq!(mock_pot.calls(), 0);
     assert!(!info.url.contains("pot="));
 
     let reqs = server.take_requests().await;
     assert_eq!(reqs.len(), 1);
-    assert!(reqs[0].cookie.is_none(), "ANDROID_VR must never send Cookie");
+    assert!(
+        reqs[0].cookie.is_none(),
+        "ANDROID_VR must never send Cookie"
+    );
     assert!(
         reqs[0].authorization.is_none(),
         "ANDROID_VR must never send Authorization"
@@ -422,12 +437,18 @@ async fn not_required_and_optional_policies_never_invoke_provider_or_attach_pot(
     let mock_pot = Arc::new(MockPoTokenProvider::new("UNUSED_POT"));
     client.set_po_token_provider(Some(mock_pot.clone()));
 
-    client.update_client_matrix(matrix_with_only(ClientKind::VisionOs, PoTokenPolicy::Optional));
+    client.update_client_matrix(matrix_with_only(
+        ClientKind::VisionOs,
+        PoTokenPolicy::Optional,
+    ));
     let v_info = client.resolve_stream("vid_vis_01").await.unwrap();
     assert_eq!(mock_pot.calls(), 0);
     assert_eq!(v_info.url, server.default_player_url);
 
-    client.update_client_matrix(matrix_with_only(ClientKind::AndroidVr, PoTokenPolicy::NotRequired));
+    client.update_client_matrix(matrix_with_only(
+        ClientKind::AndroidVr,
+        PoTokenPolicy::NotRequired,
+    ));
     let a_info = client.resolve_stream("vid_avr_02").await.unwrap();
     assert_eq!(mock_pot.calls(), 0);
     assert_eq!(a_info.url, server.default_player_url);
@@ -595,10 +616,16 @@ async fn set_like_signs_sapisidhash_hits_exact_endpoints_and_evicts_liked_cache(
         )
         .unwrap();
 
-    client.set_like("vid_like_1", LikeAction::Like).await.unwrap();
+    client
+        .set_like("vid_like_1", LikeAction::Like)
+        .await
+        .unwrap();
     assert!(
         cache
-            .get_metadata("collection:FEmusic_liked_videos", resonance_core::unix_secs())
+            .get_metadata(
+                "collection:FEmusic_liked_videos",
+                resonance_core::unix_secs()
+            )
             .unwrap()
             .is_none(),
         "liked cache must be evicted"
@@ -616,7 +643,10 @@ async fn set_like_signs_sapisidhash_hits_exact_endpoints_and_evicts_liked_cache(
     let reqs = server.take_requests().await;
     assert_eq!(reqs.len(), 3);
     let paths: Vec<&str> = reqs.iter().map(|r| r.path.as_str()).collect();
-    assert_eq!(paths, vec!["/like/like", "/like/dislike", "/like/removelike"]);
+    assert_eq!(
+        paths,
+        vec!["/like/like", "/like/dislike", "/like/removelike"]
+    );
     for req in &reqs {
         assert!(
             req.authorization
@@ -624,7 +654,11 @@ async fn set_like_signs_sapisidhash_hits_exact_endpoints_and_evicts_liked_cache(
                 .is_some_and(|a| a.contains("SAPISIDHASH ")),
             "missing SAPISIDHASH"
         );
-        assert!(req.cookie.as_deref().is_some_and(|c| c.contains("SAPISID=")));
+        assert!(
+            req.cookie
+                .as_deref()
+                .is_some_and(|c| c.contains("SAPISID="))
+        );
         assert_eq!(req.origin.as_deref(), Some("https://music.youtube.com"));
         assert_eq!(req.auth_user.as_deref(), Some("0"));
         assert_eq!(
@@ -809,7 +843,10 @@ async fn mutation_worker_preserves_fifo_order_and_coalesces_atr_pings() {
         .filter(|r| r.path.starts_with("/like/"))
         .map(|r| r.path.as_str())
         .collect();
-    assert_eq!(like_paths, vec!["/like/like", "/like/removelike", "/like/like"]);
+    assert_eq!(
+        like_paths,
+        vec!["/like/like", "/like/removelike", "/like/like"]
+    );
 
     let atr_reqs: Vec<&RecordedRequest> = reqs.iter().filter(|r| r.path == "/atr").collect();
     assert!(
@@ -866,8 +903,14 @@ async fn mutation_401_revokes_session_and_drains_pending_queue() {
     }
 
     assert!(saw_failed, "expected MutationFailed on 401");
-    assert!(saw_signed_out, "expected AuthStateChanged(signed_in: false)");
-    assert!(client.current_session().is_none(), "session must be cleared");
+    assert!(
+        saw_signed_out,
+        "expected AuthStateChanged(signed_in: false)"
+    );
+    assert!(
+        client.current_session().is_none(),
+        "session must be cleared"
+    );
     let reqs = server.take_requests().await;
     assert_eq!(reqs.len(), 1, "subsequent queued mutations must be drained");
 }
@@ -914,7 +957,10 @@ async fn mutation_429_backoff_and_secret_redaction() {
 
     // Now test 500 containing SAPISID=LEAK -> must be redacted
     server
-        .push_response(ScriptedResponse::status_body(500, "SAPISID=LEAK_SECRET_VALUE"))
+        .push_response(ScriptedResponse::status_body(
+            500,
+            "SAPISID=LEAK_SECRET_VALUE",
+        ))
         .await;
     let err = client
         .set_like("vid_500", LikeAction::Like)

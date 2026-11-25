@@ -34,7 +34,9 @@ mod host {
         ApproxTextEngine, Bounds, Color, EdgeInsets, EventKind, EventPayload, MountBatch,
         MountItem, NodeId, Point, Points, PressEvent, ROOT_ID, Size, TextAlign, ViewKind,
     };
-    use nsh_engine::{ColorScheme, Engine, EngineConfig, EngineControl, Environment, MountSink, Root};
+    use nsh_engine::{
+        ColorScheme, Engine, EngineConfig, EngineControl, Environment, MountSink, Root,
+    };
     use serde::{Deserialize, Serialize};
     use tokio::net::TcpListener;
 
@@ -103,7 +105,10 @@ mod host {
                 .and_then(|rest| rest.split([';', ',']).next())
                 .filter(|m| !m.is_empty())
                 .unwrap_or("image/svg+xml");
-            return Some(format!("data:{mime};base64,{}", encode_base64(data.bytes())));
+            return Some(format!(
+                "data:{mime};base64,{}",
+                encode_base64(data.bytes())
+            ));
         }
         if !source.uri.is_empty() && !source.uri.contains(";nsh-key=") {
             Some(source.uri.to_string())
@@ -307,8 +312,7 @@ mod host {
                         child,
                         before,
                     } => {
-                        if let Some(prev_parent) =
-                            self.nodes.get(&child).and_then(|n| n.parent)
+                        if let Some(prev_parent) = self.nodes.get(&child).and_then(|n| n.parent)
                             && let Some(p) = self.nodes.get_mut(&prev_parent)
                         {
                             p.children.retain(|&c| c != child);
@@ -432,7 +436,8 @@ mod host {
                     MountItem::ViewProps { id, props } => {
                         if let Some(n) = self.nodes.get_mut(&id) {
                             n.test_id = props.test_id.as_ref().map(|s| s.to_string());
-                            n.a11y_label = props.accessibility.label.as_ref().map(|s| s.to_string());
+                            n.a11y_label =
+                                props.accessibility.label.as_ref().map(|s| s.to_string());
                             n.pointer_none =
                                 matches!(props.pointer_events, nsh_core::PointerEvents::None);
                         }
@@ -665,7 +670,10 @@ mod host {
         state: Arc<Mutex<HostState>>,
     ) -> Result<Response<Full<Bytes>>, Infallible> {
         if req.method() == Method::OPTIONS {
-            return Ok(json_response(StatusCode::NO_CONTENT, &serde_json::json!({})));
+            return Ok(json_response(
+                StatusCode::NO_CONTENT,
+                &serde_json::json!({}),
+            ));
         }
         let path = req.uri().path().to_string();
         let method = req.method().clone();
@@ -804,7 +812,10 @@ mod host {
                     )
                 }
             }
-            _ => json_response(StatusCode::NOT_FOUND, &serde_json::json!({"error": "not found"})),
+            _ => json_response(
+                StatusCode::NOT_FOUND,
+                &serde_json::json!({"error": "not found"}),
+            ),
         };
         Ok(resp)
     }

@@ -608,13 +608,13 @@ pub fn listen_together_screen() -> impl IntoElement {
                                         view()
                                             .gap_0p5()
                                             .child(
-                                                text("Listen Together")
+                                                text("Radio Mix")
                                                     .text_2xl()
                                                     .font_weight(FontWeight::BOLD)
                                                     .text_color(move || theme().foreground),
                                             )
                                             .child(
-                                                text("Shared Radio Sessions • Continuous mixes seeded from your active track")
+                                                text("Instant Mood & Seed Radio • Continuous mixes seeded from your active track")
                                                     .text_xs()
                                                     .text_color(move || theme().muted_foreground),
                                             ),

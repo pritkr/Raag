@@ -1,5 +1,7 @@
 //! Navigation, sidebar/panel chrome, and global status toast slice (`UiSlice`).
 
+use resonance_contract::Track;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AppTab {
     #[default]
@@ -30,6 +32,8 @@ pub struct UiSlice {
     pub desktop_side_panel_open: bool,
     pub desktop_side_panel: DesktopSidePanel,
     pub status_banner: Option<String>,
+    pub active_track_sheet: Option<(Track, Option<String>)>,
+    pub add_to_playlist_track: Option<Track>,
 }
 
 impl Default for UiSlice {
@@ -42,6 +46,8 @@ impl Default for UiSlice {
             desktop_side_panel_open: true,
             desktop_side_panel: DesktopSidePanel::Queue,
             status_banner: None,
+            active_track_sheet: None,
+            add_to_playlist_track: None,
         }
     }
 }

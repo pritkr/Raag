@@ -229,11 +229,13 @@ fn native_nsh_audio_player_drives_open_pause_resume_seek_volume_loop_and_auto_ad
     assert!(recorder.emit_to_active(AudioEvent::Ended));
     let mut opened = false;
     for _ in 0..50 {
-        if recorder.commands().iter().any(|c| matches!(
-            c,
-            AudioCommand::Open { src, .. }
-                if src == "http://127.0.0.1:41234/stream/fix-missing-art?itag=251"
-        )) {
+        if recorder.commands().iter().any(|c| {
+            matches!(
+                c,
+                AudioCommand::Open { src, .. }
+                    if src == "http://127.0.0.1:41234/stream/fix-missing-art?itag=251"
+            )
+        }) {
             opened = true;
             break;
         }

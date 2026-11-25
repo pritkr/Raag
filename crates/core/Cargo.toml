@@ -28,6 +28,7 @@ hyper-util.workspace = true
 http-body-util.workspace = true
 futures-util.workspace = true
 lofty.workspace = true
+directories.workspace = true
 
 [target.'cfg(target_os = "android")'.dependencies]
 rquickjs = { workspace = true, features = ["bindgen"] }

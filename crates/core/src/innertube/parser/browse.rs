@@ -68,7 +68,9 @@ pub fn parse_collection_response(browse_id: &str, resp: &Value) -> CoreResult<Pl
 /// Parses YTM internal plain lyrics from `/browse` (`MPLYt...`).
 pub fn parse_ytm_lyrics_response(video_id: &str, resp: &Value) -> Option<LyricsDocument> {
     let text = resp
-        .pointer("/contents/sectionListRenderer/contents/0/musicDescriptionShelfRenderer/description")
+        .pointer(
+            "/contents/sectionListRenderer/contents/0/musicDescriptionShelfRenderer/description",
+        )
         .map(join_runs)?;
     let lines: Vec<LyricLine> = text
         .lines()

@@ -119,9 +119,7 @@ impl PoTokenProvider for SidecarPoTokenProvider {
             PoTokenScope::Player => (req.video_id.clone(), "player"),
             PoTokenScope::Subs => (req.video_id.clone(), "subs"),
             PoTokenScope::Gvs => (
-                req.identity_key()
-                    .unwrap_or(&req.video_id)
-                    .to_owned(),
+                req.identity_key().unwrap_or(&req.video_id).to_owned(),
                 "gvs",
             ),
         };

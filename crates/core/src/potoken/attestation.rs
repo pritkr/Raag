@@ -118,7 +118,8 @@ impl PoTokenProvider for PlatformAttestationPoTokenProvider {
             PoTokenScope::Player | PoTokenScope::Subs => req.video_id.as_str(),
             PoTokenScope::Gvs => req.identity_key().unwrap_or(req.video_id.as_str()),
         };
-        let (value, expires_at_unix_secs) = self.bridge.mint_attested_token(binding, req.scope).await?;
+        let (value, expires_at_unix_secs) =
+            self.bridge.mint_attested_token(binding, req.scope).await?;
         Ok(PoToken {
             value,
             scope: req.scope,
@@ -136,7 +137,10 @@ impl PoTokenProvider for PlatformAttestationPoTokenProvider {
         PoTokenDiagnostics {
             status: PoTokenHealthStatus::Healthy,
             active_provider: self.bridge.bridge_kind().to_owned(),
-            detail: format!("Platform attestation bridge ({})", self.bridge.bridge_kind()),
+            detail: format!(
+                "Platform attestation bridge ({})",
+                self.bridge.bridge_kind()
+            ),
             degraded_fallback_active: false,
             last_checked_unix_secs: unix_secs(),
         }

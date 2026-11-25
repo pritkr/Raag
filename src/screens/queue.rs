@@ -17,178 +17,172 @@ use crate::ui::tokens::{
 };
 
 pub fn queue_screen() -> impl IntoElement {
-    view()
-        .flex_1()
-        .min_h(px(0.0))
-        .items_center()
-        .p_4()
-        .child(
-            view()
-                .w_full()
-                .max_w(px(860.0))
-                .flex_1()
-                .min_h(px(0.0))
-                .gap_3()
-                .child(queue_header())
-                .child(setting_switch(
-                    "Autoplay Radio",
-                    || store::player_snapshot().queue.autoplay_radio,
-                    store::set_autoplay_radio,
-                ))
-                .child(
-                    virtual_list(store::queue_len, move |at| {
-                        let track = computed(move || store::queue_track_at(at.index()));
-                        let is_active = move || {
-                            store::player_snapshot().queue.current_index == Some(at.index())
-                        };
+    view().flex_1().min_h(px(0.0)).items_center().p_4().child(
+        view()
+            .w_full()
+            .max_w(px(860.0))
+            .flex_1()
+            .min_h(px(0.0))
+            .gap_3()
+            .child(queue_header())
+            .child(setting_switch(
+                "Autoplay Radio",
+                || store::player_snapshot().queue.autoplay_radio,
+                store::set_autoplay_radio,
+            ))
+            .child(
+                virtual_list(store::queue_len, move |at| {
+                    let track = computed(move || store::queue_track_at(at.index()));
+                    let is_active =
+                        move || store::player_snapshot().queue.current_index == Some(at.index());
 
-                        // Performance rule: ZERO backdrop blur inside virtual_list rows.
-                        view()
-                            .flex_row()
-                            .items_center()
-                            .gap_2()
-                            .px_3()
-                            .py_2()
-                            .min_h(px(64.0))
-                            .rounded(radius_card)
-                            .style_when(is_active, |s| {
-                                s.bg(pill_glass_surface)
-                                    .border_1()
-                                    .border_color(color_player_accent)
-                            })
-                            .hover(|s| s.bg(pill_glass_surface))
-                            .child(
-                                button()
-                                    .flex_1()
-                                    .min_w(px(0.0))
-                                    .min_h(px(MOBILE_MIN_TOUCH_TARGET))
-                                    .flex_row()
-                                    .items_center()
-                                    .gap_3()
-                                    .active(|s| s.opacity(0.75))
-                                    .on_press(move || store::jump_queue(at.index()))
-                                    .child(queue_row_artwork(track, is_active))
-                                    .child(
-                                        view()
-                                            .flex_1()
-                                            .min_w(px(0.0))
-                                            .gap_0p5()
-                                            .child(
-                                                view()
-                                                    .flex_row()
-                                                    .items_center()
-                                                    .gap_1p5()
-                                                    .min_w(px(0.0))
-                                                    .child(
-                                                        text(move || {
-                                                            track.with(|t| {
-                                                                SharedString::from(
-                                                                    t.as_ref()
-                                                                        .map(|x| x.title.clone())
-                                                                        .unwrap_or_default(),
-                                                                )
-                                                            })
-                                                        })
-                                                        .flex_1()
-                                                        .number_of_lines(1)
-                                                        .text_sm()
-                                                        .font_weight(FontWeight::SEMIBOLD)
-                                                        .text_color(move || {
-                                                            if is_active() {
-                                                                color_player_accent()
-                                                            } else {
-                                                                theme().foreground
-                                                            }
-                                                        }),
-                                                    )
-                                                    .child(when(
-                                                        move || {
-                                                            track.with(|t| {
+                    // Performance rule: ZERO backdrop blur inside virtual_list rows.
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .px_3()
+                        .py_2()
+                        .min_h(px(64.0))
+                        .rounded(radius_card)
+                        .style_when(is_active, |s| {
+                            s.bg(pill_glass_surface)
+                                .border_1()
+                                .border_color(color_player_accent)
+                        })
+                        .hover(|s| s.bg(pill_glass_surface))
+                        .child(
+                            button()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                                .flex_row()
+                                .items_center()
+                                .gap_3()
+                                .active(|s| s.opacity(0.75))
+                                .on_press(move || store::jump_queue(at.index()))
+                                .child(queue_row_artwork(track, is_active))
+                                .child(
+                                    view()
+                                        .flex_1()
+                                        .min_w(px(0.0))
+                                        .gap_0p5()
+                                        .child(
+                                            view()
+                                                .flex_row()
+                                                .items_center()
+                                                .gap_1p5()
+                                                .min_w(px(0.0))
+                                                .child(
+                                                    text(move || {
+                                                        track.with(|t| {
+                                                            SharedString::from(
                                                                 t.as_ref()
-                                                                    .is_some_and(|x| x.is_explicit)
-                                                            })
-                                                        },
-                                                        || {
-                                                            view()
-                                                                .px_1()
-                                                                .rounded(px(3.0))
-                                                                .bg(move || theme().muted)
-                                                                .child(
-                                                                    text("E")
-                                                                        .text_xs()
-                                                                        .font_weight(FontWeight::BOLD)
-                                                                        .text_color(move || {
-                                                                            theme().muted_foreground
-                                                                        }),
-                                                                )
-                                                        },
-                                                    )),
-                                            )
-                                            .child(
-                                                text(move || {
-                                                    track.with(|t| {
-                                                        SharedString::from(
-                                                            t.as_ref()
-                                                                .map(|x| {
-                                                                    format!(
-                                                                        "{} • {}",
-                                                                        x.artist_display(),
-                                                                        format_duration_ms(
-                                                                            x.duration_ms
-                                                                        )
-                                                                    )
-                                                                })
-                                                                .unwrap_or_default(),
-                                                        )
+                                                                    .map(|x| x.title.clone())
+                                                                    .unwrap_or_default(),
+                                                            )
+                                                        })
                                                     })
+                                                    .flex_1()
+                                                    .number_of_lines(1)
+                                                    .text_sm()
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .text_color(move || {
+                                                        if is_active() {
+                                                            color_player_accent()
+                                                        } else {
+                                                            theme().foreground
+                                                        }
+                                                    }),
+                                                )
+                                                .child(when(
+                                                    move || {
+                                                        track.with(|t| {
+                                                            t.as_ref()
+                                                                .is_some_and(|x| x.is_explicit)
+                                                        })
+                                                    },
+                                                    || {
+                                                        view()
+                                                            .px_1()
+                                                            .rounded(px(3.0))
+                                                            .bg(move || theme().muted)
+                                                            .child(
+                                                                text("E")
+                                                                    .text_xs()
+                                                                    .font_weight(FontWeight::BOLD)
+                                                                    .text_color(move || {
+                                                                        theme().muted_foreground
+                                                                    }),
+                                                            )
+                                                    },
+                                                )),
+                                        )
+                                        .child(
+                                            text(move || {
+                                                track.with(|t| {
+                                                    SharedString::from(
+                                                        t.as_ref()
+                                                            .map(|x| {
+                                                                format!(
+                                                                    "{} • {}",
+                                                                    x.artist_display(),
+                                                                    format_duration_ms(
+                                                                        x.duration_ms
+                                                                    )
+                                                                )
+                                                            })
+                                                            .unwrap_or_default(),
+                                                    )
                                                 })
-                                                .number_of_lines(1)
-                                                .text_xs()
-                                                .tabular_nums()
-                                                .text_color(move || theme().muted_foreground),
-                                            ),
-                                    ),
-                            )
-                            .child(queue_action_button(
-                                IconKind::ArrowUp,
-                                "Move Up",
-                                move || theme().foreground,
-                                move || {
-                                    let idx = at.index();
-                                    if idx > 0 {
-                                        store::move_queue_item(idx, idx - 1);
-                                    }
-                                },
-                            ))
-                            .child(queue_action_button(
-                                IconKind::ArrowDown,
-                                "Move Down",
-                                move || theme().foreground,
-                                move || {
-                                    let idx = at.index();
-                                    if idx + 1 < store::queue_len() {
-                                        store::move_queue_item(idx, idx + 1);
-                                    }
-                                },
-                            ))
-                            .child(queue_action_button(
-                                IconKind::Close,
-                                "Remove from Queue",
-                                move || theme().destructive,
-                                move || store::remove_queue_item(at.index()),
-                            ))
-                    })
-                    .keys(store::queue_ids)
-                    .estimated_item_size(px(64.0))
-                    .empty(status_card(
-                        "Queue is empty",
-                        "Play any song from Home or Search to populate your persistent queue.",
-                        None,
-                        None,
-                    ))
-                    .flex_1(),
-                ),
-        )
+                                            })
+                                            .number_of_lines(1)
+                                            .text_xs()
+                                            .tabular_nums()
+                                            .text_color(move || theme().muted_foreground),
+                                        ),
+                                ),
+                        )
+                        .child(queue_action_button(
+                            IconKind::ArrowUp,
+                            "Move Up",
+                            move || theme().foreground,
+                            move || {
+                                let idx = at.index();
+                                if idx > 0 {
+                                    store::move_queue_item(idx, idx - 1);
+                                }
+                            },
+                        ))
+                        .child(queue_action_button(
+                            IconKind::ArrowDown,
+                            "Move Down",
+                            move || theme().foreground,
+                            move || {
+                                let idx = at.index();
+                                if idx + 1 < store::queue_len() {
+                                    store::move_queue_item(idx, idx + 1);
+                                }
+                            },
+                        ))
+                        .child(queue_action_button(
+                            IconKind::Close,
+                            "Remove from Queue",
+                            move || theme().destructive,
+                            move || store::remove_queue_item(at.index()),
+                        ))
+                })
+                .keys(store::queue_ids)
+                .estimated_item_size(px(64.0))
+                .empty(status_card(
+                    "Queue is empty",
+                    "Play any song from Home or Search to populate your persistent queue.",
+                    None,
+                    None,
+                ))
+                .flex_1(),
+            ),
+    )
 }
 
 fn queue_header() -> impl IntoElement {
@@ -365,22 +359,25 @@ fn queue_row_artwork(
         .items_center()
         .justify_center()
         .overflow_hidden()
-        .child(when(is_active, || {
-            icon(IconKind::Play, 15.0, move || theme().primary_foreground)
-        }).otherwise(move || {
-            text(move || {
-                track.with(|t| {
-                    SharedString::from(
-                        t.as_ref()
-                            .map(|x| x.fallback_monogram())
-                            .unwrap_or_else(|| "♪".into()),
-                    )
-                })
+        .child(
+            when(is_active, || {
+                icon(IconKind::Play, 15.0, move || theme().primary_foreground)
             })
-            .text_sm()
-            .font_weight(FontWeight::BOLD)
-            .text_color(move || theme().primary_foreground)
-        }))
+            .otherwise(move || {
+                text(move || {
+                    track.with(|t| {
+                        SharedString::from(
+                            t.as_ref()
+                                .map(|x| x.fallback_monogram())
+                                .unwrap_or_else(|| "♪".into()),
+                        )
+                    })
+                })
+                .text_sm()
+                .font_weight(FontWeight::BOLD)
+                .text_color(move || theme().primary_foreground)
+            }),
+        )
 }
 
 fn queue_action_button(

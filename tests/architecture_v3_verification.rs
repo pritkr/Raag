@@ -33,8 +33,7 @@ use resonance_contract::{
     StreamInfo,
 };
 use resonance_core::audio_dsp::{
-    DspConfig, DspPipeline, EqPreset, GaplessSplicer, LoudnessNormalizer, SilenceSkipper,
-    TenBandEq,
+    DspConfig, DspPipeline, EqPreset, GaplessSplicer, LoudnessNormalizer, SilenceSkipper, TenBandEq,
 };
 use resonance_core::cache::{ArtworkCache, ChunkCache, SqliteCacheStore};
 use resonance_core::downloads::{OfflineVault, PinnedCollectionKind, VaultTrackState};
@@ -145,7 +144,10 @@ fn arch1_modular_decomposition_and_pure_fsm_prefetch() {
         "crates/core/src/innertube/parser/player.rs",
         "crates/core/src/innertube/parser/next.rs",
     ] {
-        assert!(root.join(parser_mod).exists(), "missing parser module {parser_mod}");
+        assert!(
+            root.join(parser_mod).exists(),
+            "missing parser module {parser_mod}"
+        );
     }
 
     assert!(
@@ -173,22 +175,43 @@ fn arch1_modular_decomposition_and_pure_fsm_prefetch() {
     assert_eq!(fx40.prefetch, PrefetchDecision::None);
 
     let fx55 = fsm.tick_position(110_000);
-    assert!(matches!(fx55.prefetch, PrefetchDecision::ResolveOnly { .. }));
+    assert!(matches!(
+        fx55.prefetch,
+        PrefetchDecision::ResolveOnly { .. }
+    ));
 
     let fx76 = fsm.tick_position(152_000);
-    assert!(matches!(fx76.prefetch, PrefetchDecision::WarmProxySlot { .. }));
+    assert!(matches!(
+        fx76.prefetch,
+        PrefetchDecision::WarmProxySlot { .. }
+    ));
 
     // Verify all 5 endpoint parser entry points handle minimal payloads safely
-    assert!(parse_home_response(&serde_json::json!({})).unwrap().is_empty());
-    assert!(parse_search_response("q", &serde_json::json!({})).unwrap().tracks.is_empty());
+    assert!(
+        parse_home_response(&serde_json::json!({}))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        parse_search_response("q", &serde_json::json!({}))
+            .unwrap()
+            .tracks
+            .is_empty()
+    );
     assert!(
         parse_collection_response("VL1", &serde_json::json!({}))
             .unwrap()
             .tracks
             .is_empty()
     );
-    assert!(parse_next_queue_response(&serde_json::json!({})).unwrap().is_empty());
-    assert!(parse_player_response("vid1", "WEB_REMIX", &serde_json::json!({}), 1_700_000_000).is_err());
+    assert!(
+        parse_next_queue_response(&serde_json::json!({}))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        parse_player_response("vid1", "WEB_REMIX", &serde_json::json!({}), 1_700_000_000).is_err()
+    );
 }
 
 #[tokio::test]
@@ -298,8 +321,16 @@ async fn arch2_ejs_manifest_pinning_and_sqlite_l2_sub2ms_memoization() {
         function solveSig(s) { return s.split("").reverse().join(""); }
     "#;
     let good_hash = EjsBundleManifest::sha256_of(player_js);
-    assert!(manifest.verify_bundle_integrity(player_js, &good_hash).is_ok());
-    assert!(manifest.verify_bundle_integrity(player_js, "0000deadbeef").is_err());
+    assert!(
+        manifest
+            .verify_bundle_integrity(player_js, &good_hash)
+            .is_ok()
+    );
+    assert!(
+        manifest
+            .verify_bundle_integrity(player_js, "0000deadbeef")
+            .is_err()
+    );
 
     let challenge = resonance_core::solver::ChallengeInput {
         player_hash: "player_v1_test_hash".into(),
@@ -346,7 +377,12 @@ fn arch2_adaptive_client_matrix_circuit_breaker_transitions() {
 
     // Repeated 403/429 failures trip the breaker to Open
     cb.record_failure_at(ClientKind::WebRemix, Some(403), 120, t0);
-    cb.record_failure_at(ClientKind::WebRemix, Some(429), 140, t0 + Duration::from_secs(1));
+    cb.record_failure_at(
+        ClientKind::WebRemix,
+        Some(429),
+        140,
+        t0 + Duration::from_secs(1),
+    );
     assert_eq!(
         cb.state_at(ClientKind::WebRemix, t0 + Duration::from_secs(2)),
         CircuitState::Open
@@ -371,15 +407,20 @@ fn arch2_adaptive_client_matrix_circuit_breaker_transitions() {
 async fn arch3_proxy_v2_dual_buffer_and_single_flight_coalescing() {
     let dir = TempDirGuard::new("proxyv2");
     let cache = Arc::new(SqliteCacheStore::open(dir.path()).unwrap());
-    let chunks =
-        Arc::new(ChunkCache::new(&dir.path().join("chunks"), cache.clone(), 64 * 1024 * 1024).unwrap());
+    let chunks = Arc::new(
+        ChunkCache::new(&dir.path().join("chunks"), cache.clone(), 64 * 1024 * 1024).unwrap(),
+    );
     let auth = Arc::new(MemoryAuthStore);
     let solver = Arc::new(QuickJsSolver::new(dir.path()));
     let provider = Arc::new(InnerTubeClient::new(cache.clone(), auth, solver).unwrap());
 
     // Local upstream origin serving deterministic 512 KB audio payload and counting hits
     let upstream_hits = Arc::new(AtomicUsize::new(0));
-    let payload = Arc::new((0..(512 * 1024)).map(|i| (i % 251) as u8).collect::<Vec<u8>>());
+    let payload = Arc::new(
+        (0..(512 * 1024))
+            .map(|i| (i % 251) as u8)
+            .collect::<Vec<u8>>(),
+    );
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin_addr = listener.local_addr().unwrap();
@@ -404,7 +445,8 @@ async fn arch3_proxy_v2_dual_buffer_and_single_flight_coalescing() {
                             .get("range")
                             .and_then(|v| v.to_str().ok())
                             .unwrap_or("bytes=0-262143");
-                        let parts: Vec<&str> = range.trim_start_matches("bytes=").split('-').collect();
+                        let parts: Vec<&str> =
+                            range.trim_start_matches("bytes=").split('-').collect();
                         let start: usize = parts[0].parse().unwrap_or(0);
                         let end: usize = parts
                             .get(1)
@@ -416,7 +458,10 @@ async fn arch3_proxy_v2_dual_buffer_and_single_flight_coalescing() {
                             Response::builder()
                                 .status(StatusCode::PARTIAL_CONTENT)
                                 .header("content-type", "audio/webm")
-                                .header("content-range", format!("bytes {start}-{end}/{}", data.len()))
+                                .header(
+                                    "content-range",
+                                    format!("bytes {start}-{end}/{}", data.len()),
+                                )
                                 .body(Full::new(Bytes::from(slice)))
                                 .unwrap(),
                         )
@@ -444,7 +489,10 @@ async fn arch3_proxy_v2_dual_buffer_and_single_flight_coalescing() {
 
     proxy.register_current_stream(make_src("cur_vid"));
     proxy.register_next_stream(make_src("next_vid"));
-    let warmed = proxy.warm_next_track(make_src("next_vid"), 1).await.unwrap();
+    let warmed = proxy
+        .warm_next_track(make_src("next_vid"), 1)
+        .await
+        .unwrap();
     assert!(warmed > 0);
     let status = proxy.dual_buffer_status();
     assert_eq!(
@@ -464,7 +512,12 @@ async fn arch3_proxy_v2_dual_buffer_and_single_flight_coalescing() {
         status2.current.as_ref().map(|s| s.video_id.as_str()),
         Some("next_vid")
     );
-    assert!(status2.current.as_ref().is_some_and(|s| s.warmed_chunks > 0));
+    assert!(
+        status2
+            .current
+            .as_ref()
+            .is_some_and(|s| s.warmed_chunks > 0)
+    );
 
     // Verify single-flight ChunkCoalescer deduplicates concurrent identical chunk fetches
     let coalescer = Arc::new(ChunkCoalescer::new());

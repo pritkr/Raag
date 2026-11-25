@@ -120,8 +120,7 @@ impl QuickJsSolver {
         let manifest_json = serde_json::to_string_pretty(&persisted_manifest)
             .map_err(|e| CoreError::Solver(e.to_string()))?;
         fs::write(&tmp_manifest, manifest_json).map_err(|e| CoreError::Solver(e.to_string()))?;
-        fs::rename(&tmp_manifest, &manifest_path)
-            .map_err(|e| CoreError::Solver(e.to_string()))?;
+        fs::rename(&tmp_manifest, &manifest_path).map_err(|e| CoreError::Solver(e.to_string()))?;
 
         // Clear cached n-params when solver bundle updates to avoid stale outputs.
         self.memo.clear();
@@ -149,8 +148,7 @@ impl QuickJsSolver {
             .map_err(|e| CoreError::Solver(format!("failed to write solver cache: {e}")))?;
         f.write_all(js_source.as_bytes())
             .map_err(|e| CoreError::Solver(e.to_string()))?;
-        f.sync_all()
-            .map_err(|e| CoreError::Solver(e.to_string()))?;
+        f.sync_all().map_err(|e| CoreError::Solver(e.to_string()))?;
         fs::rename(&tmp, &target).map_err(|e| CoreError::Solver(e.to_string()))?;
         Ok(target)
     }
@@ -219,8 +217,8 @@ impl QuickJsSolver {
         }
         let base_url = url_raw
             .ok_or_else(|| CoreError::Solver("signatureCipher missing url param".to_owned()))?;
-        let mut parsed =
-            url::Url::parse(&base_url).map_err(|e| CoreError::Solver(format!("invalid url: {e}")))?;
+        let mut parsed = url::Url::parse(&base_url)
+            .map_err(|e| CoreError::Solver(format!("invalid url: {e}")))?;
 
         let n_orig = parsed
             .query_pairs()

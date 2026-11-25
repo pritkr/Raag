@@ -222,8 +222,7 @@ mod tests {
         let rms_in = (signal[n / 2..].iter().map(|x| x * x).sum::<f32>() / (n / 2) as f32).sqrt();
 
         eq.process_interleaved(&mut signal);
-        let rms_out =
-            (signal[n / 2..].iter().map(|x| x * x).sum::<f32>() / (n / 2) as f32).sqrt();
+        let rms_out = (signal[n / 2..].iter().map(|x| x * x).sum::<f32>() / (n / 2) as f32).sqrt();
         let measured_db = 20.0 * (rms_out / rms_in).log10();
         assert!(
             (measured_db - 6.0).abs() < 0.35,

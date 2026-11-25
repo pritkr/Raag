@@ -159,7 +159,11 @@ impl LoopbackProxy {
     /// Pre-warms the `next_track` slot by fetching up to `chunks_to_warm` aligned 256 KB
     /// chunks into `ChunkCache` through the single-flight `ChunkCoalescer`.
     /// Returns the number of chunks warmed on disk.
-    pub async fn warm_next_track(&self, stream: StreamInfo, chunks_to_warm: u64) -> CoreResult<u64> {
+    pub async fn warm_next_track(
+        &self,
+        stream: StreamInfo,
+        chunks_to_warm: u64,
+    ) -> CoreResult<u64> {
         let video_id = stream.video_id.clone();
         let itag = stream.itag;
         let max_chunks = if stream.content_length > 0 {
@@ -194,7 +198,11 @@ impl LoopbackProxy {
     }
 
     pub fn stream_url(&self, video_id: &str, itag: u32) -> String {
-        let ext = if matches!(itag, 251 | 774) { "" } else { ".m4a" };
+        let ext = if matches!(itag, 251 | 774) {
+            ""
+        } else {
+            ".m4a"
+        };
         format!("http://{}/stream/{video_id}{ext}?itag={itag}", self.addr)
     }
 
@@ -209,7 +217,11 @@ impl LoopbackProxy {
     }
 
     pub fn stream_url_with_gen(&self, video_id: &str, itag: u32, generation: u64) -> String {
-        let ext = if matches!(itag, 251 | 774) { "" } else { ".m4a" };
+        let ext = if matches!(itag, 251 | 774) {
+            ""
+        } else {
+            ".m4a"
+        };
         format!(
             "http://{}/stream/{video_id}{ext}?itag={itag}&gen={generation}",
             self.addr
@@ -344,7 +356,8 @@ async fn handle_artwork_request(
                 }
             }
             Ok(r) => {
-                last_status = StatusCode::from_u16(r.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+                last_status =
+                    StatusCode::from_u16(r.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
                 if r.status().is_client_error() && r.status().as_u16() != 429 {
                     if let Some(fallback) = normalized.strip_suffix("=w544-h544-l90-rj") {
                         let smaller = format!("{fallback}=w226-h226-l90-rj");
@@ -537,7 +550,12 @@ async fn handle_request(
     }
 
     let effective_end = req_end;
-    let windows = coalesce_byte_range(req_start, effective_end, total_len, MAX_COALESCED_WINDOW_CHUNKS);
+    let windows = coalesce_byte_range(
+        req_start,
+        effective_end,
+        total_len,
+        MAX_COALESCED_WINDOW_CHUNKS,
+    );
     let mut out = Vec::with_capacity((effective_end - req_start + 1) as usize);
 
     for win in windows {
@@ -563,8 +581,7 @@ async fn handle_request(
 
             let chunk_global_start = chunk_idx * CHUNK_SIZE;
             let slice_start = req_start.saturating_sub(chunk_global_start) as usize;
-            let slice_end = ((effective_end + 1)
-                .saturating_sub(chunk_global_start) as usize)
+            let slice_end = ((effective_end + 1).saturating_sub(chunk_global_start) as usize)
                 .min(chunk_bytes.len());
 
             if slice_start < slice_end {
@@ -580,12 +597,10 @@ async fn handle_request(
         .header(CONTENT_LENGTH, out.len().to_string());
 
     if is_partial || actual_end < total_len - 1 {
-        builder = builder
-            .status(StatusCode::PARTIAL_CONTENT)
-            .header(
-                CONTENT_RANGE,
-                format!("bytes {req_start}-{actual_end}/{total_len}"),
-            );
+        builder = builder.status(StatusCode::PARTIAL_CONTENT).header(
+            CONTENT_RANGE,
+            format!("bytes {req_start}-{actual_end}/{total_len}"),
+        );
     } else {
         builder = builder.status(StatusCode::OK);
     }
@@ -813,12 +828,10 @@ async fn try_serve_offline_file(
         .header("X-Resonance-Source", "offline-disk");
 
     if is_partial || actual_end < file_len - 1 {
-        builder = builder
-            .status(StatusCode::PARTIAL_CONTENT)
-            .header(
-                CONTENT_RANGE,
-                format!("bytes {req_start}-{actual_end}/{file_len}"),
-            );
+        builder = builder.status(StatusCode::PARTIAL_CONTENT).header(
+            CONTENT_RANGE,
+            format!("bytes {req_start}-{actual_end}/{file_len}"),
+        );
     } else {
         builder = builder.status(StatusCode::OK);
     }

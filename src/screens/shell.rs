@@ -8,12 +8,11 @@
 use nsh_base::{avatar, button, input, tab, tabs, theme};
 use nsh_core::prelude::*;
 
-use crate::screens::{
-    explore, home, library, lyrics, now_playing, queue, search, settings,
-};
+use crate::screens::{explore, home, library, lyrics, now_playing, queue, search, settings};
 use crate::store::{self, AppTab, DesktopSidePanel, LibraryFilter, SidebarPlaylist};
 use crate::ui::controls::{
-    artwork_box, desktop_player_bar, mini_player_bar, svg_icon_button,
+    add_to_playlist_sheet, artwork_box, desktop_player_bar, mini_player_bar, svg_icon_button,
+    track_action_sheet,
 };
 use crate::ui::icons::{IconKind, icon, liked_music_tile_svg, yt_music_icon};
 use crate::ui::tokens::{
@@ -36,7 +35,11 @@ fn nav_test_id(tab: AppTab) -> &'static str {
     }
 }
 
-fn desktop_nav_item(tab_kind: AppTab, label: &'static str, icon_kind: IconKind) -> impl IntoElement {
+fn desktop_nav_item(
+    tab_kind: AppTab,
+    label: &'static str,
+    icon_kind: IconKind,
+) -> impl IntoElement {
     let selected = move || store::active_tab() == tab_kind;
     let collapsed = store::sidebar_collapsed;
 
@@ -127,7 +130,10 @@ fn active_screen() -> impl IntoElement {
     view()
         .flex_1()
         .min_h(px(0.0))
-        .child(when(move || store::active_tab() == AppTab::Home, home::home_screen))
+        .child(when(
+            move || store::active_tab() == AppTab::Home,
+            home::home_screen,
+        ))
         .child(when(
             move || store::active_tab() == AppTab::Explore,
             explore::explore_screen,
@@ -177,15 +183,13 @@ fn status_toast() -> impl IntoElement {
                 .border_t_1()
                 .border_color(move || theme().border)
                 .child(
-                    text(move || {
-                        SharedString::from(store::status_banner().unwrap_or_default())
-                    })
-                    .test_id("global-status-toast")
-                    .flex_1()
-                    .number_of_lines(1)
-                    .text_xs()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(move || theme().accent_foreground),
+                    text(move || SharedString::from(store::status_banner().unwrap_or_default()))
+                        .test_id("global-status-toast")
+                        .flex_1()
+                        .number_of_lines(1)
+                        .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(move || theme().accent_foreground),
                 )
                 .child(
                     button()
@@ -405,7 +409,7 @@ fn desktop_sidebar() -> impl IntoElement {
         ))
         .child(desktop_nav_item(
             AppTab::ListenTogether,
-            "Listen together",
+            "Radio Mix",
             IconKind::ListenTogether,
         ))
         .child(desktop_nav_item(
@@ -413,16 +417,8 @@ fn desktop_sidebar() -> impl IntoElement {
             "Now Playing",
             IconKind::NowPlaying,
         ))
-        .child(desktop_nav_item(
-            AppTab::Lyrics,
-            "Lyrics",
-            IconKind::Lyrics,
-        ))
-        .child(desktop_nav_item(
-            AppTab::Queue,
-            "Queue",
-            IconKind::Queue,
-        ))
+        .child(desktop_nav_item(AppTab::Lyrics, "Lyrics", IconKind::Lyrics))
+        .child(desktop_nav_item(AppTab::Queue, "Queue", IconKind::Queue))
         // Divider + PLAYLISTS header
         .child(view().h(px(1.0)).w_full().bg(color_sidebar_border).my_2())
         .child(when(
@@ -437,16 +433,14 @@ fn desktop_sidebar() -> impl IntoElement {
             },
         ))
         // Scrollable playlists list
-        .child(
-            scroll().flex_1().min_h(px(0.0)).child(dynamic(move || {
-                let is_collapsed = collapsed();
-                let list = playlists_memo.get();
-                view().gap_0p5().children(
-                    list.into_iter()
-                        .map(move |pl| sidebar_playlist_row(pl, is_collapsed)),
-                )
-            })),
-        )
+        .child(scroll().flex_1().min_h(px(0.0)).child(dynamic(move || {
+            let is_collapsed = collapsed();
+            let list = playlists_memo.get();
+            view().gap_0p5().children(
+                list.into_iter()
+                    .map(move |pl| sidebar_playlist_row(pl, is_collapsed)),
+            )
+        })))
         // Pinned footer: Settings + shortcut legend
         .child(view().h(px(1.0)).w_full().bg(color_sidebar_border).my_1())
         .child(desktop_nav_item(
@@ -796,9 +790,7 @@ fn desktop_side_panel() -> impl IntoElement {
                                 text(move || {
                                     track.with(|t| {
                                         SharedString::from(
-                                            t.as_ref()
-                                                .map(|x| x.title.clone())
-                                                .unwrap_or_default(),
+                                            t.as_ref().map(|x| x.title.clone()).unwrap_or_default(),
                                         )
                                     })
                                 })
@@ -834,11 +826,7 @@ fn desktop_side_panel() -> impl IntoElement {
                 })
                 .otherwise(|| {
                     virtual_list(
-                        || {
-                            store::current_lyrics()
-                                .map(|d| d.lines.len())
-                                .unwrap_or(0)
-                        },
+                        || store::current_lyrics().map(|d| d.lines.len()).unwrap_or(0),
                         move |at| {
                             let line = computed(move || {
                                 store::current_lyrics()
@@ -1059,4 +1047,6 @@ pub fn app_shell() -> impl IntoElement {
                     .child(mobile_bottom_nav())
             }),
         )
+        .child(track_action_sheet())
+        .child(add_to_playlist_sheet())
 }

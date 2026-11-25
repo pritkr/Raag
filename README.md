@@ -2,13 +2,13 @@
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Rust Edition](https://img.shields.io/badge/Rust-2024-orange.svg)](Cargo.toml)
-[![NSH](https://img.shields.io/badge/NSH-0.6.1-informational.svg)](https://nsh.dev)
+[![NSH](https://img.shields.io/badge/NSH-0.7.0-informational.svg)](https://nsh.dev)
 
 **Resonance** is a Pure Rust YouTube Music client built on [Native Shell (`nsh.dev`)](https://nsh.dev), targeting **Desktop** (macOS, Linux, Windows) and **Android** (API 26+, `arm64-v8a`).
 
 ## Features
 
-- **Pure Rust UI & Reactivity:** Built with `nsh-core` / `nsh-base` (`=0.6.1`), adaptive Desktop sidebar & Mobile bottom-navigation layouts, Light/Dark semantic theming ([`theme.json`](theme.json)), and `>= 48dp` touch targets.
+- **Pure Rust UI & Reactivity:** Built with `nsh-core` / `nsh-base` (`=0.7.0`), adaptive Desktop sidebar & Mobile bottom-navigation layouts, Light/Dark semantic theming ([`theme.json`](theme.json)), and `>= 48dp` touch targets.
 - **In-Process Loopback HTTP Proxy (`127.0.0.1`):** Streams audio through a local Rust proxy with a 256 KB atomic chunk cache, SQLite WAL metadata cache, artwork LRU cache, monotonic request cancellation, and transparent mid-stream HTTP `403` URL re-resolution.
 - **Native QuickJS-NG EJS Solver:** Uses `rquickjs` (`0.12.0`) on a dedicated worker thread with a 10s interrupt watchdog, SHA-256 verified hot-updatable `yt-dlp-ejs` manifests ([`assets/ejs/solver_manifest.json`](assets/ejs/solver_manifest.json)), and per-player `n`-parameter memoization.
 - **Data-Driven InnerTube Client Matrix:** Configured via [`config/client_matrix.json`](config/client_matrix.json) with explicit `AuthMode` isolation (`ANDROID_VR` never receives browser cookies), `PoTokenPolicy`, decoder-driven format selection (Android Opus-first, Desktop AAC-first, iOS AAC-only), and a standalone `client_probe` binary.
@@ -45,7 +45,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design and performance budge
 ### Prerequisites
 
 - **Rust toolchain** (Edition 2024)
-- **[NSH CLI (`nsh`)](https://nsh.dev/docs/installation.md)** `0.6.1`
+- **[NSH CLI (`nsh`)](https://nsh.dev/docs/installation.md)** `0.7.0`
 - **Optional (Android):** Android SDK (API 35, `minSdk 26`), NDK 28.2, JDK 17, Gradle
 - **Optional (Web preview bridge):** [Bun](https://bun.sh)
 

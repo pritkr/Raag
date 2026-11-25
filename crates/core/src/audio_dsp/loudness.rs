@@ -50,8 +50,8 @@ impl LoudnessNormalizer {
             self.linear_gain = db_to_linear(self.preamp_db.clamp(MIN_GAIN_DB, MAX_GAIN_DB));
             return;
         };
-        let adjustment_db = (self.target_offset_db - track_db + self.preamp_db)
-            .clamp(MIN_GAIN_DB, MAX_GAIN_DB);
+        let adjustment_db =
+            (self.target_offset_db - track_db + self.preamp_db).clamp(MIN_GAIN_DB, MAX_GAIN_DB);
         self.linear_gain = db_to_linear(adjustment_db);
     }
 

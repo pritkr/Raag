@@ -43,9 +43,7 @@ fn srgb_to_linear(c: f64) -> f64 {
 }
 
 fn relative_luminance(rgb: (f64, f64, f64)) -> f64 {
-    0.2126 * srgb_to_linear(rgb.0)
-        + 0.7152 * srgb_to_linear(rgb.1)
-        + 0.0722 * srgb_to_linear(rgb.2)
+    0.2126 * srgb_to_linear(rgb.0) + 0.7152 * srgb_to_linear(rgb.1) + 0.0722 * srgb_to_linear(rgb.2)
 }
 
 fn contrast_ratio(hex_a: &str, hex_b: &str) -> f64 {
@@ -93,7 +91,9 @@ fn wcag_aa_contrast_passes_for_both_light_and_dark_themes() {
 #[test]
 fn binary_visual_rubric_touch_targets_reduced_motion_and_zero_raw_colors() {
     // Rubric #1: Android interactive touch targets >= 48dp
-    const { assert!(MOBILE_MIN_TOUCH_TARGET >= 48.0); }
+    const {
+        assert!(MOBILE_MIN_TOUCH_TARGET >= 48.0);
+    }
 
     // Reduced-motion compliance: 0ms when enabled, non-zero when disabled
     assert_eq!(motion::duration_ms(motion::FAST_MS, true).as_millis(), 0);
@@ -123,15 +123,18 @@ fn binary_visual_rubric_touch_targets_reduced_motion_and_zero_raw_colors() {
         "AndroidManifest.xml must not enable global cleartext traffic"
     );
     assert!(manifest.contains("networkSecurityConfig=\"@xml/network_security_config\""));
-    let net_cfg = fs::read_to_string(
-        root.join("platform/android/res/xml/network_security_config.xml"),
-    )
-    .unwrap();
+    let net_cfg =
+        fs::read_to_string(root.join("platform/android/res/xml/network_security_config.xml"))
+            .unwrap();
     assert!(net_cfg.contains("cleartextTrafficPermitted=\"false\""));
     assert!(net_cfg.contains("127.0.0.1"));
-    let svc = fs::read_to_string(root.join("platform/android/PlaybackForegroundService.kt")).unwrap();
+    let svc =
+        fs::read_to_string(root.join("platform/android/PlaybackForegroundService.kt")).unwrap();
     assert!(svc.contains("RECEIVER_NOT_EXPORTED"));
-    assert!(svc.contains("FOREGROUND_SERVICE_MEDIA_PLAYBACK") || manifest.contains("FOREGROUND_SERVICE_MEDIA_PLAYBACK"));
+    assert!(
+        svc.contains("FOREGROUND_SERVICE_MEDIA_PLAYBACK")
+            || manifest.contains("FOREGROUND_SERVICE_MEDIA_PLAYBACK")
+    );
 }
 
 #[test]
@@ -193,7 +196,9 @@ async fn phase4_performance_budget_cold_start_and_proxy_startup_latency() {
         ChunkCache::new(&dir.path().join("chunks"), cache.clone(), 64 * 1024 * 1024).unwrap(),
     );
     let provider = Arc::new(FixtureProvider::new("http://127.0.0.1:1/unused"));
-    let proxy = LoopbackProxy::start(provider, chunks.clone()).await.unwrap();
+    let proxy = LoopbackProxy::start(provider, chunks.clone())
+        .await
+        .unwrap();
     let cold_boot_ms = t_start.elapsed().as_secs_f64() * 1000.0;
 
     // Seed chunk 0 and measure instant first-byte loopback serve latency
@@ -218,7 +223,10 @@ async fn phase4_performance_budget_cold_start_and_proxy_startup_latency() {
     println!(
         "PHASE 4 PERF METRICS | core_cold_boot={cold_boot_ms:.2} ms | cached_first_byte={tap_to_first_byte_ms:.2} ms"
     );
-    assert!(cold_boot_ms < 250.0, "cold boot too slow: {cold_boot_ms:.2} ms");
+    assert!(
+        cold_boot_ms < 250.0,
+        "cold boot too slow: {cold_boot_ms:.2} ms"
+    );
     assert!(
         tap_to_first_byte_ms < 50.0,
         "cached first byte exceeded 50ms: {tap_to_first_byte_ms:.2} ms"

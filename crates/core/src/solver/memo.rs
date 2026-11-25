@@ -56,10 +56,10 @@ impl EjsMemoCache {
         solved_n: &str,
         ast_meta_json: Option<&str>,
     ) {
-        self.mem
-            .lock()
-            .unwrap()
-            .insert((player_hash.to_owned(), raw_n.to_owned()), solved_n.to_owned());
+        self.mem.lock().unwrap().insert(
+            (player_hash.to_owned(), raw_n.to_owned()),
+            solved_n.to_owned(),
+        );
         if let Some(db) = &self.sqlite {
             let _ = db.put_ejs_memo(player_hash, raw_n, solved_n, ast_meta_json, unix_secs());
         }

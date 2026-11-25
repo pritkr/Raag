@@ -196,7 +196,13 @@ mod tests {
         assert_eq!(raw.itag, 251);
         assert_eq!(raw.codec, AudioCodec::Opus);
         assert_eq!(raw.loudness_db, Some(-2.4));
-        let info = finalize_stream_info("vid_1", "ANDROID_VR", raw, "https://cdn.example/251".into(), 1_000);
+        let info = finalize_stream_info(
+            "vid_1",
+            "ANDROID_VR",
+            raw,
+            "https://cdn.example/251".into(),
+            1_000,
+        );
         assert_eq!(info.expires_at_unix_secs, 1_000 + 4 * 3600);
     }
 }

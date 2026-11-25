@@ -114,7 +114,10 @@ fn secret_redaction_scrubs_cookies_sapisid_auth_and_signed_urls() {
     assert!(!clean.contains("secret123"), "must redact SAPISID value");
     assert!(!clean.contains("secret456"), "must redact 3PAPISID value");
     assert!(!clean.contains("deadbeef"), "must redact SAPISIDHASH");
-    assert!(!clean.contains("TOPSECRET"), "must redact signed videoplayback query");
+    assert!(
+        !clean.contains("TOPSECRET"),
+        "must redact signed videoplayback query"
+    );
     assert!(clean.contains("[REDACTED_SENSITIVE_LINE]"));
 }
 

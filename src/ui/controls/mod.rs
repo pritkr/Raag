@@ -23,5 +23,7 @@ pub use primitives::{
     artwork_box, glass_pill_button, hero_pill_button, icon_button, mood_chip, primary_button,
     secondary_button, setting_switch, svg_icon_button,
 };
-pub use sheets::{action_sheet_row, modal_panel_container};
+pub use sheets::{
+    action_sheet_row, add_to_playlist_sheet, modal_panel_container, track_action_sheet,
+};
 pub use transport::{desktop_player_bar, mini_player_bar, seek_slider, volume_slider};

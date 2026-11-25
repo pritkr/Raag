@@ -13,7 +13,7 @@ env:
   CARGO_TERM_COLOR: always
   APP_NAME: Raag
   APP_ID: dev.resonance.ytmusic
-  NSH_VERSION: "0.6.1"
+  NSH_VERSION: "0.7.0"
 
 jobs:
   android:
@@ -46,7 +46,7 @@ jobs:
           sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;28.2.13676358"
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
 
-      - name: Install NSH CLI (0.6.1)
+      - name: Install NSH CLI (0.7.0)
         run: |
           curl -fsSL https://nsh.dev/install.sh | sh -s -- --version "$NSH_VERSION" || true
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
@@ -98,7 +98,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install NSH CLI (0.6.1)
+      - name: Install NSH CLI (0.7.0)
         run: |
           curl -fsSL https://nsh.dev/install.sh | sh -s -- --version "$NSH_VERSION" || true
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
@@ -136,7 +136,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install NSH CLI (0.6.1)
+      - name: Install NSH CLI (0.7.0)
         shell: pwsh
         run: |
           try { irm https://nsh.dev/install.ps1 | iex } catch { Write-Warning "nsh install failed; will fallback to cargo" }
@@ -200,7 +200,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install NSH CLI (0.6.1)
+      - name: Install NSH CLI (0.7.0)
         run: |
           curl -fsSL https://nsh.dev/install.sh | sh -s -- --version "$NSH_VERSION" || true
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"

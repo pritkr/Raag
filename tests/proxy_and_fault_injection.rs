@@ -345,7 +345,10 @@ async fn proxy_streams_206_recovers_403_mid_stream_and_replays_offline_under_50m
     let chunk0_path = chunks.chunk_path("vid-fault-test", 251, 0);
     std::fs::write(&chunk0_path, b"corrupted_garbage_bytes").unwrap();
     assert!(
-        chunks.read_chunk("vid-fault-test", 251, 0).unwrap().is_none(),
+        chunks
+            .read_chunk("vid-fault-test", 251, 0)
+            .unwrap()
+            .is_none(),
         "corrupt chunk must be rejected and evicted"
     );
     let r0_healed = client
@@ -367,7 +370,10 @@ async fn proxy_streams_206_recovers_403_mid_stream_and_replays_offline_under_50m
     let offline_bytes = offline_resp.bytes().await.unwrap();
     let elapsed_ms = t0.elapsed().as_secs_f64() * 1000.0;
     assert_eq!(offline_bytes.as_ref(), payload.as_slice());
-    println!("MEASURED OFFLINE CHUNK CACHE REPLAY LATENCY: {elapsed_ms:.2} ms ({} bytes)", offline_bytes.len());
+    println!(
+        "MEASURED OFFLINE CHUNK CACHE REPLAY LATENCY: {elapsed_ms:.2} ms ({} bytes)",
+        offline_bytes.len()
+    );
     assert!(
         elapsed_ms < 50.0,
         "offline replay exceeded 50ms target: {elapsed_ms:.2} ms"
@@ -398,7 +404,11 @@ async fn playback_controller_persists_queue_resume_handles_sponsorblock_and_medi
         content_length: 100_000,
         resolve_calls: AtomicUsize::new(0),
     });
-    let proxy = Arc::new(LoopbackProxy::start(provider.clone(), chunks).await.unwrap());
+    let proxy = Arc::new(
+        LoopbackProxy::start(provider.clone(), chunks)
+            .await
+            .unwrap(),
+    );
     let audio = Arc::new(MockAudioBackend::new());
     let sb = Arc::new(FixedSponsorBlock(vec![SponsorSegment {
         start_secs: 10.0,
@@ -420,7 +430,10 @@ async fn playback_controller_persists_queue_resume_handles_sponsorblock_and_medi
 
         // Empty playlist rejected cleanly
         let empty_err = ctrl.play_tracks(Vec::new(), 0).await.unwrap_err();
-        assert!(matches!(empty_err, CoreError::Playback(PlaybackError::EmptyQueue)));
+        assert!(matches!(
+            empty_err,
+            CoreError::Playback(PlaybackError::EmptyQueue)
+        ));
 
         // Start playback & verify LoopbackProxy URL wired to AudioBackend
         ctrl.play_tracks(tracks.clone(), 0).await.unwrap();
@@ -672,7 +685,11 @@ async fn artwork_cache_two_level_atomic_eviction_and_lyrics_30d_sqlite_cache() {
         .unwrap();
     assert_eq!(resp.status(), 200);
     assert_eq!(
-        resp.headers().get("content-type").unwrap().to_str().unwrap(),
+        resp.headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap(),
         "image/png"
     );
     assert_eq!(resp.bytes().await.unwrap().to_vec(), png_bytes);

@@ -376,7 +376,10 @@ impl DownloadManager {
         let join = tokio::spawn(async move {
             mgr.run_download_job(initial_record, cancel_rx).await;
             let mut jobs = mgr.active_jobs.lock().await;
-            if jobs.get(&vid_for_cleanup).is_some_and(|h| h.job_gen == job_gen) {
+            if jobs
+                .get(&vid_for_cleanup)
+                .is_some_and(|h| h.job_gen == job_gen)
+            {
                 jobs.remove(&vid_for_cleanup);
             }
         });
@@ -391,7 +394,11 @@ impl DownloadManager {
         );
     }
 
-    async fn run_download_job(&self, mut record: DownloadRecord, mut cancel_rx: watch::Receiver<u8>) {
+    async fn run_download_job(
+        &self,
+        mut record: DownloadRecord,
+        mut cancel_rx: watch::Receiver<u8>,
+    ) {
         let video_id = record.video_id.clone();
 
         // 1. Acquire concurrency permit (cancel-aware).
@@ -445,9 +452,11 @@ impl DownloadManager {
         }
 
         if let Ok(stats) = self.offline.offline_stats(self.max_offline_bytes) {
-            let projected = stats
-                .total_bytes
-                .saturating_add(stream.content_length.saturating_sub(record.bytes_downloaded));
+            let projected = stats.total_bytes.saturating_add(
+                stream
+                    .content_length
+                    .saturating_sub(record.bytes_downloaded),
+            );
             if projected > self.max_offline_bytes {
                 self.mark_failed_and_emit(
                     &video_id,
@@ -470,7 +479,8 @@ impl DownloadManager {
         self.bus.publish(AppEvent::DownloadUpdated(record.clone()));
 
         let root = self.offline.downloads_root();
-        let Ok(final_name) = final_filename(&video_id, stream.itag, stream.codec, &stream.mime_type)
+        let Ok(final_name) =
+            final_filename(&video_id, stream.itag, stream.codec, &stream.mime_type)
         else {
             self.mark_failed_and_emit(&video_id, DownloadStatus::Failed, Some("invalid video id"));
             return;
@@ -509,7 +519,10 @@ impl DownloadManager {
             part_len
         };
         let aligned_offset = (capped_len / CHUNK_SIZE) * CHUNK_SIZE;
-        if let Err(e) = file.set_len(aligned_offset).and_then(|_| file.seek(SeekFrom::Start(aligned_offset)).map(|_| ())) {
+        if let Err(e) = file
+            .set_len(aligned_offset)
+            .and_then(|_| file.seek(SeekFrom::Start(aligned_offset)).map(|_| ()))
+        {
             let msg = redact_error_message(&e.to_string());
             self.mark_failed_and_emit(&video_id, DownloadStatus::Failed, Some(&msg));
             return;
@@ -659,35 +672,37 @@ impl DownloadManager {
         // 9 & 10. Embed metadata & compute SHA-256 on blocking pool.
         let part_for_tag = part_path.clone();
         let track_for_tag = record.track.clone();
-        let tag_and_hash = tokio::task::spawn_blocking(move || -> CoreResult<(bool, String, u64)> {
-            let tagged = tagger::embed_metadata(
-                &part_for_tag,
-                &track_for_tag,
-                artwork_bytes.as_deref(),
-                lyrics_doc.as_ref(),
-            )?;
+        let tag_and_hash =
+            tokio::task::spawn_blocking(move || -> CoreResult<(bool, String, u64)> {
+                let tagged = tagger::embed_metadata(
+                    &part_for_tag,
+                    &track_for_tag,
+                    artwork_bytes.as_deref(),
+                    lyrics_doc.as_ref(),
+                )?;
 
-            let mut f = fs::File::open(&part_for_tag)
-                .map_err(|e| CoreError::OfflineStorage(OfflineStorageError::Io(e.to_string())))?;
-            let final_len = f
-                .metadata()
-                .map_err(|e| CoreError::OfflineStorage(OfflineStorageError::Io(e.to_string())))?
-                .len();
-            let mut hasher = Sha256::new();
-            let mut buf = [0u8; 64 * 1024];
-            loop {
-                let n = f
-                    .read(&mut buf)
-                    .map_err(|e| CoreError::OfflineStorage(OfflineStorageError::Io(e.to_string())))?;
-                if n == 0 {
-                    break;
+                let mut f = fs::File::open(&part_for_tag).map_err(|e| {
+                    CoreError::OfflineStorage(OfflineStorageError::Io(e.to_string()))
+                })?;
+                let final_len = f
+                    .metadata()
+                    .map_err(|e| CoreError::OfflineStorage(OfflineStorageError::Io(e.to_string())))?
+                    .len();
+                let mut hasher = Sha256::new();
+                let mut buf = [0u8; 64 * 1024];
+                loop {
+                    let n = f.read(&mut buf).map_err(|e| {
+                        CoreError::OfflineStorage(OfflineStorageError::Io(e.to_string()))
+                    })?;
+                    if n == 0 {
+                        break;
+                    }
+                    hasher.update(&buf[..n]);
                 }
-                hasher.update(&buf[..n]);
-            }
-            let sha_hex = hex::encode(hasher.finalize());
-            Ok((tagged, sha_hex, final_len))
-        })
-        .await;
+                let sha_hex = hex::encode(hasher.finalize());
+                Ok((tagged, sha_hex, final_len))
+            })
+            .await;
 
         let (tags_embedded, sha256_hex, final_len) = match tag_and_hash {
             Ok(Ok(v)) => v,
@@ -831,7 +846,10 @@ impl DownloadManager {
             }
 
             if *total_bytes == 0
-                && let Some(cr) = resp.headers().get(CONTENT_RANGE).and_then(|v| v.to_str().ok())
+                && let Some(cr) = resp
+                    .headers()
+                    .get(CONTENT_RANGE)
+                    .and_then(|v| v.to_str().ok())
                 && let Some((_, tot)) = cr.rsplit_once('/')
                 && let Ok(parsed_tot) = tot.parse::<u64>()
             {
@@ -933,7 +951,9 @@ impl DownloadManager {
 
     fn mark_failed_and_emit(&self, video_id: &str, status: DownloadStatus, err: Option<&str>) {
         let now = unix_secs();
-        let _ = self.offline.mark_download_failed(video_id, status, err, now);
+        let _ = self
+            .offline
+            .mark_download_failed(video_id, status, err, now);
         if let Ok(Some(updated)) = self.offline.get_download(video_id) {
             self.bus.publish(AppEvent::DownloadUpdated(updated));
         }

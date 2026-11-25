@@ -5,9 +5,7 @@ use nsh_base::{button, theme};
 use nsh_core::prelude::*;
 
 use crate::ui::icons::{IconKind, icon};
-use crate::ui::tokens::{
-    MOBILE_MIN_TOUCH_TARGET, pill_glass_hover, sidebar_active_surface,
-};
+use crate::ui::tokens::{MOBILE_MIN_TOUCH_TARGET, pill_glass_hover, sidebar_active_surface};
 
 /// Accessible navigation pill button (>= 48dp touch height).
 pub fn nav_pill_button(

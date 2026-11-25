@@ -19,7 +19,8 @@ pub fn fixture_tracks() -> Vec<Track> {
         Track {
             id: "fix-long-70".into(),
             // Exactly 74 chars to torture-test single-line & two-line truncation
-            title: "Midnight Reflections Across the Neon Boulevard of Eternal Synthesized Echo".into(),
+            title: "Midnight Reflections Across the Neon Boulevard of Eternal Synthesized Echo"
+                .into(),
             artists: vec![
                 ArtistRef {
                     id: Some("UC_ART_1".into()),
@@ -223,7 +224,10 @@ impl MusicProvider for FixtureProvider {
     }
 
     async fn liked_songs(&self) -> CoreResult<Vec<Track>> {
-        Ok(fixture_tracks().into_iter().filter(|t| t.is_liked).collect())
+        Ok(fixture_tracks()
+            .into_iter()
+            .filter(|t| t.is_liked)
+            .collect())
     }
 
     async fn autoplay_next(&self, _video_id: &str) -> CoreResult<Vec<Track>> {

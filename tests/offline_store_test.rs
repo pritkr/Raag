@@ -20,7 +20,9 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use http_body_util::Full;
 use hyper::body::Incoming;
-use hyper::header::{ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, RANGE, RETRY_AFTER};
+use hyper::header::{
+    ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, RANGE, RETRY_AFTER,
+};
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
@@ -62,7 +64,7 @@ fn minimal_valid_m4a_bytes() -> Vec<u8> {
         box_wrap(tag, &inner)
     }
 
-    // ftyp: M4A 
+    // ftyp: M4A
     let mut ftyp_payload = Vec::new();
     ftyp_payload.extend_from_slice(b"M4A ");
     ftyp_payload.extend_from_slice(&0u32.to_be_bytes());
@@ -113,7 +115,7 @@ fn minimal_valid_m4a_bytes() -> Vec<u8> {
     // smhd
     let smhd = full_box(b"smhd", 0, [0, 0, 0], &[0u8; 4]);
 
-    // dinf -> dref -> url 
+    // dinf -> dref -> url
     let url_box = full_box(b"url ", 0, [0, 0, 1], &[]);
     let mut dref_payload = Vec::new();
     dref_payload.extend_from_slice(&1u32.to_be_bytes());
@@ -600,14 +602,20 @@ fn sqlite_v1_to_v2_migration_preserves_existing_data_and_creates_downloads_table
     }
 
     let store = SqliteCacheStore::open(dir.path()).unwrap();
-    assert_eq!(store.get_visitor_data().unwrap().as_deref(), Some("VISITOR_V1"));
+    assert_eq!(
+        store.get_visitor_data().unwrap().as_deref(),
+        Some("VISITOR_V1")
+    );
     assert_eq!(store.load_history(10).unwrap().len(), 1);
 
     let conn = Connection::open(&db_path).unwrap();
     let version: i32 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert!(version >= 2, "expected schema migration to at least v2, got v{version}");
+    assert!(
+        version >= 2,
+        "expected schema migration to at least v2, got v{version}"
+    );
 
     let rec = DownloadRecord {
         video_id: "offline_v1".into(),
@@ -628,7 +636,12 @@ fn sqlite_v1_to_v2_migration_preserves_existing_data_and_creates_downloads_table
     };
     store.upsert_download(&rec).unwrap();
     store.clear_all_caches().unwrap();
-    assert!(store.get_completed_download("offline_v1").unwrap().is_some());
+    assert!(
+        store
+            .get_completed_download("offline_v1")
+            .unwrap()
+            .is_some()
+    );
 }
 
 #[tokio::test]
@@ -667,15 +680,7 @@ async fn atomic_part_download_commits_final_file_and_embeds_lofty_m4a_tags() {
         }),
     });
     let bus = EventBus::new(64);
-    let mgr = DownloadManager::new(
-        provider,
-        cache.clone(),
-        chunks,
-        artwork,
-        lyrics,
-        bus,
-    )
-    .unwrap();
+    let mgr = DownloadManager::new(provider, cache.clone(), chunks, artwork, lyrics, bus).unwrap();
 
     let mut track = sample_track("m4a_tag_1");
     track.artwork_url = Some(cdn.cover_url());
@@ -699,10 +704,7 @@ async fn atomic_part_download_commits_final_file_and_embeds_lofty_m4a_tags() {
     assert_eq!(tag.title().as_deref(), Some(track.title.as_str()));
     assert_eq!(tag.artist().as_deref(), Some("Test Artist"));
     assert_eq!(tag.album().as_deref(), Some("Test Album"));
-    let cover = tag
-        .pictures()
-        .first()
-        .expect("cover picture missing");
+    let cover = tag.pictures().first().expect("cover picture missing");
     assert_eq!(cover.data(), minimal_valid_png_bytes().as_slice());
     let lrc = tag.get_string(&ItemKey::Lyrics).unwrap();
     assert!(lrc.contains("[00:01.25]First synced line"));
@@ -721,7 +723,13 @@ async fn download_worker_reuses_chunk_cache_without_redundant_network_fetches() 
     // Pre-populate chunk 0 in ChunkCache
     let c0_end = CHUNK_SIZE as usize;
     chunks
-        .write_chunk("chunk_reuse_1", 140, 0, &payload[..c0_end], payload.len() as u64)
+        .write_chunk(
+            "chunk_reuse_1",
+            140,
+            0,
+            &payload[..c0_end],
+            payload.len() as u64,
+        )
         .unwrap();
 
     let provider = Arc::new(MockDownloadProvider::new(
@@ -742,7 +750,10 @@ async fn download_worker_reuses_chunk_cache_without_redundant_network_fetches() 
     wait_for_status(&cache, "chunk_reuse_1", |s| s == DownloadStatus::Completed).await;
 
     let reqs = cdn.script.requested_chunks.lock().await.clone();
-    assert!(!reqs.contains(&0), "chunk 0 should come from ChunkCache, got {reqs:?}");
+    assert!(
+        !reqs.contains(&0),
+        "chunk 0 should come from ChunkCache, got {reqs:?}"
+    );
     assert!(reqs.contains(&1));
 }
 
@@ -882,7 +893,12 @@ async fn download_cancel_and_pause_abort_cleanly_without_leaving_corrupt_final_f
 
     let rec = wait_for_status(&cache, "cancel_1", |s| s == DownloadStatus::Cancelled).await;
     assert_eq!(rec.status, DownloadStatus::Cancelled);
-    assert!(!cache.downloads_root().join("cancel_1_140.m4a.part").exists());
+    assert!(
+        !cache
+            .downloads_root()
+            .join("cancel_1_140.m4a.part")
+            .exists()
+    );
     assert!(!cache.downloads_root().join("cancel_1_140.m4a").exists());
 
     // Pause then resume
@@ -893,7 +909,12 @@ async fn download_cancel_and_pause_abort_cleanly_without_leaving_corrupt_final_f
     cdn.script.chunk_1_release.notify_waiters();
 
     wait_for_status(&cache, "pause_1", |s| s == DownloadStatus::Paused).await;
-    assert!(cache.downloads_root().join("pause_1_140.m4a.part").is_file());
+    assert!(
+        cache
+            .downloads_root()
+            .join("pause_1_140.m4a.part")
+            .is_file()
+    );
     assert!(!cache.downloads_root().join("pause_1_140.m4a").exists());
 
     cdn.script.block_chunk_1.store(false, Ordering::SeqCst);
@@ -975,7 +996,8 @@ async fn loopback_proxy_serves_completed_download_from_local_disk_with_zero_netw
 
     mgr.enqueue(sample_track("proxy_disk_1")).await.unwrap();
     let rec = wait_for_status(&cache, "proxy_disk_1", |s| s == DownloadStatus::Completed).await;
-    let disk_bytes = std::fs::read(cache.downloads_root().join(rec.relative_path.unwrap())).unwrap();
+    let disk_bytes =
+        std::fs::read(cache.downloads_root().join(rec.relative_path.unwrap())).unwrap();
 
     provider.resolve_calls.store(0, Ordering::SeqCst);
     cdn.script.total_requests.store(0, Ordering::SeqCst);
@@ -995,7 +1017,10 @@ async fn loopback_proxy_serves_completed_download_from_local_disk_with_zero_netw
             .and_then(|v| v.to_str().ok()),
         Some("offline-disk")
     );
-    assert_eq!(full_resp.bytes().await.unwrap().as_ref(), disk_bytes.as_slice());
+    assert_eq!(
+        full_resp.bytes().await.unwrap().as_ref(),
+        disk_bytes.as_slice()
+    );
 
     let range_resp = client
         .get(&url)
@@ -1112,9 +1137,12 @@ async fn playback_controller_skips_provider_resolution_for_completed_offline_tra
     )
     .with_offline_store(cache.clone());
 
-    ctrl.play_tracks(vec![sample_track("ctrl_off_1"), sample_track("ctrl_off_2")], 0)
-        .await
-        .unwrap();
+    ctrl.play_tracks(
+        vec![sample_track("ctrl_off_1"), sample_track("ctrl_off_2")],
+        0,
+    )
+    .await
+    .unwrap();
     let snap = ctrl.snapshot().await;
     assert_eq!(snap.state, PlayerState::Playing);
     assert!(snap.offline_mode);
@@ -1148,9 +1176,10 @@ async fn security_path_traversal_quota_and_secret_redaction_gates() {
     ));
 
     // LoopbackProxy rejects invalid video IDs with 400 Bad Request
-    let proxy = LoopbackProxy::start_with_offline(provider.clone(), chunks.clone(), Some(cache.clone()))
-        .await
-        .unwrap();
+    let proxy =
+        LoopbackProxy::start_with_offline(provider.clone(), chunks.clone(), Some(cache.clone()))
+            .await
+            .unwrap();
     let bad_url = format!("http://{}/stream/a%2Fb?itag=140&gen=0", proxy.addr());
     let bad_resp = reqwest::get(&bad_url).await.unwrap();
     assert_eq!(bad_resp.status(), StatusCode::BAD_REQUEST);
@@ -1193,8 +1222,17 @@ async fn security_path_traversal_quota_and_secret_redaction_gates() {
     mgr.enqueue(sample_track("redact_1")).await.unwrap();
     let fail_rec = wait_for_status(&cache, "redact_1", |s| s == DownloadStatus::Failed).await;
     let err_msg = fail_rec.error_message.unwrap_or_default();
-    for secret in ["SECRET_SIG", "SECRET_N", "SECRET_POT", "SECRET_COOKIE", "SAPISID="] {
-        assert!(!err_msg.contains(secret), "secret {secret} leaked in {err_msg}");
+    for secret in [
+        "SECRET_SIG",
+        "SECRET_N",
+        "SECRET_POT",
+        "SECRET_COOKIE",
+        "SAPISID=",
+    ] {
+        assert!(
+            !err_msg.contains(secret),
+            "secret {secret} leaked in {err_msg}"
+        );
     }
     while let Ok(ev) = rx.try_recv() {
         let dbg = format!("{ev:?}");

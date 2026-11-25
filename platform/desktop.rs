@@ -29,7 +29,7 @@ pub fn ensure_downloads_dir(data_dir: &Path) -> std::io::Result<PathBuf> {
 
 use async_trait::async_trait;
 use resonance_contract::{
-    AuthBackendStatus, AuthError, AuthSession, AuthStore, AudioBackend, CoreResult,
+    AudioBackend, AuthBackendStatus, AuthError, AuthSession, AuthStore, CoreResult,
     CredentialBackendKind, MediaCommand, NowPlayingMetadata,
 };
 use resonance_core::innertube::FileAuthStore;
@@ -155,7 +155,10 @@ impl DesktopAuthStore {
         any(target_os = "linux", target_os = "macos", target_os = "windows")
     ))]
     pub fn with_os_keyring(data_dir: &Path) -> Self {
-        Self::new(Arc::new(OsKeyringVault::new()), FileAuthStore::new(data_dir))
+        Self::new(
+            Arc::new(OsKeyringVault::new()),
+            FileAuthStore::new(data_dir),
+        )
     }
 
     fn set_backend(&self, kind: CredentialBackendKind) {
@@ -465,8 +468,8 @@ impl DesktopAudioBridge {
     ))]
     fn sync_souvlaki_playback(&self) {
         use souvlaki::{MediaPlayback, MediaPosition};
-        let has_track = self.last_meta.lock().unwrap().is_some()
-            || self.active_url.lock().unwrap().is_some();
+        let has_track =
+            self.last_meta.lock().unwrap().is_some() || self.active_url.lock().unwrap().is_some();
         let playing = self.playing.load(Ordering::SeqCst);
         let pos = self.position_ms.load(Ordering::SeqCst);
         let playback = match map_souvlaki_playback(playing, pos, has_track) {

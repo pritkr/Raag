@@ -11,10 +11,10 @@ pub mod android;
 pub mod desktop;
 pub mod nsh_audio;
 
-use std::path::Path;
-use std::sync::Arc;
 use resonance_contract::{AudioBackend, AuthBackendStatus, AuthSession, AuthStore};
 use resonance_core::innertube::auth::extract_cookie;
+use std::path::Path;
+use std::sync::Arc;
 
 /// Creates the appropriate platform `AudioBackend` for the compiled target.
 pub fn create_platform_audio_backend() -> Arc<dyn AudioBackend> {

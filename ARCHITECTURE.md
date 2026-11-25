@@ -2,8 +2,8 @@
 
 ## 1. Phase 0 Walking-Skeleton Gate & Platform Fallbacks (Zero Assumed NSH APIs)
 
-NSH's Rust path (`=0.6.1`) provides **native `nsh/audio`** (`nsh_core::prelude::audio_player`, enabled via `"audio": true` in `nsh.json`) for streaming HTTP/local audio, while leaving Android background playback, lock-screen `MediaSession`, Desktop MPRIS/SMTC media keys, `; wv`-stripped WebView cookie capture, and hardware Keystore outside `nsh/audio`'s scope. Therefore:
-- **Exact Pin:** All NSH crates are strictly pinned in `Cargo.toml` to `=0.6.1`.
+NSH's Rust path (`=0.7.0`) provides **native `nsh/audio`** (`nsh_core::prelude::audio_player`, enabled via `"audio": true` in `nsh.json`) for streaming HTTP/local audio, while leaving Android background playback, lock-screen `MediaSession`, Desktop MPRIS/SMTC media keys, `; wv`-stripped WebView cookie capture, and hardware Keystore outside `nsh/audio`'s scope. Therefore:
+- **Exact Pin:** All NSH crates are strictly pinned in `Cargo.toml` to `=0.7.0`.
 - **Native `nsh/audio` Primary Player (`platform/nsh_audio.rs`):** Mounted in `App()` on the NSH engine thread (`mount_nsh_audio_driver()`), driving `nsh_core::prelude::audio_player` directly against Resonance's `127.0.0.1` Loopback HTTP Proxy (`Open`, `Resume`, `Pause`, `Seek`, `Set`, `Close`) and pumping `AudioEvent`s (`Load`, `Playing`, `Paused`, `Buffer`, `Progress`, `Ended`) back into reactive store state.
 - **4 Mandatory Gate 0 Proofs (`crates/core/src/walking_skeleton.rs` & `tests/architecture_gates_v2.rs`):**
   1. **Locked-Screen Playback & Notification Controls:** Native `nsh/audio` (`platform/nsh_audio.rs`) + `souvlaki` MPRIS/SMTC media keys on Desktop; thin Kotlin Media3 ExoPlayer + `MediaSessionService` host shim (`platform/android/PlaybackForegroundService.kt`) with `AudioFocus`, `ACTION_AUDIO_BECOMING_NOISY` (`RECEIVER_NOT_EXPORTED`), and scoped `network_security_config.xml` (`127.0.0.1` loopback only) for Android background/lock-screen playback.

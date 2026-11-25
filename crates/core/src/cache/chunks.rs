@@ -26,8 +26,7 @@ pub struct ChunkCache {
 impl ChunkCache {
     pub fn new(data_dir: &Path, db: Arc<SqliteCacheStore>, max_bytes: u64) -> CoreResult<Self> {
         let root = data_dir.join("audio_chunks");
-        fs::create_dir_all(&root)
-            .map_err(|e| CoreError::Cache(CacheError::Io(e.to_string())))?;
+        fs::create_dir_all(&root).map_err(|e| CoreError::Cache(CacheError::Io(e.to_string())))?;
         Ok(Self {
             root,
             db,
@@ -100,14 +99,13 @@ impl ChunkCache {
         }
 
         let tmp = path.with_extension("bin.tmp");
-        let mut f = fs::File::create(&tmp)
-            .map_err(|e| CoreError::Cache(CacheError::Io(e.to_string())))?;
+        let mut f =
+            fs::File::create(&tmp).map_err(|e| CoreError::Cache(CacheError::Io(e.to_string())))?;
         f.write_all(data)
             .map_err(|e| CoreError::Cache(CacheError::Io(e.to_string())))?;
         f.sync_all()
             .map_err(|e| CoreError::Cache(CacheError::Io(e.to_string())))?;
-        fs::rename(&tmp, &path)
-            .map_err(|e| CoreError::Cache(CacheError::Io(e.to_string())))?;
+        fs::rename(&tmp, &path).map_err(|e| CoreError::Cache(CacheError::Io(e.to_string())))?;
 
         let sha_hex = hex::encode(Sha256::digest(data));
         self.db.record_chunk_meta(

@@ -19,10 +19,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use nsh_core::audio::{AudioError, AudioEvent, PlayerSettings};
 use nsh_core::prelude::{AudioPlayer, audio_available, audio_player, cleanup, effect, spawn};
-use resonance_contract::{
-    AudioBackend, CoreResult, MediaCommand, NowPlayingMetadata, PlayerState,
+use resonance_contract::{AudioBackend, CoreResult, MediaCommand, NowPlayingMetadata, PlayerState};
+use resonance_core::audio_dsp::{
+    DspConfig, DspPipeline, SpscConsumer, SpscProducer, SpscRingBuffer,
 };
-use resonance_core::audio_dsp::{DspConfig, DspPipeline, SpscConsumer, SpscProducer, SpscRingBuffer};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::store;

@@ -52,14 +52,19 @@ async fn req1_walking_skeleton_gate0_and_exact_nsh_pin_and_fallbacks() {
     // Verify documented platform fallbacks exist on disk
     let fallbacks = documented_platform_fallbacks();
     assert!(fallbacks.len() >= 4);
-    assert!(root.join("platform/android/PlaybackForegroundService.kt").exists());
+    assert!(
+        root.join("platform/android/PlaybackForegroundService.kt")
+            .exists()
+    );
     assert!(root.join("platform/android/KeystoreBridge.kt").exists());
     assert!(root.join("platform/desktop.rs").exists());
 
     // Execute all 4 Walking-Skeleton Gate 0 proofs:
     // Proof 1: Media3 Foreground Service + lock-screen notification controls present
-    let svc_kt = fs::read_to_string(root.join("platform/android/PlaybackForegroundService.kt")).unwrap();
-    let proof_1 = svc_kt.contains("MediaSessionService") && svc_kt.contains("playFromLoopbackProxy");
+    let svc_kt =
+        fs::read_to_string(root.join("platform/android/PlaybackForegroundService.kt")).unwrap();
+    let proof_1 =
+        svc_kt.contains("MediaSessionService") && svc_kt.contains("playFromLoopbackProxy");
 
     // Proof 2: WebView cookie capture strips `; wv`
     let sanitized = sanitize_android_webview_ua(
@@ -117,7 +122,10 @@ async fn req1_walking_skeleton_gate0_and_exact_nsh_pin_and_fallbacks() {
             },
         ],
     };
-    assert!(report.all_passed(), "Walking-Skeleton Gate 0 failed: {report:?}");
+    assert!(
+        report.all_passed(),
+        "Walking-Skeleton Gate 0 failed: {report:?}"
+    );
 }
 
 #[tokio::test]
@@ -150,7 +158,10 @@ async fn req2_updatable_ejs_bundle_and_per_player_id_n_param_cache() {
         .install_ejs_bundle_update(&updated_manifest, new_bundle, &sha)
         .unwrap();
     assert!(installed_path.exists());
-    assert_eq!(solver.active_ejs_manifest().unwrap().bundle_version, "0.6.0-hotfix");
+    assert_eq!(
+        solver.active_ejs_manifest().unwrap().bundle_version,
+        "0.6.0-hotfix"
+    );
 
     // Verify per-player-ID n-param caching eliminates duplicate JS evaluations!
     let r1 = solver
@@ -176,7 +187,11 @@ async fn req2_updatable_ejs_bundle_and_per_player_id_n_param_cache() {
         .await
         .unwrap();
     assert_eq!(r2.n_param.as_deref(), Some("321olleh"));
-    assert_eq!(solver.js_eval_count(), 1, "per-player-ID n-param cache must avoid re-running JS");
+    assert_eq!(
+        solver.js_eval_count(),
+        1,
+        "per-player-ID n-param cache must avoid re-running JS"
+    );
 
     // Upgrading the EJS bundle invalidates stale cached n-params
     updated_manifest.bundle_version = "0.6.1-hotfix".into();
@@ -196,7 +211,9 @@ fn req3_data_driven_client_matrix_and_po_token_policy() {
     // Free signed-in WITHOUT GVS PO token: WEB_REMIX is gated out by explicit PO-token policy
     let chain_free_no_po = matrix.playback_chain(AccountTier::FreeSignedIn, false, false, false);
     assert!(
-        !chain_free_no_po.iter().any(|c| c.kind == ClientKind::WebRemix),
+        !chain_free_no_po
+            .iter()
+            .any(|c| c.kind == ClientKind::WebRemix),
         "Free signed-in WEB_REMIX must require GVS PO token"
     );
 
@@ -229,13 +246,22 @@ fn req3_data_driven_client_matrix_and_po_token_policy() {
     assert_eq!(reloaded.source, "nightly-probe-test");
     let chain_after_churn = reloaded.playback_chain(AccountTier::Anonymous, false, false, false);
     assert!(
-        !chain_after_churn.iter().any(|c| c.kind == ClientKind::VisionOs),
+        !chain_after_churn
+            .iter()
+            .any(|c| c.kind == ClientKind::VisionOs),
         "Disabled client in remote client_matrix.json must drop out immediately"
     );
-    assert_eq!(chain_after_churn.first().map(|c| c.kind), Some(ClientKind::AndroidVr));
+    assert_eq!(
+        chain_after_churn.first().map(|c| c.kind),
+        Some(ClientKind::AndroidVr)
+    );
 
     // Confirm explicit PoTokenPolicy enum coverage
-    let web_entry = matrix.clients.iter().find(|c| c.kind == "web_remix").unwrap();
+    let web_entry = matrix
+        .clients
+        .iter()
+        .find(|c| c.kind == "web_remix")
+        .unwrap();
     assert_eq!(
         web_entry.po_token_policy,
         PoTokenPolicy::RequiredForWebFreeBypassedByPremium
@@ -257,23 +283,63 @@ fn req6_decoder_driven_audio_format_matrix_free_vs_premium() {
     });
 
     // Android (MediaCodec handles Opus): Opus 774 for Premium, Opus 251 for Free
-    let and_prem = parse_player_response_for_platform("v", "WEB_REMIX", &player_json, 1, TargetPlatform::Android, AccountTier::PremiumSignedIn).unwrap();
+    let and_prem = parse_player_response_for_platform(
+        "v",
+        "WEB_REMIX",
+        &player_json,
+        1,
+        TargetPlatform::Android,
+        AccountTier::PremiumSignedIn,
+    )
+    .unwrap();
     assert_eq!(and_prem.itag, 774);
     assert_eq!(and_prem.codec, AudioCodec::Opus);
 
-    let and_free = parse_player_response_for_platform("v", "WEB_REMIX", &player_json, 1, TargetPlatform::Android, AccountTier::FreeSignedIn).unwrap();
+    let and_free = parse_player_response_for_platform(
+        "v",
+        "WEB_REMIX",
+        &player_json,
+        1,
+        TargetPlatform::Android,
+        AccountTier::FreeSignedIn,
+    )
+    .unwrap();
     assert_eq!(and_free.itag, 251);
 
     // Desktop (Symphonia/rodio AAC-first `.m4a` path): AAC 141 for Premium, AAC 140 for Free
-    let desk_prem = parse_player_response_for_platform("v", "WEB_REMIX", &player_json, 1, TargetPlatform::Desktop, AccountTier::PremiumSignedIn).unwrap();
+    let desk_prem = parse_player_response_for_platform(
+        "v",
+        "WEB_REMIX",
+        &player_json,
+        1,
+        TargetPlatform::Desktop,
+        AccountTier::PremiumSignedIn,
+    )
+    .unwrap();
     assert_eq!(desk_prem.itag, 141);
     assert_eq!(desk_prem.codec, AudioCodec::Aac);
 
-    let desk_free = parse_player_response_for_platform("v", "WEB_REMIX", &player_json, 1, TargetPlatform::Desktop, AccountTier::FreeSignedIn).unwrap();
+    let desk_free = parse_player_response_for_platform(
+        "v",
+        "WEB_REMIX",
+        &player_json,
+        1,
+        TargetPlatform::Desktop,
+        AccountTier::FreeSignedIn,
+    )
+    .unwrap();
     assert_eq!(desk_free.itag, 140);
 
     // iOS (`AVPlayer` does NOT play WebM Opus): strictly AAC 141 / 140, never WebM Opus!
-    let ios_prem = parse_player_response_for_platform("v", "WEB_REMIX", &player_json, 1, TargetPlatform::Ios, AccountTier::PremiumSignedIn).unwrap();
+    let ios_prem = parse_player_response_for_platform(
+        "v",
+        "WEB_REMIX",
+        &player_json,
+        1,
+        TargetPlatform::Ios,
+        AccountTier::PremiumSignedIn,
+    )
+    .unwrap();
     assert_eq!(ios_prem.itag, 141);
     assert!(!TargetPlatform::Ios.supports_webm_opus());
 
@@ -287,7 +353,15 @@ fn req6_decoder_driven_audio_format_matrix_free_vs_premium() {
         }
     });
     assert!(
-        parse_player_response_for_platform("v", "WEB_REMIX", &webm_only, 1, TargetPlatform::Ios, AccountTier::FreeSignedIn).is_err()
+        parse_player_response_for_platform(
+            "v",
+            "WEB_REMIX",
+            &webm_only,
+            1,
+            TargetPlatform::Ios,
+            AccountTier::FreeSignedIn
+        )
+        .is_err()
     );
 }
 
@@ -356,15 +430,31 @@ struct NoopAudio;
 
 #[async_trait]
 impl AudioBackend for NoopAudio {
-    async fn load_and_play(&self, _url: &str, _meta: NowPlayingMetadata) -> CoreResult<()> { Ok(()) }
-    async fn play(&self) -> CoreResult<()> { Ok(()) }
-    async fn pause(&self) -> CoreResult<()> { Ok(()) }
-    async fn stop(&self) -> CoreResult<()> { Ok(()) }
-    async fn seek_ms(&self, _position_ms: u64) -> CoreResult<()> { Ok(()) }
-    async fn set_volume(&self, _volume: f32) -> CoreResult<()> { Ok(()) }
-    async fn position_ms(&self) -> u64 { 0 }
+    async fn load_and_play(&self, _url: &str, _meta: NowPlayingMetadata) -> CoreResult<()> {
+        Ok(())
+    }
+    async fn play(&self) -> CoreResult<()> {
+        Ok(())
+    }
+    async fn pause(&self) -> CoreResult<()> {
+        Ok(())
+    }
+    async fn stop(&self) -> CoreResult<()> {
+        Ok(())
+    }
+    async fn seek_ms(&self, _position_ms: u64) -> CoreResult<()> {
+        Ok(())
+    }
+    async fn set_volume(&self, _volume: f32) -> CoreResult<()> {
+        Ok(())
+    }
+    async fn position_ms(&self) -> u64 {
+        0
+    }
     async fn update_now_playing(&self, _meta: NowPlayingMetadata, _playing: bool, _pos: u64) {}
-    fn take_command_receiver(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<MediaCommand>> { None }
+    fn take_command_receiver(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<MediaCommand>> {
+        None
+    }
 }
 
 #[tokio::test]
@@ -390,7 +480,11 @@ async fn req4_and_req5_composite_provider_50pct_preresolve_and_perf_memory_budge
     let search = composite.search("test").await.unwrap();
     assert!(!search.tracks.is_empty());
 
-    let proxy = Arc::new(LoopbackProxy::start(composite.clone(), chunks.clone()).await.unwrap());
+    let proxy = Arc::new(
+        LoopbackProxy::start(composite.clone(), chunks.clone())
+            .await
+            .unwrap(),
+    );
     let lyrics = Arc::new(CascadeLyricsProvider::new(composite.clone(), cache.clone()));
     let sb = Arc::new(HttpSponsorBlockProvider::new());
     let controller = PlaybackController::new(
@@ -432,7 +526,9 @@ async fn req4_and_req5_composite_provider_50pct_preresolve_and_perf_memory_budge
 
     // Measure warm cached first-byte latency (< 1500 ms budget, actual < 20 ms)
     let payload = vec![0xABu8; 256 * 1024];
-    chunks.write_chunk(&t1_id, 140, 0, &payload, payload.len() as u64).unwrap();
+    chunks
+        .write_chunk(&t1_id, 140, 0, &payload, payload.len() as u64)
+        .unwrap();
     let t_warm = Instant::now();
     let resp = reqwest::Client::new()
         .get(proxy.stream_url(&t1_id, 140))
@@ -449,8 +545,14 @@ async fn req4_and_req5_composite_provider_50pct_preresolve_and_perf_memory_budge
     println!(
         "PERF BUDGET GATES | cold_ttfa={cold_ttfa_ms:.2} ms (<3000) | warm_ttfa={warm_ttfa_ms:.2} ms (<1500) | rss={rss_mb:.2} MB (<100)"
     );
-    assert!(cold_ttfa_ms < 3000.0, "cold TTFA exceeded 3.0s: {cold_ttfa_ms:.2} ms");
-    assert!(warm_ttfa_ms < 1500.0, "warm TTFA exceeded 1.5s: {warm_ttfa_ms:.2} ms");
+    assert!(
+        cold_ttfa_ms < 3000.0,
+        "cold TTFA exceeded 3.0s: {cold_ttfa_ms:.2} ms"
+    );
+    assert!(
+        warm_ttfa_ms < 1500.0,
+        "warm TTFA exceeded 1.5s: {warm_ttfa_ms:.2} ms"
+    );
     assert!(rss_mb < 100.0, "RSS exceeded 100 MB budget: {rss_mb:.2} MB");
 }
 

@@ -8,7 +8,7 @@
 use nsh_base::{button, theme};
 use nsh_core::element::ImageSrc;
 use nsh_core::prelude::*;
-use resonance_contract::{LyricSyncKind, RepeatMode, format_duration_ms};
+use resonance_contract::{DownloadStatus, LyricSyncKind, RepeatMode, format_duration_ms};
 
 use crate::store::{self, AppTab};
 use crate::ui::controls::{
@@ -19,7 +19,8 @@ use crate::ui::tokens::{
     MOBILE_MIN_TOUCH_TARGET, ambient_accent_color, ambient_backdrop_color, color_control,
     color_control_fg, color_liked, color_lyric_active, color_lyric_inactive, color_player_accent,
     color_sponsor_badge, cover_gradient_pair, frosted_card_surface, glass_hairline,
-    is_desktop_layout, pill_glass_hover, pill_glass_surface, radius_card, radius_panel, radius_pill,
+    is_desktop_layout, pill_glass_hover, pill_glass_surface, radius_card, radius_panel,
+    radius_pill,
 };
 
 pub fn now_playing_screen() -> impl IntoElement {
@@ -171,9 +172,11 @@ fn top_header_bar(desktop: bool) -> impl IntoElement {
                     v.child(header_pill_button("Open Lyrics", IconKind::Lyrics, || {
                         store::set_tab(AppTab::Lyrics)
                     }))
-                    .child(header_pill_button("Up Next Queue", IconKind::Queue, || {
-                        store::set_tab(AppTab::Queue)
-                    }))
+                    .child(header_pill_button(
+                        "Up Next Queue",
+                        IconKind::Queue,
+                        || store::set_tab(AppTab::Queue),
+                    ))
                 })
                 .child(svg_icon_button(
                     IconKind::MoreVertical,
@@ -351,6 +354,102 @@ fn track_info_and_actions() -> impl IntoElement {
                 .gap_1p5()
                 .child(
                     button()
+                        .test_id("now-playing-download-btn")
+                        .accessibility_label("Download Current Track")
+                        .min_w(px(MOBILE_MIN_TOUCH_TARGET))
+                        .h(px(MOBILE_MIN_TOUCH_TARGET))
+                        .px_2p5()
+                        .flex_row()
+                        .items_center()
+                        .justify_center()
+                        .gap_1()
+                        .rounded_full()
+                        .bg(pill_glass_surface)
+                        .border_1()
+                        .border_color(glass_hairline)
+                        .hover(|s| s.bg(pill_glass_hover))
+                        .active(|s| s.opacity(0.75))
+                        .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
+                        .on_press(|| {
+                            let Some(track) = store::player_snapshot().current_track else {
+                                return;
+                            };
+                            match store::download_record(&track.id) {
+                                None => store::enqueue_download(track),
+                                Some(rec) => match rec.status {
+                                    DownloadStatus::Queued
+                                    | DownloadStatus::Downloading
+                                    | DownloadStatus::Tagging => {
+                                        store::pause_download(&rec.video_id)
+                                    }
+                                    DownloadStatus::Paused => store::resume_download(&rec.video_id),
+                                    DownloadStatus::Failed | DownloadStatus::Cancelled => {
+                                        store::enqueue_download(track)
+                                    }
+                                    DownloadStatus::Completed => {
+                                        store::delete_download(&rec.video_id)
+                                    }
+                                },
+                            }
+                        })
+                        .child(reactive_icon(
+                            || {
+                                let Some(track) = store::player_snapshot().current_track else {
+                                    return IconKind::Download;
+                                };
+                                match store::download_record(&track.id).map(|r| r.status) {
+                                    Some(DownloadStatus::Completed) => IconKind::Check,
+                                    _ => IconKind::Download,
+                                }
+                            },
+                            16.0,
+                            || {
+                                let Some(track) = store::player_snapshot().current_track else {
+                                    return theme().foreground;
+                                };
+                                match store::download_record(&track.id).map(|r| r.status) {
+                                    Some(DownloadStatus::Completed) => theme().primary,
+                                    Some(DownloadStatus::Failed | DownloadStatus::Cancelled) => {
+                                        theme().destructive
+                                    }
+                                    _ => theme().foreground,
+                                }
+                            },
+                        ))
+                        .child(
+                            text(|| {
+                                let Some(track) = store::player_snapshot().current_track else {
+                                    return SharedString::from("");
+                                };
+                                match store::download_record(&track.id) {
+                                    None => SharedString::from(""),
+                                    Some(rec) => match rec.status {
+                                        DownloadStatus::Queued => SharedString::from("Queued"),
+                                        DownloadStatus::Downloading | DownloadStatus::Tagging => {
+                                            let pct = rec
+                                                .bytes_downloaded
+                                                .saturating_mul(100)
+                                                .checked_div(rec.total_bytes.max(1))
+                                                .unwrap_or(0)
+                                                .min(100);
+                                            SharedString::from(format!("{pct}%"))
+                                        }
+                                        DownloadStatus::Paused => SharedString::from("Paused"),
+                                        DownloadStatus::Completed => SharedString::from("Offline"),
+                                        DownloadStatus::Failed | DownloadStatus::Cancelled => {
+                                            SharedString::from("Retry")
+                                        }
+                                    },
+                                }
+                            })
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .tabular_nums()
+                            .text_color(|| theme().foreground),
+                        ),
+                )
+                .child(
+                    button()
                         .test_id("btn-like")
                         .accessibility_label("Toggle Like")
                         .w(px(MOBILE_MIN_TOUCH_TARGET))
@@ -409,7 +508,11 @@ fn track_info_and_actions() -> impl IntoElement {
         )
 }
 
-fn step_seek_pill(label: &'static str, min_size: f32, on_press: impl Fn() + 'static) -> impl IntoElement {
+fn step_seek_pill(
+    label: &'static str,
+    min_size: f32,
+    on_press: impl Fn() + 'static,
+) -> impl IntoElement {
     button()
         .on_press(on_press)
         .min_h(px(min_size))
@@ -457,9 +560,7 @@ fn seek_section(mobile: bool) -> impl IntoElement {
                 .gap_2()
                 .child(
                     text(move || {
-                        SharedString::from(format_duration_ms(
-                            store::player_snapshot().position_ms,
-                        ))
+                        SharedString::from(format_duration_ms(store::player_snapshot().position_ms))
                     })
                     .test_id("player-position")
                     .text_xs()
@@ -482,9 +583,7 @@ fn seek_section(mobile: bool) -> impl IntoElement {
                 )
                 .child(
                     text(move || {
-                        SharedString::from(format_duration_ms(
-                            store::player_snapshot().duration_ms,
-                        ))
+                        SharedString::from(format_duration_ms(store::player_snapshot().duration_ms))
                     })
                     .text_xs()
                     .tabular_nums()
@@ -701,24 +800,16 @@ fn volume_strip(desktop: bool) -> impl IntoElement {
                             btn_box,
                             || store::adjust_volume(-0.1),
                         ))
-                        .child(volume_step_button(
-                            "+",
-                            "Increase Volume",
-                            btn_box,
-                            || store::adjust_volume(0.1),
-                        )),
+                        .child(volume_step_button("+", "Increase Volume", btn_box, || {
+                            store::adjust_volume(0.1)
+                        })),
                 ),
         )
         .when(!desktop, |v| {
-            v.child(
-                view()
-                    .w_full()
-                    .items_center()
-                    .child(volume_slider(
-                        || f64::from(store::player_snapshot().volume),
-                        store::set_volume,
-                    )),
-            )
+            v.child(view().w_full().items_center().child(volume_slider(
+                || f64::from(store::player_snapshot().volume),
+                store::set_volume,
+            )))
         })
 }
 
@@ -768,7 +859,10 @@ fn desktop_lyrics_panel() -> impl IntoElement {
                 .child(
                     text(move || {
                         let label = match store::current_lyrics() {
-                            Some(doc) if !doc.lines.is_empty() && doc.sync_kind != LyricSyncKind::Plain => {
+                            Some(doc)
+                                if !doc.lines.is_empty()
+                                    && doc.sync_kind != LyricSyncKind::Plain =>
+                            {
                                 format!("Synced • {}", doc.provider)
                             }
                             Some(doc) if !doc.lines.is_empty() => {
@@ -787,11 +881,7 @@ fn desktop_lyrics_panel() -> impl IntoElement {
         .child(
             when(has_lyrics, || {
                 virtual_list(
-                    || {
-                        store::current_lyrics()
-                            .map(|d| d.lines.len())
-                            .unwrap_or(0)
-                    },
+                    || store::current_lyrics().map(|d| d.lines.len()).unwrap_or(0),
                     move |at| {
                         let line = computed(move || {
                             store::current_lyrics().and_then(|d| d.lines.get(at.index()).cloned())
@@ -853,17 +943,12 @@ fn desktop_lyrics_panel() -> impl IntoElement {
                 .flex_1()
             })
             .otherwise(|| {
-                view()
-                    .flex_1()
-                    .items_center()
-                    .justify_center()
-                    .p_6()
-                    .child(
-                        text("Lyrics will appear here when available for the active track.")
-                            .text_lg()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(move || theme().muted_foreground),
-                    )
+                view().flex_1().items_center().justify_center().p_6().child(
+                    text("Lyrics will appear here when available for the active track.")
+                        .text_lg()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(move || theme().muted_foreground),
+                )
             }),
         )
 }
@@ -875,7 +960,12 @@ fn desktop_now_playing() -> impl IntoElement {
         .p_5()
         .gap_5()
         .items_center()
-        .child(view().w_full().max_w(px(1080.0)).child(top_header_bar(true)))
+        .child(
+            view()
+                .w_full()
+                .max_w(px(1080.0))
+                .child(top_header_bar(true)),
+        )
         .child(
             view()
                 .w_full()
@@ -886,21 +976,18 @@ fn desktop_now_playing() -> impl IntoElement {
                 .items_start()
                 .gap_10()
                 .child(
-                    scroll()
-                        .w(px(380.0))
-                        .h_full()
-                        .child(
-                            view()
-                                .w_full()
-                                .gap_4()
-                                .items_center()
-                                .pb_4()
-                                .child(focal_artwork(340.0))
-                                .child(track_info_and_actions())
-                                .child(seek_section(false))
-                                .child(transport_bar())
-                                .child(volume_strip(true)),
-                        ),
+                    scroll().w(px(380.0)).h_full().child(
+                        view()
+                            .w_full()
+                            .gap_4()
+                            .items_center()
+                            .pb_4()
+                            .child(focal_artwork(340.0))
+                            .child(track_info_and_actions())
+                            .child(seek_section(false))
+                            .child(transport_bar())
+                            .child(volume_strip(true)),
+                    ),
                 )
                 .child(desktop_lyrics_panel()),
         )

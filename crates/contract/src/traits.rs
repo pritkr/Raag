@@ -53,7 +53,13 @@ pub trait CacheStore: Send + Sync {
     fn set_visitor_data(&self, visitor_data: &str) -> CoreResult<()>;
 
     fn get_metadata(&self, key: &str, now_unix_secs: u64) -> CoreResult<Option<(String, bool)>>;
-    fn put_metadata(&self, key: &str, value_json: &str, ttl_secs: u64, now_unix_secs: u64) -> CoreResult<()>;
+    fn put_metadata(
+        &self,
+        key: &str,
+        value_json: &str,
+        ttl_secs: u64,
+        now_unix_secs: u64,
+    ) -> CoreResult<()>;
     fn evict_metadata(&self, key: &str) -> CoreResult<()>;
 
     fn load_queue(&self) -> CoreResult<Option<QueueState>>;

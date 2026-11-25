@@ -120,8 +120,8 @@ pub fn attach_pot_param(stream_url: &str, po_token: &str) -> CoreResult<String> 
     })?;
 
     let is_https = parsed.scheme() == "https";
-    let is_loopback_http = parsed.scheme() == "http"
-        && parsed.host_str().is_some_and(bgutil::is_loopback_host);
+    let is_loopback_http =
+        parsed.scheme() == "http" && parsed.host_str().is_some_and(bgutil::is_loopback_host);
     if !is_https && !is_loopback_http {
         return Err(CoreError::PoToken(PoTokenError::MintFailed(format!(
             "refused to attach pot param to non-HTTPS non-loopback URL scheme {}",

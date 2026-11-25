@@ -29,7 +29,8 @@ impl ChainedPoTokenProvider {
             PoTokenDiagnostics {
                 status: PoTokenHealthStatus::Unconfigured,
                 active_provider: "none".to_owned(),
-                detail: "No PO token provider configured — using fallback matrix clients".to_owned(),
+                detail: "No PO token provider configured — using fallback matrix clients"
+                    .to_owned(),
                 degraded_fallback_active: true,
                 last_checked_unix_secs: unix_secs(),
             }
@@ -113,10 +114,10 @@ impl PoTokenProvider for ChainedPoTokenProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::potoken::NoopPoTokenProvider;
     use crate::potoken::attestation::{
         PlatformAttestationPoTokenProvider, QuickJsVmAttestationBridge,
     };
-    use crate::potoken::NoopPoTokenProvider;
 
     #[tokio::test]
     async fn falls_back_from_failing_primary_to_attestation_and_tracks_degraded_state() {
@@ -128,7 +129,13 @@ mod tests {
             Arc::new(PlatformAttestationPoTokenProvider::new(vm)),
         ]);
 
-        let req = PoTokenRequest::new("WEB_REMIX", PoTokenScope::Gvs, "v1", Some("vd_1".into()), false);
+        let req = PoTokenRequest::new(
+            "WEB_REMIX",
+            PoTokenScope::Gvs,
+            "v1",
+            Some("vd_1".into()),
+            false,
+        );
         let tok = chain.mint_token(&req).await.unwrap();
         assert_eq!(tok.value, "ok_gvs_vd_1");
         assert!(!chain.is_degraded());

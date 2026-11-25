@@ -34,11 +34,7 @@ fn parse_responsive_collection_item(item: &Value) -> Option<Playlist> {
     })
 }
 
-fn push_responsive_search_item(
-    item: &Value,
-    tracks: &mut Vec<Track>,
-    albums: &mut Vec<Playlist>,
-) {
+fn push_responsive_search_item(item: &Value, tracks: &mut Vec<Track>, albums: &mut Vec<Playlist>) {
     if let Some(track) = parse_music_responsive_item(item) {
         tracks.push(track);
     } else if let Some(col) = parse_responsive_collection_item(item) {
@@ -90,8 +86,15 @@ pub fn extract_search_plays(resp: &Value) -> HashMap<String, String> {
             .map(Vec::as_slice)
             .unwrap_or_default();
         for section in sections {
-            for key in ["musicShelfRenderer", "itemSectionRenderer", "musicCardShelfRenderer"] {
-                if let Some(items) = section.pointer(&format!("/{key}/contents")).and_then(Value::as_array) {
+            for key in [
+                "musicShelfRenderer",
+                "itemSectionRenderer",
+                "musicCardShelfRenderer",
+            ] {
+                if let Some(items) = section
+                    .pointer(&format!("/{key}/contents"))
+                    .and_then(Value::as_array)
+                {
                     for item in items {
                         collect_item(item);
                     }

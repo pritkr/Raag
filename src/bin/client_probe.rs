@@ -43,8 +43,7 @@ async fn main() {
         if offline_sim {
             // Deterministic simulation verifying PO-token and auth-isolation rules offline.
             entry.probe_pass_cookies_off =
-                !matches!(entry.po_token_policy, PoTokenPolicy::RequiredIosGuard)
-                    && entry.enabled;
+                !matches!(entry.po_token_policy, PoTokenPolicy::RequiredIosGuard) && entry.enabled;
             entry.probe_pass_cookies_on = cfg.allows_browser_cookies() && entry.enabled;
             if entry.enabled {
                 passed_clients += 1;

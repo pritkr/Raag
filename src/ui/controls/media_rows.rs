@@ -3,7 +3,7 @@
 
 use nsh_base::{button, theme};
 use nsh_core::prelude::*;
-use resonance_contract::{Track, format_duration_ms};
+use resonance_contract::{DownloadStatus, Track, format_duration_ms};
 
 use crate::store;
 use crate::ui::controls::primitives::artwork_box;
@@ -13,12 +13,82 @@ use crate::ui::tokens::{
     is_desktop_layout, pill_glass_hover, pill_glass_surface, radius_card,
 };
 
+/// Reactive per-track download state badge & quick action button.
+pub fn download_state_badge(track: Track) -> impl IntoElement {
+    let track_id = track.id.clone();
+    let track_id_label = track.id.clone();
+    let track_id_color = track.id.clone();
+    let track_for_press = track.clone();
+
+    button()
+        .test_id(&format!("track-download-btn-{}", track.id))
+        .accessibility_label("Download Track")
+        .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+        .min_w(px(MOBILE_MIN_TOUCH_TARGET))
+        .px_2()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .hover(|s| s.bg(pill_glass_hover))
+        .active(|s| s.opacity(0.75))
+        .on_press(move || match store::download_record(&track_id) {
+            None => store::enqueue_download(track_for_press.clone()),
+            Some(rec) => match rec.status {
+                DownloadStatus::Queued | DownloadStatus::Downloading | DownloadStatus::Tagging => {
+                    store::pause_download(&rec.video_id)
+                }
+                DownloadStatus::Paused => store::resume_download(&rec.video_id),
+                DownloadStatus::Failed | DownloadStatus::Cancelled => {
+                    store::enqueue_download(track_for_press.clone())
+                }
+                DownloadStatus::Completed => store::delete_download(&rec.video_id),
+            },
+        })
+        .child(
+            text(move || match store::download_record(&track_id_label) {
+                None => SharedString::from("Save"),
+                Some(rec) => match rec.status {
+                    DownloadStatus::Queued => SharedString::from("Queued"),
+                    DownloadStatus::Downloading | DownloadStatus::Tagging => {
+                        let pct = rec
+                            .bytes_downloaded
+                            .saturating_mul(100)
+                            .checked_div(rec.total_bytes.max(1))
+                            .unwrap_or(0)
+                            .min(100);
+                        SharedString::from(format!("{pct}%"))
+                    }
+                    DownloadStatus::Paused => SharedString::from("Paused"),
+                    DownloadStatus::Completed => SharedString::from("Offline"),
+                    DownloadStatus::Failed | DownloadStatus::Cancelled => {
+                        SharedString::from("Retry")
+                    }
+                },
+            })
+            .text_xs()
+            .font_weight(FontWeight::MEDIUM)
+            .tabular_nums()
+            .text_color(move || match store::download_record(&track_id_color) {
+                Some(rec) if rec.status == DownloadStatus::Completed => theme().primary,
+                Some(rec)
+                    if matches!(
+                        rec.status,
+                        DownloadStatus::Failed | DownloadStatus::Cancelled
+                    ) =>
+                {
+                    theme().destructive
+                }
+                _ => theme().muted_foreground,
+            }),
+        )
+}
+
 /// Compact track tile used in the 3-column "Song mixes" / "Quick Picks" grid.
 pub fn compact_mix_row(
     track: Track,
     is_current: bool,
     on_play: impl Fn() + 'static,
-    on_play_next: impl Fn() + 'static,
+    _on_play_next: impl Fn() + 'static,
 ) -> impl IntoElement {
     let title = SharedString::from(track.title.clone());
     let subtitle = SharedString::from(format!(
@@ -30,6 +100,7 @@ pub fn compact_mix_row(
     let art_url = track.artwork_url.clone();
     let track_id = track.id.clone();
     let track_for_like = track.clone();
+    let track_for_sheet = track.clone();
 
     view()
         .flex_row()
@@ -146,26 +217,26 @@ pub fn compact_mix_row(
         )
         .child(
             button()
-                .accessibility_label("Play Next")
-                .w(px(34.0))
-                .h(px(34.0))
+                .accessibility_label("Track Actions")
+                .w(px(MOBILE_MIN_TOUCH_TARGET))
+                .h(px(MOBILE_MIN_TOUCH_TARGET))
                 .items_center()
                 .justify_center()
                 .rounded_full()
                 .hover(|s| s.bg(pill_glass_hover))
-                .on_press(on_play_next)
+                .on_press(move || store::open_track_sheet(track_for_sheet.clone(), None))
                 .child(icon(IconKind::MoreVertical, 15.0, move || {
                     theme().muted_foreground
                 })),
         )
 }
 
-/// Full track list row with optional album column, heart, duration, and Play Next action.
+/// Full track list row with optional album column, heart, download badge, duration, and action sheet.
 pub fn track_row_view(
     track: Track,
     is_current: bool,
     on_play: impl Fn() + 'static,
-    on_play_next: impl Fn() + 'static,
+    _on_play_next: impl Fn() + 'static,
 ) -> impl IntoElement {
     let title = SharedString::from(track.title.clone());
     let artist = SharedString::from(track.artist_display());
@@ -178,6 +249,8 @@ pub fn track_row_view(
     let art_url = track.artwork_url.clone();
     let track_id = track.id.clone();
     let track_for_like = track.clone();
+    let track_for_badge = track.clone();
+    let track_for_sheet = track.clone();
 
     view()
         .flex_row()
@@ -297,9 +370,10 @@ pub fn track_row_view(
                     },
                 )),
         )
+        .child(download_state_badge(track_for_badge))
         .child(
             button()
-                .accessibility_label("Play Next")
+                .accessibility_label("Track Actions")
                 .w(px(MOBILE_MIN_TOUCH_TARGET))
                 .h(px(MOBILE_MIN_TOUCH_TARGET))
                 .items_center()
@@ -307,8 +381,8 @@ pub fn track_row_view(
                 .rounded_full()
                 .hover(|s| s.bg(pill_glass_hover))
                 .active(|s| s.opacity(0.7))
-                .on_press(on_play_next)
-                .child(icon(IconKind::Plus, 16.0, move || {
+                .on_press(move || store::open_track_sheet(track_for_sheet.clone(), None))
+                .child(icon(IconKind::MoreVertical, 16.0, move || {
                     theme().muted_foreground
                 })),
         )

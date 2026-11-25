@@ -6,8 +6,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use resonance::platform::desktop::{
-    DesktopAudioBridge, DesktopAuthStore, DesktopPlaybackProjection, SecretVault,
-    coalesce_seek_by, map_souvlaki_playback,
+    DesktopAudioBridge, DesktopAuthStore, DesktopPlaybackProjection, SecretVault, coalesce_seek_by,
+    map_souvlaki_playback,
 };
 use resonance_contract::{
     AudioBackend, AuthError, AuthSession, AuthStore, CredentialBackendKind, MediaCommand,
@@ -285,10 +285,7 @@ fn desktop_auth_errors_and_status_redact_cookie_secrets() {
     store.save_session(&session).unwrap();
 
     let status = store.status_for_session(Some(&session));
-    assert_eq!(
-        status.backend,
-        CredentialBackendKind::EncryptedFallbackFile
-    );
+    assert_eq!(status.backend, CredentialBackendKind::EncryptedFallbackFile);
     assert!(status.signed_in);
     assert!(status.has_sapisid);
     assert!(status.has_3papisid);

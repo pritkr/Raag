@@ -176,7 +176,11 @@ fn explore_section_header(
     page_size: usize,
     desktop: bool,
 ) -> impl IntoElement {
-    let btn_px = if desktop { 34.0 } else { MOBILE_MIN_TOUCH_TARGET };
+    let btn_px = if desktop {
+        34.0
+    } else {
+        MOBILE_MIN_TOUCH_TARGET
+    };
 
     view()
         .flex_row()
@@ -217,10 +221,7 @@ fn explore_section_header(
         )
 }
 
-fn new_releases_section(
-    current_id_memo: Memo<Option<String>>,
-    desktop: bool,
-) -> impl IntoElement {
+fn new_releases_section(current_id_memo: Memo<Option<String>>, desktop: bool) -> impl IntoElement {
     const SECTION_ID: &str = "explore-new-releases";
     const PAGE_SIZE: usize = 6;
     let home_memo = computed(store::home_sections);
@@ -251,80 +252,82 @@ fn new_releases_section(
                         .items_start()
                         .gap_4()
                         .py_1()
-                        .children(slice.into_iter().map(move |entry| match entry {
-                            ReleaseCardKind::Track(track) => {
-                                let is_active = active_id.as_deref() == Some(track.id.as_str());
-                                let t_open = track.clone();
-                                let t_next = track.clone();
-                                let mono = track.fallback_monogram();
-                                let art = track.artwork_url.clone();
-                                let title = track.title.clone();
-                                let sub = track.artist_display();
-                                media_square_card(
-                                    art,
-                                    mono,
+                        .children(slice.into_iter().map(move |entry| {
+                            match entry {
+                                ReleaseCardKind::Track(track) => {
+                                    let is_active = active_id.as_deref() == Some(track.id.as_str());
+                                    let t_open = track.clone();
+                                    let t_next = track.clone();
+                                    let mono = track.fallback_monogram();
+                                    let art = track.artwork_url.clone();
+                                    let title = track.title.clone();
+                                    let sub = track.artist_display();
+                                    media_square_card(
+                                        art,
+                                        mono,
+                                        title,
+                                        sub,
+                                        168.0,
+                                        is_active,
+                                        move || store::play_track(t_open.clone()),
+                                        Some(Box::new(move || store::play_next(t_next.clone()))),
+                                    )
+                                    .into_element()
+                                }
+                                ReleaseCardKind::Collection {
+                                    browse_id,
                                     title,
-                                    sub,
-                                    168.0,
-                                    is_active,
-                                    move || store::play_track(t_open.clone()),
-                                    Some(Box::new(move || store::play_next(t_next.clone()))),
-                                )
-                                .into_element()
-                            }
-                            ReleaseCardKind::Collection {
-                                browse_id,
-                                title,
-                                subtitle,
-                                artwork_url,
-                            } => {
-                                let mono = title
-                                    .chars()
-                                    .find(|c| c.is_alphanumeric())
-                                    .map(|c| c.to_uppercase().to_string())
-                                    .unwrap_or_else(|| "♫".into());
-                                let b_id = browse_id.clone();
-                                let b_title = title.clone();
-                                let b_sub = subtitle.clone();
-                                let b_art = artwork_url.clone();
-                                media_square_card(
+                                    subtitle,
                                     artwork_url,
-                                    mono,
+                                } => {
+                                    let mono = title
+                                        .chars()
+                                        .find(|c| c.is_alphanumeric())
+                                        .map(|c| c.to_uppercase().to_string())
+                                        .unwrap_or_else(|| "♫".into());
+                                    let b_id = browse_id.clone();
+                                    let b_title = title.clone();
+                                    let b_sub = subtitle.clone();
+                                    let b_art = artwork_url.clone();
+                                    media_square_card(
+                                        artwork_url,
+                                        mono,
+                                        title,
+                                        subtitle,
+                                        168.0,
+                                        false,
+                                        move || {
+                                            store::open_collection(
+                                                b_id.clone(),
+                                                b_title.clone(),
+                                                b_sub.clone(),
+                                                b_art.clone(),
+                                            );
+                                        },
+                                        None,
+                                    )
+                                    .into_element()
+                                }
+                                ReleaseCardKind::DiscoveryMix {
+                                    title,
+                                    subtitle,
+                                    monogram,
+                                    query,
+                                } => media_square_card(
+                                    None,
+                                    monogram,
                                     title,
                                     subtitle,
                                     168.0,
                                     false,
                                     move || {
-                                        store::open_collection(
-                                            b_id.clone(),
-                                            b_title.clone(),
-                                            b_sub.clone(),
-                                            b_art.clone(),
-                                        );
+                                        store::run_search(&query);
+                                        store::set_tab(AppTab::Search);
                                     },
                                     None,
                                 )
-                                .into_element()
+                                .into_element(),
                             }
-                            ReleaseCardKind::DiscoveryMix {
-                                title,
-                                subtitle,
-                                monogram,
-                                query,
-                            } => media_square_card(
-                                None,
-                                monogram,
-                                title,
-                                subtitle,
-                                168.0,
-                                false,
-                                move || {
-                                    store::run_search(&query);
-                                    store::set_tab(AppTab::Search);
-                                },
-                                None,
-                            )
-                            .into_element(),
                         })),
                 ),
             )
@@ -352,29 +355,24 @@ fn charts_section(desktop: bool) -> impl IntoElement {
             scroll()
                 .horizontal()
                 .w_full()
-                .child(
-                    view()
-                        .flex_row()
-                        .items_start()
-                        .gap_4()
-                        .py_1()
-                        .children(slice.into_iter().map(|chart| {
-                            media_square_card(
-                                None,
-                                chart.monogram.to_owned(),
-                                chart.title.to_owned(),
-                                chart.subtitle.to_owned(),
-                                168.0,
-                                false,
-                                move || {
-                                    store::set_search_filter(store::SearchFilter::All);
-                                    store::run_search(chart.query);
-                                    store::set_tab(AppTab::Search);
-                                },
-                                None,
-                            )
-                        })),
-                )
+                .child(view().flex_row().items_start().gap_4().py_1().children(
+                    slice.into_iter().map(|chart| {
+                        media_square_card(
+                            None,
+                            chart.monogram.to_owned(),
+                            chart.title.to_owned(),
+                            chart.subtitle.to_owned(),
+                            168.0,
+                            false,
+                            move || {
+                                store::set_search_filter(store::SearchFilter::All);
+                                store::run_search(chart.query);
+                                store::set_tab(AppTab::Search);
+                            },
+                            None,
+                        )
+                    }),
+                ))
                 .into_element()
         }))
 }
@@ -392,11 +390,10 @@ fn moods_and_genres_section(desktop: bool) -> impl IntoElement {
                 .text_color(move || theme().foreground),
         )
         .child(
-            view().gap_3().children(
-                MOODS_AND_GENRES
-                    .chunks(cols_count)
-                    .enumerate()
-                    .map(move |(row_idx, row_genres)| {
+            view()
+                .gap_3()
+                .children(MOODS_AND_GENRES.chunks(cols_count).enumerate().map(
+                    move |(row_idx, row_genres)| {
                         let mut cells = Vec::with_capacity(cols_count);
                         for (col_idx, &genre) in row_genres.iter().enumerate() {
                             let idx = row_idx * cols_count + col_idx;
@@ -442,8 +439,8 @@ fn moods_and_genres_section(desktop: bool) -> impl IntoElement {
                             cells.push(view().flex_1().min_w(px(0.0)).into_element());
                         }
                         view().flex_row().gap_3().children(cells)
-                    }),
-            ),
+                    },
+                )),
         )
 }
 
@@ -457,61 +454,53 @@ pub fn explore_screen() -> impl IntoElement {
         .bg_linear_to_b()
         .gradient_from(color_ambient_warm)
         .gradient_to(move || theme().background)
-        .child(
-            scroll().flex_1().child(dynamic(move || {
-                let desktop = desktop_memo.get();
-                let active_cat = selected_cat.get();
+        .child(scroll().flex_1().child(dynamic(move || {
+            let desktop = desktop_memo.get();
+            let active_cat = selected_cat.get();
 
-                view()
-                    .p_4()
-                    .when(desktop, |v| v.px_8().py_6())
-                    .gap_6()
-                    .child(
-                        view()
-                            .gap_3()
-                            .child(
-                                text("Explore")
-                                    .when(desktop, |t| t.text_3xl())
-                                    .when(!desktop, |t| t.text_2xl())
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(move || theme().foreground),
-                            )
-                            .child(
-                                scroll().horizontal().w_full().child(
-                                    view()
-                                        .flex_row()
-                                        .items_center()
-                                        .gap_2()
-                                        .py_1()
-                                        .children(QUICK_CATEGORIES.into_iter().map(move |cat| {
-                                            mood_chip(
-                                                cat,
-                                                move || selected_cat.get() == Some(cat),
-                                                move || {
-                                                    if selected_cat.get_untracked() == Some(cat) {
-                                                        selected_cat.set(None);
-                                                    } else {
-                                                        selected_cat.set(Some(cat));
-                                                    }
-                                                },
-                                            )
-                                        })),
-                                ),
+            view()
+                .p_4()
+                .when(desktop, |v| v.px_8().py_6())
+                .gap_6()
+                .child(
+                    view()
+                        .gap_3()
+                        .child(
+                            text("Explore")
+                                .when(desktop, |t| t.text_3xl())
+                                .when(!desktop, |t| t.text_2xl())
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(move || theme().foreground),
+                        )
+                        .child(scroll().horizontal().w_full().child(
+                            view().flex_row().items_center().gap_2().py_1().children(
+                                QUICK_CATEGORIES.into_iter().map(move |cat| {
+                                    mood_chip(
+                                        cat,
+                                        move || selected_cat.get() == Some(cat),
+                                        move || {
+                                            if selected_cat.get_untracked() == Some(cat) {
+                                                selected_cat.set(None);
+                                            } else {
+                                                selected_cat.set(Some(cat));
+                                            }
+                                        },
+                                    )
+                                }),
                             ),
-                    )
-                    .when(
-                        active_cat.is_none() || active_cat == Some("New releases"),
-                        |v| v.child(new_releases_section(current_id_memo, desktop)),
-                    )
-                    .when(
-                        active_cat.is_none() || active_cat == Some("Charts"),
-                        |v| v.child(charts_section(desktop)),
-                    )
-                    .when(
-                        active_cat.is_none() || active_cat == Some("Moods & genres"),
-                        |v| v.child(moods_and_genres_section(desktop)),
-                    )
-                    .into_element()
-            })),
-        )
+                        )),
+                )
+                .when(
+                    active_cat.is_none() || active_cat == Some("New releases"),
+                    |v| v.child(new_releases_section(current_id_memo, desktop)),
+                )
+                .when(active_cat.is_none() || active_cat == Some("Charts"), |v| {
+                    v.child(charts_section(desktop))
+                })
+                .when(
+                    active_cat.is_none() || active_cat == Some("Moods & genres"),
+                    |v| v.child(moods_and_genres_section(desktop)),
+                )
+                .into_element()
+        })))
 }

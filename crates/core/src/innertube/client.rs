@@ -13,9 +13,8 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use resonance_contract::{
     AuthError, AuthSession, AuthStore, CacheStore, CoreError, CoreResult, HomeSection,
-    LyricsDocument, MusicProvider, Playlist, PoTokenDiagnostics, PoTokenError,
-    PoTokenHealthStatus, PoTokenProvider, PoTokenRequest, PoTokenScope, ProviderError,
-    SearchResults, StreamInfo, Track,
+    LyricsDocument, MusicProvider, Playlist, PoTokenDiagnostics, PoTokenError, PoTokenHealthStatus,
+    PoTokenProvider, PoTokenRequest, PoTokenScope, ProviderError, SearchResults, StreamInfo, Track,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -137,7 +136,8 @@ impl InnerTubeClient {
             PoTokenDiagnostics {
                 status: PoTokenHealthStatus::Unconfigured,
                 active_provider: "none".to_owned(),
-                detail: "No PO token provider configured — fallback matrix clients active".to_owned(),
+                detail: "No PO token provider configured — fallback matrix clients active"
+                    .to_owned(),
                 degraded_fallback_active: true,
                 last_checked_unix_secs: unix_secs(),
             }
@@ -455,7 +455,9 @@ impl InnerTubeClient {
                     "url={}",
                     url::form_urlencoded::byte_serialize(plain.as_bytes()).collect::<String>()
                 );
-                self.solver.solve_cipher_url(&hash, &js, &cipher_like).await?
+                self.solver
+                    .solve_cipher_url(&hash, &js, &cipher_like)
+                    .await?
             } else {
                 plain
             }
@@ -487,7 +489,9 @@ impl InnerTubeClient {
             Ok(Some((raw, is_stale))) => match serde_json::from_str::<T>(&raw) {
                 Ok(val) => Some((val, is_stale)),
                 Err(e) => {
-                    log::warn!("corrupt metadata cache entry {key} ({e}); self-healing by evicting");
+                    log::warn!(
+                        "corrupt metadata cache entry {key} ({e}); self-healing by evicting"
+                    );
                     let _ = self.cache.evict_metadata(key);
                     None
                 }
@@ -498,7 +502,9 @@ impl InnerTubeClient {
 
     fn write_swr<T: serde::Serialize>(&self, key: &str, value: &T, ttl_secs: u64) {
         if let Ok(json_str) = serde_json::to_string(value) {
-            let _ = self.cache.put_metadata(key, &json_str, ttl_secs, unix_secs());
+            let _ = self
+                .cache
+                .put_metadata(key, &json_str, ttl_secs, unix_secs());
         }
     }
 
@@ -727,8 +733,10 @@ impl MusicProvider for InnerTubeClient {
                     };
                     if matches!(
                         &e,
-                        CoreError::Provider(ProviderError::Http { status: 403 | 429 | 500..=599, .. })
-                            | CoreError::Provider(ProviderError::RateLimited { .. })
+                        CoreError::Provider(ProviderError::Http {
+                            status: 403 | 429 | 500..=599,
+                            ..
+                        }) | CoreError::Provider(ProviderError::RateLimited { .. })
                             | CoreError::Provider(ProviderError::Network(_))
                     ) {
                         self.circuit_breaker

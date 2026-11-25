@@ -96,7 +96,10 @@ fn sapisidhash_and_cookie_rotation_and_webview_ua_stripping() {
     let raw_wv = "Mozilla/5.0 (Linux; Android 14; Pixel 8 Build/AP1A; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/131.0.6778.100 Mobile Safari/537.36";
     let clean = sanitize_android_webview_ua(raw_wv);
     assert!(!clean.contains("; wv"), "must strip '; wv': {clean}");
-    assert!(!clean.contains("Version/4.0"), "must strip Version/4.0: {clean}");
+    assert!(
+        !clean.contains("Version/4.0"),
+        "must strip Version/4.0: {clean}"
+    );
     assert!(clean.contains("Chrome/131.0.6778.100"));
 }
 
@@ -220,7 +223,8 @@ fn innertube_json_snapshot_parsers_cover_search_home_next_player_and_lyrics() {
             ]
         }
     });
-    let raw = parse_player_response("dQw4w9WgXcQ", "VISIONOS", &player_json, 1_700_000_000).unwrap();
+    let raw =
+        parse_player_response("dQw4w9WgXcQ", "VISIONOS", &player_json, 1_700_000_000).unwrap();
     assert!(raw.signature_cipher.is_none());
     assert!(raw.url.is_some());
     assert_eq!(raw.itag, 251);
@@ -490,7 +494,10 @@ async fn native_rquickjs_solver_solves_n_and_sig_and_caches_by_player_hash() {
         .await
         .unwrap();
     assert!(solved_url.contains("n=olleh_ok"), "solved_url={solved_url}");
-    assert!(solved_url.contains("sig=SIG_TOK"), "solved_url={solved_url}");
+    assert!(
+        solved_url.contains("sig=SIG_TOK"),
+        "solved_url={solved_url}"
+    );
 }
 
 #[test]

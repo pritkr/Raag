@@ -2,7 +2,9 @@
 //! and native `nsh/audio` driver snapshot/event handlers.
 
 use nsh_core::prelude::SharedString;
-use resonance_contract::{LyricsDocument, PlayerSnapshot, PlayerState, QueueState, RepeatMode, Track};
+use resonance_contract::{
+    LyricsDocument, PlayerSnapshot, PlayerState, QueueState, RepeatMode, Track,
+};
 use resonance_core::fixture::fixture_lyrics;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,11 +127,7 @@ impl PlaybackSlice {
         } else {
             PlayerState::Playing
         };
-        self.player.active_proxy_url = if live {
-            None
-        } else {
-            Some(proxy_url)
-        };
+        self.player.active_proxy_url = if live { None } else { Some(proxy_url) };
         self.lyrics = if live {
             None
         } else {
@@ -447,8 +445,14 @@ mod tests {
 
     #[test]
     fn shortcut_mapper_covers_media_keys() {
-        assert_eq!(map_shortcut_key("Space"), Some(ShortcutAction::TogglePlayPause));
-        assert_eq!(map_shortcut_key("ArrowRight"), Some(ShortcutAction::SeekForward10s));
+        assert_eq!(
+            map_shortcut_key("Space"),
+            Some(ShortcutAction::TogglePlayPause)
+        );
+        assert_eq!(
+            map_shortcut_key("ArrowRight"),
+            Some(ShortcutAction::SeekForward10s)
+        );
         assert_eq!(map_shortcut_key("m"), Some(ShortcutAction::ToggleMute));
         assert_eq!(map_shortcut_key("z"), None);
     }

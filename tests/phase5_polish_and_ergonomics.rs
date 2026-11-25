@@ -160,9 +160,18 @@ fn phase5_desktop_shortcuts_and_zero_raw_colors_in_controls() -> Result<(), Stri
     use resonance::store::{ShortcutAction, map_shortcut_key};
     assert_eq!(map_shortcut_key("UnknownKey"), None);
     assert_eq!(map_shortcut_key(" "), Some(ShortcutAction::TogglePlayPause));
-    assert_eq!(map_shortcut_key("Space"), Some(ShortcutAction::TogglePlayPause));
-    assert_eq!(map_shortcut_key("ArrowRight"), Some(ShortcutAction::SeekForward10s));
-    assert_eq!(map_shortcut_key("ArrowLeft"), Some(ShortcutAction::SeekBackward10s));
+    assert_eq!(
+        map_shortcut_key("Space"),
+        Some(ShortcutAction::TogglePlayPause)
+    );
+    assert_eq!(
+        map_shortcut_key("ArrowRight"),
+        Some(ShortcutAction::SeekForward10s)
+    );
+    assert_eq!(
+        map_shortcut_key("ArrowLeft"),
+        Some(ShortcutAction::SeekBackward10s)
+    );
     assert_eq!(map_shortcut_key("n"), Some(ShortcutAction::NextTrack));
     assert_eq!(map_shortcut_key("P"), Some(ShortcutAction::PreviousTrack));
     assert_eq!(map_shortcut_key("l"), Some(ShortcutAction::ToggleLike));

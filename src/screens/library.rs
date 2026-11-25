@@ -294,9 +294,118 @@ fn render_downloads_view(query: &str, sort_asc: bool, current_id: Option<String>
         });
     }
 
+    let pinned = store::pinned_collections();
     let count = records.len();
     view()
-        .gap_2()
+        .gap_3()
+        .when(!pinned.is_empty(), move |v| {
+            v.child(
+                view()
+                    .test_id("pinned-collections-section")
+                    .gap_2()
+                    .child(
+                        text("Pinned Collections")
+                            .text_lg()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(move || theme().foreground),
+                    )
+                    .children(pinned.into_iter().map(|col| {
+                        let total = col.tracks.len();
+                        let completed = col
+                            .tracks
+                            .iter()
+                            .filter(|t| {
+                                store::download_record(&t.id)
+                                    .is_some_and(|r| r.status == DownloadStatus::Completed)
+                            })
+                            .count();
+                        let col_id = col.id.clone();
+                        let col_tracks = col.tracks.clone();
+                        view()
+                            .flex_row()
+                            .items_center()
+                            .justify_between()
+                            .gap_3()
+                            .px_3()
+                            .py_2()
+                            .rounded(radius_card)
+                            .bg(pill_glass_surface)
+                            .border_1()
+                            .border_color(glass_hairline)
+                            .child(
+                                view()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .gap_0p5()
+                                    .child(
+                                        text(col.title)
+                                            .number_of_lines(1)
+                                            .text_sm()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(move || theme().foreground),
+                                    )
+                                    .child(
+                                        text(format!("{completed} / {total} tracks offline"))
+                                            .text_xs()
+                                            .tabular_nums()
+                                            .text_color(move || theme().muted_foreground),
+                                    ),
+                            )
+                            .child(
+                                view()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        button()
+                                            .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                                            .px_3()
+                                            .items_center()
+                                            .justify_center()
+                                            .rounded(radius_pill)
+                                            .bg(pill_glass_surface)
+                                            .border_1()
+                                            .border_color(glass_hairline)
+                                            .hover(|s| s.bg(pill_glass_hover))
+                                            .on_press(move || {
+                                                if let Some(first) = col_tracks.first().cloned() {
+                                                    store::play_track(first);
+                                                    for extra in col_tracks.iter().skip(1).cloned()
+                                                    {
+                                                        store::play_last(extra);
+                                                    }
+                                                }
+                                            })
+                                            .child(
+                                                text("Play Offline")
+                                                    .text_xs()
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .text_color(move || theme().foreground),
+                                            ),
+                                    )
+                                    .child(
+                                        button()
+                                            .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                                            .px_3()
+                                            .items_center()
+                                            .justify_center()
+                                            .rounded(radius_pill)
+                                            .bg(pill_glass_surface)
+                                            .border_1()
+                                            .border_color(glass_hairline)
+                                            .hover(|s| s.bg(pill_glass_hover))
+                                            .on_press(move || store::unpin_collection(&col_id))
+                                            .child(
+                                                text("Unpin")
+                                                    .text_xs()
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .text_color(move || theme().muted_foreground),
+                                            ),
+                                    ),
+                            )
+                    })),
+            )
+        })
         .child(
             view()
                 .flex_row()
@@ -338,10 +447,8 @@ fn render_downloads_view(query: &str, sort_asc: bool, current_id: Option<String>
                     rec.status,
                     DownloadStatus::Queued | DownloadStatus::Downloading
                 );
-                let is_resumable = matches!(
-                    rec.status,
-                    DownloadStatus::Paused | DownloadStatus::Failed
-                );
+                let is_resumable =
+                    matches!(rec.status, DownloadStatus::Paused | DownloadStatus::Failed);
 
                 view()
                     .gap_1()
@@ -851,9 +958,13 @@ fn action_toolbar(search_query: Signal<String>) -> impl IntoElement {
                 .child(hero_pill_button("Play", Some(IconKind::Play), || {
                     play_filtered_tracks(false);
                 }))
-                .child(glass_pill_button("Shuffle", Some(IconKind::Shuffle), || {
-                    play_filtered_tracks(true);
-                })),
+                .child(glass_pill_button(
+                    "Shuffle",
+                    Some(IconKind::Shuffle),
+                    || {
+                        play_filtered_tracks(true);
+                    },
+                )),
         )
         // Right: Sort + "Find in this list" live search input
         .child(
