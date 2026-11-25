@@ -286,12 +286,13 @@ fn init_runtime() -> Result<LiveRuntime, String> {
                     AndroidTelemetryEvent::Progress {
                         generation,
                         position_ms,
-                        ..
+                        duration_ms,
                     } => {
                         if ctrl_for_android
                             .handle_audio_telemetry(AudioTelemetry::Progress {
                                 generation,
                                 position_ms,
+                                duration_ms: (duration_ms > 0).then_some(duration_ms),
                             })
                             .await
                             .is_ok()
@@ -313,7 +314,7 @@ fn init_runtime() -> Result<LiveRuntime, String> {
                         };
                         if let Some(msg) = error_msg {
                             let _ = ctrl_for_android
-                                .handle_audio_telemetry(AudioTelemetry::Error {
+                                .handle_audio_telemetry(AudioTelemetry::Failed {
                                     generation,
                                     message: msg,
                                 })

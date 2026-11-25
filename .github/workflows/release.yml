@@ -166,6 +166,8 @@ jobs:
   ios:
     name: iOS (.app zip)
     runs-on: macos-15
+    env:
+      IPHONEOS_DEPLOYMENT_TARGET: "16.0"
     steps:
       - uses: actions/checkout@v4
 
@@ -212,6 +214,8 @@ jobs:
   windows:
     name: Windows (.exe installer)
     runs-on: windows-latest
+    env:
+      RUSTFLAGS: "-C link-arg=/FORCE:MULTIPLE"
     steps:
       - uses: actions/checkout@v4
 

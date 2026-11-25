@@ -295,8 +295,8 @@ impl JniBridgeInvoker {
             .vm
             .attach_current_thread()
             .map_err(|e| redact_secrets(&format!("JNI attach_current_thread failed: {e}")))?;
-        let cls = jni::objects::JClass::from(host.bridge_class.as_obj());
-        let result = f(&mut env, &cls);
+        let cls = <&jni::objects::JClass>::from(host.bridge_class.as_obj());
+        let result = f(&mut env, cls);
         if env.exception_check().unwrap_or(false) {
             let _ = env.exception_clear();
             return Err("Kotlin JNI call threw an exception".to_owned());
