@@ -3,8 +3,24 @@
 //! Connects Rust `AudioBackend` to the Kotlin Media3/ExoPlayer Foreground Service
 //! (`MediaSession` lock-screen/AVRCP controls, `AudioFocus`, `ACTION_AUDIO_BECOMING_NOISY`).
 
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+/// Ensures `<data_dir>/downloads` exists and contains an empty `.nomedia` sentinel
+/// so Android `MediaStore` does not index internal app downloads.
+pub fn ensure_downloads_dir(data_dir: &Path) -> std::io::Result<PathBuf> {
+    let dir = data_dir.join("downloads");
+    std::fs::create_dir_all(&dir)?;
+    let nomedia = dir.join(".nomedia");
+    if !nomedia.exists() {
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&nomedia);
+    }
+    Ok(dir)
+}
 
 use async_trait::async_trait;
 use resonance_contract::{AudioBackend, CoreResult, MediaCommand, NowPlayingMetadata};

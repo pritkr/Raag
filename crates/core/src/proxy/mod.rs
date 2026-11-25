@@ -19,11 +19,16 @@ use hyper::header::{ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, 
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
-use resonance_contract::{CoreError, CoreResult, MusicProvider, PlaybackError, StreamInfo};
+use resonance_contract::{
+    CoreError, CoreResult, DownloadStatus, MusicProvider, OfflineStore, PlaybackError, StreamInfo,
+};
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
 use crate::cache::chunks::{CHUNK_SIZE, ChunkCache};
+use crate::offline::{resolve_confined_path, validate_video_id};
+use crate::unix_secs;
 
 pub struct LoopbackProxy {
     addr: SocketAddr,
@@ -34,6 +39,7 @@ pub struct LoopbackProxy {
 struct ProxyState {
     provider: Arc<dyn MusicProvider>,
     chunks: Arc<ChunkCache>,
+    offline: Option<Arc<dyn OfflineStore>>,
     http: reqwest::Client,
     active_streams: RwLock<HashMap<String, StreamInfo>>,
     active_generation: AtomicU64,
@@ -43,6 +49,14 @@ impl LoopbackProxy {
     pub async fn start(
         provider: Arc<dyn MusicProvider>,
         chunks: Arc<ChunkCache>,
+    ) -> CoreResult<Self> {
+        Self::start_with_offline(provider, chunks, None).await
+    }
+
+    pub async fn start_with_offline(
+        provider: Arc<dyn MusicProvider>,
+        chunks: Arc<ChunkCache>,
+        offline: Option<Arc<dyn OfflineStore>>,
     ) -> CoreResult<Self> {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -59,6 +73,7 @@ impl LoopbackProxy {
         let state = Arc::new(ProxyState {
             provider,
             chunks,
+            offline,
             http,
             active_streams: RwLock::new(HashMap::new()),
             active_generation: AtomicU64::new(0),
@@ -170,7 +185,7 @@ async fn handle_request(
         return Ok(simple_response(StatusCode::NOT_FOUND, "not found"));
     };
     let video_id = video_id_raw.strip_suffix(".m4a").unwrap_or(video_id_raw);
-    if video_id.is_empty() || video_id.contains('/') {
+    if validate_video_id(video_id).is_err() {
         return Ok(simple_response(StatusCode::BAD_REQUEST, "invalid video_id"));
     }
 
@@ -203,6 +218,13 @@ async fn handle_request(
         .get(RANGE)
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned);
+
+    // Priority 0: Local-Disk Bypass for completed offline downloads (zero network I/O).
+    if let Some(resp) =
+        try_serve_offline_file(&state, video_id, range_header.as_deref(), request_gen).await
+    {
+        return Ok(resp);
+    }
 
     // Determine content length & mime type from chunk cache first (enables instant offline replay!)
     let mut stream_info = state
@@ -429,6 +451,123 @@ async fn fetch_chunk_with_403_recovery(
     Err(CoreError::Playback(PlaybackError::StreamExpired(format!(
         "failed to recover 403 for {video_id}"
     ))))
+}
+
+async fn try_serve_offline_file(
+    state: &ProxyState,
+    video_id: &str,
+    range_header: Option<&str>,
+    request_gen: Option<u64>,
+) -> Option<Response<Full<Bytes>>> {
+    let offline = state.offline.as_ref()?;
+    let rec = offline.get_completed_download(video_id).ok().flatten()?;
+    let rel_path = rec.relative_path.as_deref()?;
+
+    let Ok(path) = resolve_confined_path(&offline.downloads_root(), rel_path) else {
+        log::warn!("offline file path rejected for {video_id}");
+        let _ = offline.mark_download_failed(
+            video_id,
+            DownloadStatus::Failed,
+            Some("offline file missing or truncated"),
+            unix_secs(),
+        );
+        return None;
+    };
+
+    let Ok(mut file) = tokio::fs::File::open(&path).await else {
+        log::warn!("offline file missing on disk for {video_id}; self-healing to fallback");
+        let _ = offline.mark_download_failed(
+            video_id,
+            DownloadStatus::Failed,
+            Some("offline file missing or truncated"),
+            unix_secs(),
+        );
+        return None;
+    };
+
+    let file_len = file.metadata().await.map(|m| m.len()).unwrap_or(0);
+    if file_len == 0 || (rec.total_bytes > 0 && file_len != rec.total_bytes) {
+        log::warn!(
+            "offline file truncated for {video_id} (disk={file_len}, expected={}); self-healing",
+            rec.total_bytes
+        );
+        let _ = offline.mark_download_failed(
+            video_id,
+            DownloadStatus::Failed,
+            Some("offline file missing or truncated"),
+            unix_secs(),
+        );
+        return None;
+    }
+
+    let (req_start, req_end, is_partial) = match range_header {
+        Some(hdr) => match parse_byte_range(hdr, file_len) {
+            Some((s, e)) => (s, e, true),
+            None => {
+                return Some(
+                    Response::builder()
+                        .status(StatusCode::RANGE_NOT_SATISFIABLE)
+                        .header(CONTENT_RANGE, format!("bytes */{file_len}"))
+                        .body(Full::new(Bytes::new()))
+                        .unwrap(),
+                );
+            }
+        },
+        None => (0, file_len.saturating_sub(1), false),
+    };
+
+    if file
+        .seek(std::io::SeekFrom::Start(req_start))
+        .await
+        .is_err()
+    {
+        return None;
+    }
+
+    let total_to_read = (req_end - req_start + 1) as usize;
+    let mut out = Vec::with_capacity(total_to_read);
+    let mut buf = vec![0u8; CHUNK_SIZE as usize];
+    let mut remaining = total_to_read;
+
+    while remaining > 0 {
+        if let Some(g) = request_gen
+            && g < state.active_generation.load(Ordering::SeqCst)
+        {
+            return Some(simple_response(
+                StatusCode::CONFLICT,
+                "cancelled: superseded track generation",
+            ));
+        }
+        let to_read = remaining.min(buf.len());
+        match file.read(&mut buf[..to_read]).await {
+            Ok(0) => break,
+            Ok(n) => {
+                out.extend_from_slice(&buf[..n]);
+                remaining -= n;
+            }
+            Err(_) => return None,
+        }
+    }
+
+    let actual_end = req_start + (out.len() as u64).saturating_sub(1);
+    let mut builder = Response::builder()
+        .header(CONTENT_TYPE, rec.mime_type)
+        .header(ACCEPT_RANGES, "bytes")
+        .header(CONTENT_LENGTH, out.len().to_string())
+        .header("X-Resonance-Source", "offline-disk");
+
+    if is_partial || actual_end < file_len - 1 {
+        builder = builder
+            .status(StatusCode::PARTIAL_CONTENT)
+            .header(
+                CONTENT_RANGE,
+                format!("bytes {req_start}-{actual_end}/{file_len}"),
+            );
+    } else {
+        builder = builder.status(StatusCode::OK);
+    }
+
+    Some(builder.body(Full::new(Bytes::from(out))).unwrap())
 }
 
 fn simple_response(status: StatusCode, msg: &str) -> Response<Full<Bytes>> {

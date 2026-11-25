@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use nsh_core::prelude::*;
 use resonance_contract::{
-    CacheStats, HistoryEntry, HomeSection, LyricsDocument, PlayerSnapshot, PlayerState, Playlist,
-    QueueState, RepeatMode, Track,
+    AudioCodec, CacheStats, DownloadRecord, DownloadStatus, HistoryEntry, HomeSection,
+    LyricsDocument, PlayerSnapshot, PlayerState, Playlist, QueueState, RepeatMode, Track, TrackId,
 };
 use resonance_core::fixture::{fixture_home_sections, fixture_lyrics, fixture_tracks};
 use resonance_core::palette::{AmbientPalette, palette_for_track};
@@ -191,6 +191,7 @@ pub struct AppState {
     pub collection_search_query: String,
     pub collection_sort_asc: bool,
     pub cache_stats: CacheStats,
+    pub downloads: HashMap<TrackId, DownloadRecord>,
     pub signed_in: bool,
     pub account_name: Option<String>,
     pub status_banner: Option<String>,
@@ -298,6 +299,7 @@ impl Default for AppState {
                 metadata_entries: if fixture { 24 } else { 0 },
                 max_audio_bytes: 1024 * 1024 * 1024,
             },
+            downloads: HashMap::new(),
             signed_in: false,
             account_name: None,
             status_banner: None,
@@ -416,6 +418,24 @@ fn apply_live_update(update: LiveUpdate) {
                     None
                 };
                 s.status_banner = Some(banner);
+            });
+        }
+        LiveUpdate::DownloadsLoaded(records) => {
+            state_signal().update(|s| {
+                s.downloads = records
+                    .into_iter()
+                    .map(|r| (r.video_id.clone(), r))
+                    .collect();
+            });
+        }
+        LiveUpdate::DownloadUpdated(record) => {
+            state_signal().update(|s| {
+                s.downloads.insert(record.video_id.clone(), record);
+            });
+        }
+        LiveUpdate::DownloadRemoved(video_id) => {
+            state_signal().update(|s| {
+                s.downloads.remove(&video_id);
             });
         }
         LiveUpdate::StatusBanner(msg) => {
@@ -1201,6 +1221,78 @@ pub fn clear_caches() {
     if !is_fixture_mode() {
         live_engine::dispatch_clear_caches();
     }
+}
+
+pub fn downloads_list() -> Vec<DownloadRecord> {
+    let mut list: Vec<DownloadRecord> = state_signal().with(|s| s.downloads.values().cloned().collect());
+    list.sort_by(|a, b| {
+        let ta = a.completed_at_unix_secs.unwrap_or(a.updated_at_unix_secs);
+        let tb = b.completed_at_unix_secs.unwrap_or(b.updated_at_unix_secs);
+        tb.cmp(&ta).then_with(|| a.track.title.cmp(&b.track.title))
+    });
+    list
+}
+
+pub fn download_record(video_id: &str) -> Option<DownloadRecord> {
+    state_signal().with(|s| s.downloads.get(video_id).cloned())
+}
+
+pub fn enqueue_download(track: Track) {
+    if is_fixture_mode() {
+        let vid = track.id.clone();
+        state_signal().update(|s| {
+            s.downloads.insert(
+                vid.clone(),
+                DownloadRecord {
+                    video_id: vid,
+                    track,
+                    status: DownloadStatus::Completed,
+                    itag: 140,
+                    codec: AudioCodec::Aac,
+                    mime_type: "audio/mp4".to_owned(),
+                    relative_path: None,
+                    bytes_downloaded: 512 * 1024,
+                    total_bytes: 512 * 1024,
+                    sha256_hex: None,
+                    tags_embedded: true,
+                    created_at_unix_secs: 0,
+                    updated_at_unix_secs: 0,
+                    completed_at_unix_secs: Some(0),
+                    error_message: None,
+                },
+            );
+        });
+        return;
+    }
+    live_engine::dispatch_enqueue_download(track);
+}
+
+pub fn pause_download(video_id: &str) {
+    if !is_fixture_mode() {
+        live_engine::dispatch_pause_download(video_id.to_owned());
+    }
+}
+
+pub fn resume_download(video_id: &str) {
+    if !is_fixture_mode() {
+        live_engine::dispatch_resume_download(video_id.to_owned());
+    }
+}
+
+pub fn cancel_download(video_id: &str) {
+    if !is_fixture_mode() {
+        live_engine::dispatch_cancel_download(video_id.to_owned());
+    }
+}
+
+pub fn delete_download(video_id: &str) {
+    if is_fixture_mode() {
+        state_signal().update(|s| {
+            s.downloads.remove(video_id);
+        });
+        return;
+    }
+    live_engine::dispatch_delete_download(video_id.to_owned());
 }
 
 pub fn sign_in_with_cookies(cookie_input: &str) {

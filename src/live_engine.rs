@@ -11,12 +11,17 @@ use std::sync::{Arc, OnceLock};
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use resonance_contract::{
-    AuthSession, CacheStats, CacheStore, HomeSection, LyricsDocument, LyricsProvider,
-    MusicProvider, PlayerSnapshot, Playlist, SearchResults, Track,
+    AppEvent, AuthSession, CacheStats, CacheStore, DownloadRecord, HomeSection, LyricsDocument,
+    LyricsProvider, MusicProvider, OfflineStore, PlayerSnapshot, Playlist, SearchResults, Track,
+    TrackId,
 };
-use resonance_core::cache::{ChunkCache, DEFAULT_MAX_AUDIO_CACHE_BYTES, SqliteCacheStore};
+use resonance_core::cache::{
+    ArtworkCache, ChunkCache, DEFAULT_ARTWORK_DISK_CAP, DEFAULT_MAX_AUDIO_CACHE_BYTES,
+    SqliteCacheStore,
+};
 use resonance_core::innertube::{FileAuthStore, InnerTubeClient};
 use resonance_core::lyrics::CascadeLyricsProvider;
+use resonance_core::offline::DownloadManager;
 use resonance_core::playback::PlaybackController;
 use resonance_core::proxy::LoopbackProxy;
 use resonance_core::solver::QuickJsSolver;
@@ -47,6 +52,9 @@ pub enum LiveUpdate {
         signed_in: bool,
         banner: String,
     },
+    DownloadsLoaded(Vec<DownloadRecord>),
+    DownloadUpdated(DownloadRecord),
+    DownloadRemoved(TrackId),
     StatusBanner(String),
 }
 
@@ -56,6 +64,7 @@ struct LiveRuntime {
     cache: Arc<SqliteCacheStore>,
     chunks: Arc<ChunkCache>,
     lyrics: Arc<CascadeLyricsProvider>,
+    downloads: Arc<DownloadManager>,
     controller: Arc<PlaybackController>,
     tx: Sender<LiveUpdate>,
     rx: Receiver<LiveUpdate>,
@@ -79,10 +88,13 @@ fn init_runtime() -> Result<LiveRuntime, String> {
 
     let dir = data_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create data dir: {e}"))?;
+    #[cfg(target_os = "android")]
+    let _ = crate::platform::android::ensure_downloads_dir(&dir);
+    #[cfg(not(target_os = "android"))]
+    let _ = crate::platform::desktop::ensure_downloads_dir(&dir);
 
     let cache = Arc::new(
-        SqliteCacheStore::open(&dir.join("resonance.db"))
-            .map_err(|e| format!("SQLite cache open failed: {e}"))?,
+        SqliteCacheStore::open(&dir).map_err(|e| format!("SQLite cache open failed: {e}"))?,
     );
     let chunks = Arc::new(
         ChunkCache::new(
@@ -92,6 +104,10 @@ fn init_runtime() -> Result<LiveRuntime, String> {
         )
         .map_err(|e| format!("ChunkCache init failed: {e}"))?,
     );
+    let artwork = Arc::new(
+        ArtworkCache::new(&dir, 128, DEFAULT_ARTWORK_DISK_CAP)
+            .map_err(|e| format!("ArtworkCache init failed: {e}"))?,
+    );
     let auth = Arc::new(FileAuthStore::new(&dir));
     let solver = Arc::new(QuickJsSolver::new(&dir));
     let provider = Arc::new(
@@ -99,7 +115,7 @@ fn init_runtime() -> Result<LiveRuntime, String> {
             .map_err(|e| format!("InnerTubeClient init failed: {e}"))?,
     );
     let proxy = rt.block_on(async {
-        LoopbackProxy::start(provider.clone(), chunks.clone())
+        LoopbackProxy::start_with_offline(provider.clone(), chunks.clone(), Some(cache.clone()))
             .await
             .map(Arc::new)
             .map_err(|e| format!("LoopbackProxy start failed: {e}"))
@@ -109,19 +125,52 @@ fn init_runtime() -> Result<LiveRuntime, String> {
     let lyrics = Arc::new(CascadeLyricsProvider::new(provider.clone(), cache.clone()));
     let sponsorblock = Arc::new(HttpSponsorBlockProvider::new());
     let bus = resonance_contract::EventBus::new(128);
-    let controller = Arc::new(PlaybackController::new(
-        provider.clone(),
-        audio,
-        cache.clone(),
-        proxy.clone(),
-        lyrics.clone(),
-        sponsorblock,
-        bus,
-    ));
+    let downloads = Arc::new(
+        DownloadManager::new(
+            provider.clone(),
+            cache.clone(),
+            chunks.clone(),
+            artwork,
+            lyrics.clone(),
+            bus.clone(),
+        )
+        .map_err(|e| format!("DownloadManager init failed: {e}"))?,
+    );
+    let _ = rt.block_on(downloads.startup_recovery());
+
+    let controller = Arc::new(
+        PlaybackController::new(
+            provider.clone(),
+            audio,
+            cache.clone(),
+            proxy.clone(),
+            lyrics.clone(),
+            sponsorblock,
+            bus.clone(),
+        )
+        .with_offline_store(cache.clone()),
+    );
 
     let (tx, rx) = unbounded();
+    let mut bus_rx = bus.subscribe();
+    let tx_events = tx.clone();
+    rt.spawn(async move {
+        while let Ok(ev) = bus_rx.recv().await {
+            match ev {
+                AppEvent::DownloadUpdated(rec) => {
+                    let _ = tx_events.send(LiveUpdate::DownloadUpdated(rec));
+                }
+                AppEvent::DownloadRemoved { video_id } => {
+                    let _ = tx_events.send(LiveUpdate::DownloadRemoved(video_id));
+                }
+                _ => {}
+            }
+        }
+    });
+
     let initial_snap = rt.block_on(controller.snapshot());
     let stats = cache.stats().unwrap_or_default();
+    let initial_downloads = cache.list_downloads().unwrap_or_default();
     let signed_in = provider.current_session().is_some();
     let proxy_base = format!("http://{}", proxy.addr());
     crate::store::set_proxy_base_url(&proxy_base);
@@ -131,6 +180,7 @@ fn init_runtime() -> Result<LiveRuntime, String> {
         cache_stats: stats,
         signed_in,
     });
+    let _ = tx.send(LiveUpdate::DownloadsLoaded(initial_downloads));
 
     Ok(LiveRuntime {
         rt,
@@ -138,6 +188,7 @@ fn init_runtime() -> Result<LiveRuntime, String> {
         cache,
         chunks,
         lyrics,
+        downloads,
         controller,
         tx,
         rx,
@@ -263,5 +314,51 @@ pub fn dispatch_clear_caches() {
         let _ = cache.clear_all_caches();
         let stats = cache.stats().unwrap_or_default();
         let _ = tx.send(LiveUpdate::CacheStatsUpdated(stats));
+    });
+}
+
+pub fn dispatch_enqueue_download(track: Track) {
+    let Some(rt) = runtime() else { return };
+    let downloads = rt.downloads.clone();
+    let tx = rt.tx.clone();
+    rt.rt.spawn(async move {
+        if let Err(e) = downloads.enqueue(track).await {
+            let _ = tx.send(LiveUpdate::StatusBanner(format!("Download failed: {e}")));
+        }
+    });
+}
+
+pub fn dispatch_pause_download(video_id: TrackId) {
+    let Some(rt) = runtime() else { return };
+    let downloads = rt.downloads.clone();
+    rt.rt.spawn(async move {
+        let _ = downloads.pause(&video_id).await;
+    });
+}
+
+pub fn dispatch_resume_download(video_id: TrackId) {
+    let Some(rt) = runtime() else { return };
+    let downloads = rt.downloads.clone();
+    let tx = rt.tx.clone();
+    rt.rt.spawn(async move {
+        if let Err(e) = downloads.resume(&video_id).await {
+            let _ = tx.send(LiveUpdate::StatusBanner(format!("Resume failed: {e}")));
+        }
+    });
+}
+
+pub fn dispatch_cancel_download(video_id: TrackId) {
+    let Some(rt) = runtime() else { return };
+    let downloads = rt.downloads.clone();
+    rt.rt.spawn(async move {
+        let _ = downloads.cancel(&video_id).await;
+    });
+}
+
+pub fn dispatch_delete_download(video_id: TrackId) {
+    let Some(rt) = runtime() else { return };
+    let downloads = rt.downloads.clone();
+    rt.rt.spawn(async move {
+        let _ = downloads.delete(&video_id).await;
     });
 }

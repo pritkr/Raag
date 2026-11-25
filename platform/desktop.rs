@@ -3,8 +3,21 @@
 //! - Publishes Now Playing metadata & receives media keys via `souvlaki`
 //!   (Linux MPRIS, Windows SMTC, macOS `MPNowPlayingInfoCenter`) when enabled.
 
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+/// Ensures `<data_dir>/downloads` exists with restrictive `0o700` permissions on Unix.
+pub fn ensure_downloads_dir(data_dir: &Path) -> std::io::Result<PathBuf> {
+    let dir = data_dir.join("downloads");
+    std::fs::create_dir_all(&dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+    }
+    Ok(dir)
+}
 
 use async_trait::async_trait;
 use resonance_contract::{AudioBackend, CoreResult, MediaCommand, NowPlayingMetadata};
