@@ -7,8 +7,10 @@
 //! - [`manifest`]: [`EjsBundleManifest`] with `pinned_version` + SHA-256 verification.
 //! - [`memo`]: [`EjsMemoCache`] persisting solved `n`-params & AST metadata in SQLite.
 
+pub mod ejs_protocol;
 pub mod manifest;
 pub mod memo;
+pub mod player_fetch;
 pub mod runtime;
 
 use std::fs;
@@ -21,8 +23,10 @@ use resonance_contract::{CoreError, CoreResult};
 
 use crate::cache::SqliteCacheStore;
 
+pub use ejs_protocol::{EjsChallengeRequest, EjsChallengeResponse, EjsInput, EjsOutput};
 pub use manifest::{EMBEDDED_EJS_MANIFEST_JSON, EjsBundleManifest};
 pub use memo::EjsMemoCache;
+pub use player_fetch::{FetchedPlayerScript, PlayerScriptFetcher, evict_old_bundles_in_dir};
 #[cfg(not(target_os = "android"))]
 pub use runtime::DenoSidecarRuntime;
 pub use runtime::{JsRuntime, QuickJsRuntime};
@@ -153,7 +157,7 @@ impl QuickJsSolver {
         Ok(target)
     }
 
-    /// Evaluates `solveN(n)` and/or `solveSig(sig)` via the configured [`JsRuntime`],
+    /// Evaluates `solveN(n)` and/or `solveSig(sig)` (or `jsc(input)` if present) via the configured [`JsRuntime`],
     /// short-circuiting from L1 RAM / L2 SQLite memoization whenever possible.
     pub async fn solve(&self, input: ChallengeInput) -> CoreResult<SolvedChallenge> {
         let cached_n = input
@@ -194,6 +198,95 @@ impl QuickJsSolver {
             res.n_param = cached_n;
         }
         Ok(res)
+    }
+
+    /// Two-stage `yt-dlp/ejs` `jsc(input)` solver:
+    /// 1. Checks L1/L2 `EjsMemoCache` for `n_param` (< 1 ms on hit).
+    /// 2. On cold `player_hash` (no `pre_<hash>.js`), runs `EjsInput::Player { output_preprocessed: true }`
+    ///    with temporary 160 MB heap, persists `pre_<hash>.js` atomically, and evicts older bundles (> 3).
+    /// 3. On warm `player_hash` (`pre_<hash>.js` exists), runs `EjsInput::Preprocessed` at 64 MB heap.
+    pub async fn solve_with_player(
+        &self,
+        player_hash: &str,
+        base_js: &str,
+        ejs_bundle_js: &str,
+        n_param: Option<String>,
+        sig_param: Option<String>,
+    ) -> CoreResult<SolvedChallenge> {
+        let cached_n = n_param
+            .as_deref()
+            .and_then(|n| self.cached_n_param(player_hash, n));
+
+        if cached_n.is_some() && sig_param.is_none() {
+            return Ok(SolvedChallenge {
+                n_param: cached_n,
+                sig_param: None,
+            });
+        }
+
+        let need_n_eval = if cached_n.is_some() {
+            None
+        } else {
+            n_param.clone()
+        };
+
+        let bundle_sha = EjsBundleManifest::sha256_of(ejs_bundle_js);
+        let bundle_key = format!("jsc_{}", &bundle_sha[..16]);
+        let bundle_path = self.cache_solver_script(&bundle_key, ejs_bundle_js)?;
+
+        let pre_path = self.cache_dir.join(format!("pre_{player_hash}.js"));
+        let (requests, _, _) =
+            EjsInput::build_requests(need_n_eval.as_deref(), sig_param.as_deref());
+
+        self.js_eval_count.fetch_add(1, Ordering::SeqCst);
+
+        let output = if pre_path.exists() {
+            let pre_js = fs::read_to_string(&pre_path)
+                .map_err(|e| CoreError::Solver(format!("read preprocessed player: {e}")))?;
+            let input_json = serde_json::to_string(&EjsInput::Preprocessed {
+                preprocessed_player: &pre_js,
+                requests,
+            })
+            .map_err(|e| CoreError::Solver(format!("serialize preprocessed input: {e}")))?;
+            self.runtime
+                .eval_jsc(&bundle_path, &input_json, false)
+                .await?
+        } else {
+            let input_json = serde_json::to_string(&EjsInput::Player {
+                player: base_js,
+                requests,
+                output_preprocessed: true,
+            })
+            .map_err(|e| CoreError::Solver(format!("serialize player input: {e}")))?;
+            self.runtime
+                .eval_jsc(&bundle_path, &input_json, true)
+                .await?
+        };
+
+        let (mut solved, maybe_pre) =
+            output.into_solved(need_n_eval.as_deref(), sig_param.as_deref())?;
+
+        if let Some(preprocessed) = maybe_pre
+            && !pre_path.exists()
+        {
+            player_fetch::write_atomic(&pre_path, preprocessed.as_bytes())?;
+            evict_old_bundles_in_dir(&self.cache_dir, 3);
+        }
+
+        if let (Some(raw_n), Some(solved_n)) = (need_n_eval, solved.n_param.clone()) {
+            let meta = serde_json::json!({
+                "runtime": self.runtime.runtime_name(),
+                "protocol": "jsc",
+                "bundle_sha": &bundle_sha[..16],
+            })
+            .to_string();
+            self.memo
+                .insert(player_hash, &raw_n, &solved_n, Some(&meta));
+        } else if solved.n_param.is_none() {
+            solved.n_param = cached_n;
+        }
+
+        Ok(solved)
     }
 
     /// Extracts a `signatureCipher` query string and applies solved `sig` + `n` parameters.

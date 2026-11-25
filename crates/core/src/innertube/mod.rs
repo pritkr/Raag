@@ -1,6 +1,7 @@
 //! InnerTube protocol implementation with data-driven client matrix, decoder-driven format
 //! selection, PO-token policy, and strict per-client auth isolation.
 
+pub mod account_probe;
 pub mod auth;
 pub mod client;
 pub mod clients;
@@ -9,7 +10,9 @@ pub mod matrix;
 pub mod mutations;
 pub mod parser;
 pub mod provider_adapter;
+pub mod remote_config;
 
+pub use account_probe::AccountProfileProbe;
 pub use auth::{FileAuthStore, compute_sapisidhash, sanitize_android_webview_ua};
 pub use client::InnerTubeClient;
 pub use clients::{AuthMode, ClientConfig, ClientKind};
@@ -17,3 +20,4 @@ pub use formats::TargetPlatform;
 pub use matrix::{AccountTier, ClientMatrix, ClientMatrixEntry, PoTokenPolicy};
 pub use mutations::MutationWorker;
 pub use provider_adapter::{BrowseDelegate, CompositeMusicProvider, PlaybackResolver};
+pub use remote_config::RemoteConfigSyncService;
