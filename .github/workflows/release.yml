@@ -111,13 +111,38 @@ jobs:
           else
             echo "nsh CLI unavailable; falling back to cargo build --release + Gradle"
             cargo build --release --target aarch64-linux-android
+            mkdir -p platform/android/src/main/jniLibs/arm64-v8a target/android-jniLibs/arm64-v8a
+            cp target/aarch64-linux-android/release/libresonance.so platform/android/src/main/jniLibs/arm64-v8a/libresonance.so
+            cp target/aarch64-linux-android/release/libresonance.so target/android-jniLibs/arm64-v8a/libresonance.so
             chmod +x platform/android/gradlew 2>/dev/null || true
             if [ -x platform/android/gradlew ]; then
               platform/android/gradlew -p platform/android assembleRelease
             else
               gradle -p platform/android assembleRelease
             fi
-            find platform/android -name "*.apk" -exec cp {} dist-android/ \;
+            UNSIGNED_APK=$(find platform/android/build/outputs/apk -type f \( -name "*-release-unsigned.apk" -o -name "*-release.apk" \) | head -n1)
+            if [ -z "$UNSIGNED_APK" ]; then
+              echo "No release APK produced by Gradle" >&2
+              find platform/android/build/outputs -maxdepth 4 || true
+              exit 1
+            fi
+            if [ -n "$ANDROID_KEYSTORE_BASE64" ] && [ -n "$ANDROID_KEY_ALIAS" ] && [ -n "$NSH_KEYSTORE_PASSWORD" ]; then
+              echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > release.keystore
+              ALIGNED_APK="dist-android/${{ env.APP_NAME }}-android-release-aligned.apk"
+              SIGNED_APK="dist-android/${{ env.APP_NAME }}-android-release-signed.apk"
+              zipalign -f -p 4 "$UNSIGNED_APK" "$ALIGNED_APK"
+              apksigner sign \
+                --ks release.keystore \
+                --ks-key-alias "$ANDROID_KEY_ALIAS" \
+                --ks-pass "env:NSH_KEYSTORE_PASSWORD" \
+                --out "$SIGNED_APK" \
+                "$ALIGNED_APK"
+              apksigner verify --print-certs "$SIGNED_APK"
+              rm -f release.keystore "$ALIGNED_APK"
+            else
+              echo "Keystore secrets not configured; keeping unsigned APK"
+              cp "$UNSIGNED_APK" dist-android/
+            fi
           fi
 
       - uses: actions/upload-artifact@v4
@@ -150,10 +175,44 @@ jobs:
             hdiutil create -volname "${{ env.APP_NAME }}" -srcfolder "$APP_BUNDLE" -ov -format UDZO "dist-macos/${{ env.APP_NAME }}-macos.dmg"
           else
             cargo build --release --bin resonance --features desktop-native
-            mkdir -p "dist-macos/${{ env.APP_NAME }}"
-            cp target/release/resonance "dist-macos/${{ env.APP_NAME }}/"
-            ditto -c -k --sequesterRsrc --keepParent "dist-macos/${{ env.APP_NAME }}" "dist-macos/${{ env.APP_NAME }}-macos.zip"
-            hdiutil create -volname "${{ env.APP_NAME }}" -srcfolder "dist-macos/${{ env.APP_NAME }}" -ov -format UDZO "dist-macos/${{ env.APP_NAME }}-macos.dmg"
+            APP_BUNDLE="dist-macos/dmg-staging/${{ env.APP_NAME }}.app"
+            mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
+            cp target/release/resonance "$APP_BUNDLE/Contents/MacOS/${{ env.APP_NAME }}"
+            chmod +x "$APP_BUNDLE/Contents/MacOS/${{ env.APP_NAME }}"
+            cp assets/icon.png "$APP_BUNDLE/Contents/Resources/icon.png"
+            sed 's/^            //' <<'PLIST' > "$APP_BUNDLE/Contents/Info.plist"
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0">
+            <dict>
+              <key>CFBundleName</key>
+              <string>Raag</string>
+              <key>CFBundleDisplayName</key>
+              <string>Raag</string>
+              <key>CFBundleIdentifier</key>
+              <string>dev.resonance.ytmusic</string>
+              <key>CFBundleVersion</key>
+              <string>1</string>
+              <key>CFBundleShortVersionString</key>
+              <string>0.1.0</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleExecutable</key>
+              <string>Raag</string>
+              <key>CFBundleIconFile</key>
+              <string>icon.png</string>
+              <key>LSMinimumSystemVersion</key>
+              <string>13.0</string>
+              <key>NSHighResolutionCapable</key>
+              <true/>
+              <key>NSSupportsAutomaticGraphicsSwitching</key>
+              <true/>
+            </dict>
+            </plist>
+            PLIST
+            ditto -c -k --sequesterRsrc --keepParent "$APP_BUNDLE" "dist-macos/${{ env.APP_NAME }}-macos.zip"
+            hdiutil create -volname "${{ env.APP_NAME }}" -srcfolder "dist-macos/dmg-staging" -ov -format UDZO "dist-macos/${{ env.APP_NAME }}-macos.dmg"
+            rm -rf "dist-macos/dmg-staging"
           fi
 
       - uses: actions/upload-artifact@v4
@@ -201,11 +260,51 @@ jobs:
             fi
           else
             cargo build --release --target aarch64-apple-ios
-            mkdir -p "dist-ios/${{ env.APP_NAME }}.app"
-            cp target/aarch64-apple-ios/release/resonance "dist-ios/${{ env.APP_NAME }}.app/${{ env.APP_NAME }}" 2>/dev/null || true
-            cp target/aarch64-apple-ios/release/libresonance.dylib "dist-ios/${{ env.APP_NAME }}.app/" 2>/dev/null || true
-            cp assets/icon.png "dist-ios/${{ env.APP_NAME }}.app/" 2>/dev/null || true
-            ditto -c -k --sequesterRsrc --keepParent "dist-ios/${{ env.APP_NAME }}.app" "dist-ios/raag-ios.zip"
+            APP_BUNDLE="dist-ios/${{ env.APP_NAME }}.app"
+            mkdir -p "$APP_BUNDLE"
+            cp target/aarch64-apple-ios/release/resonance "$APP_BUNDLE/${{ env.APP_NAME }}" 2>/dev/null || true
+            cp target/aarch64-apple-ios/release/libresonance.dylib "$APP_BUNDLE/" 2>/dev/null || true
+            cp assets/icon.png "$APP_BUNDLE/" 2>/dev/null || true
+            sed 's/^            //' <<'PLIST' > "$APP_BUNDLE/Info.plist"
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0">
+            <dict>
+              <key>CFBundleName</key>
+              <string>Raag</string>
+              <key>CFBundleDisplayName</key>
+              <string>Raag</string>
+              <key>CFBundleIdentifier</key>
+              <string>dev.resonance.ytmusic</string>
+              <key>CFBundleVersion</key>
+              <string>1</string>
+              <key>CFBundleShortVersionString</key>
+              <string>0.1.0</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleExecutable</key>
+              <string>Raag</string>
+              <key>CFBundleIconFile</key>
+              <string>icon.png</string>
+              <key>LSRequiresIPhoneOS</key>
+              <true/>
+              <key>MinimumOSVersion</key>
+              <string>16.0</string>
+              <key>UIDeviceFamily</key>
+              <array>
+                <integer>1</integer>
+                <integer>2</integer>
+              </array>
+              <key>UISupportedInterfaceOrientations</key>
+              <array>
+                <string>UIInterfaceOrientationPortrait</string>
+                <string>UIInterfaceOrientationLandscapeLeft</string>
+                <string>UIInterfaceOrientationLandscapeRight</string>
+              </array>
+            </dict>
+            </plist>
+            PLIST
+            ditto -c -k --sequesterRsrc --keepParent "$APP_BUNDLE" "dist-ios/raag-ios.zip"
           fi
 
       - uses: actions/upload-artifact@v4
