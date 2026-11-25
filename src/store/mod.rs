@@ -264,7 +264,12 @@ fn apply_live_update(update: LiveUpdate) {
         LiveUpdate::PlaybackUpdated(mut snapshot) => {
             state_signal().update(|s| {
                 snapshot.volume = s.playback.player.volume;
-                if snapshot.queue.items.len() <= 1 && s.playback.player.queue.items.len() > 1 {
+                let same_track = snapshot.current_track.as_ref().map(|t| &t.id)
+                    == s.playback.player.current_track.as_ref().map(|t| &t.id);
+                if same_track
+                    && snapshot.queue.items.len() <= 1
+                    && s.playback.player.queue.items.len() > 1
+                {
                     snapshot.queue.items = s.playback.player.queue.items.clone();
                     snapshot.queue.current_index = snapshot
                         .current_track
@@ -375,10 +380,13 @@ fn apply_live_update(update: LiveUpdate) {
             });
         }
         LiveUpdate::SettingsLoaded(settings) => {
+            let mut loaded_theme = ThemeChoice::System;
             state_signal().update(|s| {
                 s.settings
                     .apply_persisted_settings(&settings, &mut s.playback);
+                loaded_theme = s.settings.theme_choice;
             });
+            apply_nsh_appearance(loaded_theme);
         }
         LiveUpdate::StatusBanner(msg) => {
             state_signal().update(|s| s.ui.set_status_banner(msg));
@@ -500,12 +508,24 @@ fn persist_settings_now(immediate: bool) {
     live_engine::dispatch_persist_settings(persisted, immediate);
 }
 
+fn apply_nsh_appearance(choice: ThemeChoice) {
+    let appearance = match choice {
+        ThemeChoice::System => nsh_core::prelude::Appearance::System,
+        ThemeChoice::Light => nsh_core::prelude::Appearance::Light,
+        ThemeChoice::Dark => nsh_core::prelude::Appearance::Dark,
+    };
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        nsh_core::prelude::set_color_scheme(appearance);
+    }));
+}
+
 pub fn theme_choice() -> ThemeChoice {
     state_signal().with(|s| s.settings.theme_choice)
 }
 
 pub fn set_theme_choice(choice: ThemeChoice) {
     state_signal().update(|s| s.settings.theme_choice = choice);
+    apply_nsh_appearance(choice);
     persist_settings_now(true);
 }
 
@@ -668,6 +688,26 @@ pub fn load_mood_playlists(mood: &str, params: &str) {
 
 pub fn search_suggestions() -> Vec<String> {
     state_signal().with(|s| s.catalog.search_suggestions.clone())
+}
+
+pub fn search_history() -> Vec<String> {
+    state_signal().with(|s| s.catalog.search_history.clone())
+}
+
+pub fn record_search_history(query: &str) {
+    state_signal().update(|s| s.catalog.record_search_history(query));
+}
+
+pub fn remove_search_history_item(query: &str) {
+    state_signal().update(|s| s.catalog.remove_search_history_item(query));
+}
+
+pub fn clear_search_history() {
+    state_signal().update(|s| s.catalog.clear_search_history());
+}
+
+pub fn home_mood_chips() -> Vec<resonance_contract::MoodCategory> {
+    state_signal().with(|s| s.catalog.home_mood_chips.clone())
 }
 
 pub fn search_continuation() -> Option<String> {
@@ -1236,62 +1276,96 @@ pub fn play_track(track: Track) {
     }
 }
 
-pub fn play_all_shuffled(mut tracks: Vec<Track>) {
+pub fn play_all_shuffled(tracks: Vec<Track>) {
     if tracks.is_empty() {
         return;
     }
-    tracks.reverse();
-    let first = tracks.remove(0);
+    let live = !is_fixture_mode();
+    let tracks_for_live = tracks.clone();
+    let mut dispatch = None;
     state_signal().update(|s| {
-        s.playback.player.queue.shuffle = true;
+        dispatch = s.playback.play_all_shuffled(tracks, live, proxy_stream_url);
+        if let Some(ref t) = dispatch {
+            s.library.record_play(t.clone());
+        }
     });
-    play_track(first);
-    for extra in tracks {
-        play_last(extra);
+    if live && dispatch.is_some() {
+        live_engine::dispatch_play_queue(tracks_for_live, 0, true);
     }
 }
 
 pub fn play_next(track: Track) {
+    let track_for_live = track.clone();
     state_signal().update(|s| {
         let banner = s.playback.play_next(track);
         s.ui.set_status_banner(banner);
     });
+    if !is_fixture_mode() {
+        live_engine::dispatch_play_next(track_for_live);
+    }
 }
 
 pub fn play_last(track: Track) {
+    let track_for_live = track.clone();
     state_signal().update(|s| {
         let banner = s.playback.play_last(track);
         s.ui.set_status_banner(banner);
     });
+    if !is_fixture_mode() {
+        live_engine::dispatch_play_last(track_for_live);
+    }
 }
 
 pub fn toggle_play_pause() {
-    state_signal().update(|s| s.playback.toggle_play_pause());
+    let mut has_track = false;
+    state_signal().update(|s| {
+        has_track = s.playback.player.current_track.is_some();
+        s.playback.toggle_play_pause();
+    });
+    if !is_fixture_mode() && has_track {
+        live_engine::dispatch_toggle_play_pause();
+    }
 }
 
 pub fn seek_ms(target_ms: u64) {
-    state_signal().update(|s| s.playback.seek_ms(target_ms));
+    let mut clamped = target_ms;
+    let mut has_track = false;
+    state_signal().update(|s| {
+        has_track = s.playback.player.current_track.is_some();
+        s.playback.seek_ms(target_ms);
+        clamped = s.playback.player.position_ms;
+    });
+    if !is_fixture_mode() && has_track {
+        live_engine::dispatch_seek_ms(clamped);
+    }
 }
 
 pub fn next_track() {
     let live = !is_fixture_mode();
-    let mut dispatch = None;
     state_signal().update(|s| {
-        dispatch = s.playback.next_track(live, proxy_stream_url);
+        let _ = s.playback.next_track(live, proxy_stream_url);
     });
-    if live && let Some(t) = dispatch {
-        live_engine::dispatch_play_track(t);
+    if live {
+        live_engine::dispatch_next_track();
     }
 }
 
 pub fn previous_track() {
     let live = !is_fixture_mode();
     let mut dispatch = None;
+    let mut sought_to_start = false;
     state_signal().update(|s| {
+        let was_past_threshold = s.playback.player.position_ms > 3_000;
         dispatch = s.playback.previous_track(live, proxy_stream_url);
+        sought_to_start =
+            dispatch.is_none() && was_past_threshold && s.playback.player.current_track.is_some();
     });
-    if live && let Some(t) = dispatch {
-        live_engine::dispatch_play_track(t);
+    if live {
+        if dispatch.is_some() {
+            live_engine::dispatch_previous_track();
+        } else if sought_to_start {
+            live_engine::dispatch_seek_ms(0);
+        }
     }
 }
 
@@ -1301,33 +1375,59 @@ pub fn jump_queue(index: usize) {
     state_signal().update(|s| {
         dispatch = s.playback.jump_queue(index, live, proxy_stream_url);
     });
-    if live && let Some(t) = dispatch {
-        live_engine::dispatch_play_track(t);
+    if live && dispatch.is_some() {
+        live_engine::dispatch_jump_queue(index);
     }
 }
 
 pub fn move_queue_item(from: usize, to: usize) {
     state_signal().update(|s| s.playback.move_queue_item(from, to));
+    if !is_fixture_mode() {
+        live_engine::dispatch_move_queue_item(from, to);
+    }
 }
 
 pub fn remove_queue_item(index: usize) {
     state_signal().update(|s| s.playback.remove_queue_item(index, proxy_stream_url));
+    if !is_fixture_mode() {
+        live_engine::dispatch_remove_queue_item(index);
+    }
 }
 
 pub fn clear_queue() {
     state_signal().update(|s| s.playback.clear_queue());
+    if !is_fixture_mode() {
+        live_engine::dispatch_clear_queue();
+    }
 }
 
 pub fn toggle_shuffle() {
-    state_signal().update(|s| s.playback.toggle_shuffle());
+    let mut enabled = false;
+    state_signal().update(|s| {
+        s.playback.toggle_shuffle();
+        enabled = s.playback.player.queue.shuffle;
+    });
+    if !is_fixture_mode() {
+        live_engine::dispatch_set_shuffle(enabled);
+    }
 }
 
 pub fn cycle_repeat() {
-    state_signal().update(|s| s.playback.cycle_repeat());
+    let mut mode = resonance_contract::RepeatMode::None;
+    state_signal().update(|s| {
+        s.playback.cycle_repeat();
+        mode = s.playback.player.queue.repeat;
+    });
+    if !is_fixture_mode() {
+        live_engine::dispatch_set_repeat_mode(mode);
+    }
 }
 
 pub fn set_autoplay_radio(enabled: bool) {
     state_signal().update(|s| s.playback.player.queue.autoplay_radio = enabled);
+    if !is_fixture_mode() {
+        live_engine::dispatch_set_autoplay_radio(enabled);
+    }
 }
 
 pub fn set_sponsorblock_enabled(enabled: bool) {
@@ -1348,17 +1448,38 @@ pub fn set_offline_mode(enabled: bool) {
 }
 
 pub fn set_volume(volume: f32) {
-    state_signal().update(|s| s.playback.set_volume(volume));
+    let mut applied = volume;
+    state_signal().update(|s| {
+        s.playback.set_volume(volume);
+        applied = s.playback.player.volume;
+    });
+    if !is_fixture_mode() {
+        live_engine::dispatch_set_volume(applied);
+    }
     persist_settings_now(false);
 }
 
 pub fn adjust_volume(delta: f32) {
-    state_signal().update(|s| s.playback.adjust_volume(delta));
+    let mut applied = 1.0_f32;
+    state_signal().update(|s| {
+        s.playback.adjust_volume(delta);
+        applied = s.playback.player.volume;
+    });
+    if !is_fixture_mode() {
+        live_engine::dispatch_set_volume(applied);
+    }
     persist_settings_now(false);
 }
 
 pub fn toggle_mute() {
-    state_signal().update(|s| s.playback.toggle_mute());
+    let mut applied = 1.0_f32;
+    state_signal().update(|s| {
+        s.playback.toggle_mute();
+        applied = s.playback.player.volume;
+    });
+    if !is_fixture_mode() {
+        live_engine::dispatch_set_volume(applied);
+    }
 }
 
 pub fn total_queue_duration_ms() -> u64 {

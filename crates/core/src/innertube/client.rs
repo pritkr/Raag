@@ -683,6 +683,14 @@ impl MusicProvider for InnerTubeClient {
             "videoId": video_id,
             "playlistId": format!("RDAMVM{video_id}"),
             "isAudioOnly": true,
+            "enablePersistentPlaylistPanel": true,
+            "tunerSettingValue": "AUTOMIX_SETTING_NORMAL",
+            "watchEndpointMusicSupportedConfigs": {
+                "watchEndpointMusicConfig": {
+                    "hasPersistentPlaylistPanel": true,
+                    "musicVideoType": "MUSIC_VIDEO_TYPE_ATV"
+                }
+            }
         });
         let resp = self.post_innertube(&WEB_REMIX, "next", payload).await?;
         parse_next_queue_response(&resp)

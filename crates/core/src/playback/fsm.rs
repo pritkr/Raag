@@ -5,8 +5,8 @@
 use std::collections::HashSet;
 
 use resonance_contract::{
-    CoreError, CoreResult, PlaybackError, PlayerSnapshot, PlayerState, QueueState, SponsorSegment,
-    Track,
+    CodecBadgeInfo, CoreError, CoreResult, PlaybackError, PlayerSnapshot, PlayerState, QueueState,
+    SleepTimerState, SponsorSegment, Track,
 };
 
 use crate::playback::prefetch::{PrefetchDecision, PrefetchThresholds};
@@ -19,6 +19,21 @@ pub struct TickEffects {
     pub sponsor_skip: Option<(String, u64)>,
     /// Prefetch / Proxy v2 dual-buffer warm-up instruction.
     pub prefetch: PrefetchDecision,
+    /// True when playback position has exceeded track duration past the safety grace window
+    /// without an `Ended` event from the native audio backend.
+    pub reached_end: bool,
+}
+
+/// Pure effects emitted by [`PlaybackFsm::tick_sleep_timer`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SleepTimerTickEffect {
+    None,
+    /// Smoothly attenuate volume during the final 3 seconds before auto-pause.
+    AttenuateVolume(f32),
+    /// Countdown reached zero: pause playback and restore `restore_volume`.
+    ExpireAndPause {
+        restore_volume: f32,
+    },
 }
 
 /// Pure deterministic state machine behind [`super::PlaybackController`].
@@ -32,6 +47,14 @@ pub struct PlaybackFsm {
     pub preresolved_video_id: Option<String>,
     /// Video ID already pre-warmed in Proxy v2 `next_track` slot at >= 75% progress.
     pub prewarmed_video_id: Option<String>,
+    /// Active sleep timer state (countdown or end-of-current-track).
+    pub sleep_timer: SleepTimerState,
+    /// Saved user volume prior to the 3-second sleep-timer fade-out.
+    pub saved_volume_before_fade: Option<f32>,
+    /// Truthful codec/source metadata for the active stream.
+    pub codec_badge: Option<CodecBadgeInfo>,
+    /// Guards against firing the end-of-track safety watchdog more than once per loaded track.
+    pub ended_triggered: bool,
 }
 
 impl PlaybackFsm {
@@ -64,6 +87,10 @@ impl PlaybackFsm {
             paused_by_focus: false,
             preresolved_video_id: None,
             prewarmed_video_id: None,
+            sleep_timer: SleepTimerState::Off,
+            saved_volume_before_fade: None,
+            codec_badge: None,
+            ended_triggered: false,
         }
     }
 
@@ -80,6 +107,8 @@ impl PlaybackFsm {
         self.skipped_segments.clear();
         self.preresolved_video_id = None;
         self.prewarmed_video_id = None;
+        self.codec_badge = None;
+        self.ended_triggered = false;
         let _ = self.snapshot.state.transition(PlayerState::Loading);
         Ok(track)
     }
@@ -119,7 +148,43 @@ impl PlaybackFsm {
         self.prewarmed_video_id = None;
         self.sponsor_segments.clear();
         self.skipped_segments.clear();
+        self.codec_badge = None;
         let _ = self.snapshot.state.transition(PlayerState::Idle);
+    }
+
+    pub fn set_sleep_timer(&mut self, timer: SleepTimerState) {
+        self.sleep_timer = timer;
+        if matches!(timer, SleepTimerState::Off) {
+            self.saved_volume_before_fade = None;
+        }
+    }
+
+    /// Advances an active `SleepTimerState::Countdown` by `elapsed_secs`, attenuating
+    /// volume over the final 3 seconds and returning `ExpireAndPause` at 0.
+    pub fn tick_sleep_timer(&mut self, elapsed_secs: u64) -> SleepTimerTickEffect {
+        let SleepTimerState::Countdown { remaining_secs } = self.sleep_timer else {
+            return SleepTimerTickEffect::None;
+        };
+        let next_secs = remaining_secs.saturating_sub(elapsed_secs);
+        if next_secs == 0 {
+            let restore_volume = self
+                .saved_volume_before_fade
+                .take()
+                .unwrap_or(self.snapshot.volume);
+            self.sleep_timer = SleepTimerState::Off;
+            return SleepTimerTickEffect::ExpireAndPause { restore_volume };
+        }
+        self.sleep_timer = SleepTimerState::Countdown {
+            remaining_secs: next_secs,
+        };
+        if next_secs <= 3 {
+            let base = *self
+                .saved_volume_before_fade
+                .get_or_insert(self.snapshot.volume);
+            let attenuated = (base * (next_secs as f32 / 3.0)).clamp(0.0, 1.0);
+            return SleepTimerTickEffect::AttenuateVolume(attenuated);
+        }
+        SleepTimerTickEffect::None
     }
 
     pub fn clamp_seek(&self, position_ms: u64) -> u64 {
@@ -138,10 +203,26 @@ impl PlaybackFsm {
     /// Evaluates a playback position tick: updates resume position, checks SponsorBlock segments,
     /// and computes both 50% stream pre-resolution and 75% Proxy v2 dual-buffer warm-up decisions.
     pub fn tick_position(&mut self, position_ms: u64) -> TickEffects {
-        self.snapshot.position_ms = position_ms;
-        self.snapshot.queue.resume_position_ms = position_ms;
-
         let dur_ms = self.snapshot.duration_ms;
+        let clamped_pos = if dur_ms > 0 {
+            position_ms.min(dur_ms)
+        } else {
+            position_ms
+        };
+        self.snapshot.position_ms = clamped_pos;
+        self.snapshot.queue.resume_position_ms = clamped_pos;
+
+        let reached_end = if dur_ms > 0
+            && self.snapshot.state == PlayerState::Playing
+            && !self.ended_triggered
+            && position_ms >= dur_ms.saturating_add(1_000)
+        {
+            self.ended_triggered = true;
+            true
+        } else {
+            false
+        };
+
         let dur_secs = dur_ms as f64 / 1000.0;
         let sponsor_skip = if self.snapshot.sponsorblock_enabled {
             self.sponsor_segments
@@ -150,7 +231,7 @@ impl PlaybackFsm {
                 .find(|(idx, seg)| {
                     !self.skipped_segments.contains(idx)
                         && seg.fits_duration(dur_secs)
-                        && seg.contains_ms(position_ms)
+                        && seg.contains_ms(clamped_pos)
                 })
                 .map(|(idx, seg)| (idx, (seg.end_secs * 1000.0) as u64))
         } else {
@@ -170,7 +251,7 @@ impl PlaybackFsm {
 
         let upcoming = QueueManager::peek_upcoming_track_id(&self.snapshot.queue);
         let prefetch = PrefetchThresholds::evaluate(
-            position_ms,
+            clamped_pos,
             dur_ms,
             upcoming.as_deref(),
             self.preresolved_video_id.as_deref(),
@@ -191,6 +272,7 @@ impl PlaybackFsm {
         TickEffects {
             sponsor_skip,
             prefetch,
+            reached_end,
         }
     }
 }
@@ -280,5 +362,29 @@ mod tests {
 
         let fx = fsm.tick_position(12_000);
         assert_eq!(fx.sponsor_skip, Some(("t1".into(), 25_000)));
+    }
+
+    #[test]
+    fn clamps_position_to_duration_and_triggers_reached_end_once() {
+        let mut q = QueueState::default();
+        QueueManager::replace(&mut q, vec![sample_track("t1", 100_000)], 0).unwrap();
+        let mut fsm = PlaybackFsm::from_restored_queue(q);
+        fsm.begin_loading(0).unwrap();
+        fsm.enter_buffering("http://127.0.0.1:9999/stream/t1".into(), 100_000, false);
+        fsm.enter_playing();
+
+        // Slightly past duration (< 1s grace): clamped, does not force end yet.
+        let fx_grace = fsm.tick_position(100_500);
+        assert_eq!(fsm.snapshot.position_ms, 100_000);
+        assert!(!fx_grace.reached_end);
+
+        // Past 1s grace without Ended telemetry: triggers reached_end once.
+        let fx_over = fsm.tick_position(101_000);
+        assert_eq!(fsm.snapshot.position_ms, 100_000);
+        assert!(fx_over.reached_end);
+
+        // Subsequent ticks do not re-trigger reached_end for the same track.
+        let fx_again = fsm.tick_position(102_000);
+        assert!(!fx_again.reached_end);
     }
 }

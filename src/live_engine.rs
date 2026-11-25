@@ -16,7 +16,7 @@ use resonance_contract::{
     CatalogExtProvider, DownloadRecord, ExplorePage, HomeSection, LIBRARY_SNAPSHOT_METADATA_KEY,
     LibraryCollectionRef, LibrarySnapshot, LikeAction, LyricsDocument, LyricsProvider,
     MusicProvider, MutationCommand, OfflineStore, PlayerSnapshot, Playlist, PlaylistEditOp,
-    PoTokenDiagnostics, PoTokenProvider, RemoteConfigStatus, SETTINGS_METADATA_KEY,
+    PoTokenDiagnostics, PoTokenProvider, RemoteConfigStatus, RepeatMode, SETTINGS_METADATA_KEY,
     SETTINGS_TTL_SECS, SearchCategory, SearchResults, SettingsV1, Track, TrackId, WatchtimeReport,
 };
 use resonance_core::audio_dsp::DspConfig;
@@ -671,19 +671,257 @@ pub fn dispatch_play_track(track: Track) {
         let _ = tx.send(LiveUpdate::PoTokenDiagnostics(
             provider.po_token_diagnostics(),
         ));
-        let (lyr_res, next_res) = tokio::join!(
+        let (lyr_res, expand_res) = tokio::join!(
             lyrics.fetch_lyrics(&track_for_lyrics),
-            provider.autoplay_next(&seed_id)
+            controller.expand_autoplay_queue(&seed_id)
         );
         let _ = tx.send(LiveUpdate::LyricsLoaded(lyr_res.ok().flatten()));
-        if let Ok(next_tracks) = next_res
-            && !next_tracks.is_empty()
-        {
-            let _ = tx.send(LiveUpdate::AutoplayQueueLoaded {
-                seed_video_id: seed_id,
-                tracks: next_tracks,
-            });
+        if matches!(expand_res, Ok(added) if added > 0) {
+            let snap = controller.snapshot().await;
+            let _ = tx.send(LiveUpdate::PlaybackUpdated(snap));
         }
+    });
+}
+
+pub fn dispatch_play_queue(tracks: Vec<Track>, start_index: usize, shuffle: bool) {
+    let Ok(rt) = runtime() else { return };
+    let controller = rt.controller.clone();
+    let provider = rt.provider.clone();
+    let lyrics = rt.lyrics.clone();
+    let tx = rt.tx.clone();
+    rt.rt.spawn(async move {
+        let seed_track = tracks.get(start_index).cloned().or_else(|| tracks.first().cloned());
+        if let Err(e) = controller.play_tracks(tracks, start_index).await {
+            let _ = tx.send(LiveUpdate::StatusBanner(format!("Playback failed: {e}")));
+            return;
+        }
+        if shuffle {
+            controller.set_shuffle(true).await;
+        }
+        let snap = controller.snapshot().await;
+        let active_track = snap.current_track.clone().or(seed_track);
+        let _ = tx.send(LiveUpdate::PlaybackUpdated(snap));
+        let _ = tx.send(LiveUpdate::PoTokenDiagnostics(
+            provider.po_token_diagnostics(),
+        ));
+        if let Some(t) = active_track {
+            let seed_id = t.id.clone();
+            let (lyr_res, expand_res) = tokio::join!(
+                lyrics.fetch_lyrics(&t),
+                controller.expand_autoplay_queue(&seed_id)
+            );
+            let _ = tx.send(LiveUpdate::LyricsLoaded(lyr_res.ok().flatten()));
+            if matches!(expand_res, Ok(added) if added > 0) {
+                let snap = controller.snapshot().await;
+                let _ = tx.send(LiveUpdate::PlaybackUpdated(snap));
+            }
+        }
+    });
+}
+
+pub fn dispatch_next_track() {
+    let Ok(rt) = runtime() else { return };
+    let controller = rt.controller.clone();
+    let lyrics = rt.lyrics.clone();
+    let tx = rt.tx.clone();
+    rt.rt.spawn(async move {
+        match controller.next().await {
+            Ok(()) => {
+                let snap = controller.snapshot().await;
+                let current = snap.current_track.clone();
+                let _ = tx.send(LiveUpdate::PlaybackUpdated(snap));
+                if let Some(t) = current {
+                    let seed_id = t.id.clone();
+                    let (lyr_res, expand_res) = tokio::join!(
+                        lyrics.fetch_lyrics(&t),
+                        controller.expand_autoplay_queue(&seed_id)
+                    );
+                    let _ = tx.send(LiveUpdate::LyricsLoaded(lyr_res.ok().flatten()));
+                    if matches!(expand_res, Ok(added) if added > 0) {
+                        let snap = controller.snapshot().await;
+                        let _ = tx.send(LiveUpdate::PlaybackUpdated(snap));
+                    }
+                }
+            }
+            Err(e) => {
+                let _ = tx.send(LiveUpdate::StatusBanner(format!("Next track failed: {e}")));
+            }
+        }
+    });
+}
+
+pub fn dispatch_previous_track() {
+    let Ok(rt) = runtime() else { return };
+    let controller = rt.controller.clone();
+    let lyrics = rt.lyrics.clone();
+    let tx = rt.tx.clone();
+    rt.rt.spawn(async move {
+        match controller.previous().await {
+            Ok(()) => {
+                let snap = controller.snapshot().await;
+                let current = snap.current_track.clone();
+                let _ = tx.send(LiveUpdate::PlaybackUpdated(snap));
+                if let Some(t) = current {
+                    let lyr = lyrics.fetch_lyrics(&t).await.ok().flatten();
+                    let _ = tx.send(LiveUpdate::LyricsLoaded(lyr));
+                }
+            }
+            Err(e) => {
+                let _ = tx.send(LiveUpdate::StatusBanner(format!("Previous track failed: {e}")));
+            }
+        }
+    });
+}
+
+pub fn dispatch_jump_queue(index: usize) {
+    let Ok(rt) = runtime() else { return };
+    let controller = rt.controller.clone();
+    let lyrics = rt.lyrics.clone();
+    let tx = rt.tx.clone();
+    rt.rt.spawn(async move {
+        match controller.jump_to_queue_index(index).await {
+            Ok(()) => {
+                let snap = controller.snapshot().await;
+                let current = snap.current_track.clone();
+                let _ = tx.send(LiveUpdate::PlaybackUpdated(snap));
+                if let Some(t) = current {
+                    let seed_id = t.id.clone();
+                    let (lyr_res, expand_res) = tokio::join!(
+                        lyrics.fetch_lyrics(&t),
+                        controller.expand_autoplay_queue(&seed_id)
+                    );
+                    let _ = tx.send(LiveUpdate::LyricsLoaded(lyr_res.ok().flatten()));
+                    if matches!(expand_res, Ok(added) if added > 0) {
+                        let snap = controller.snapshot().await;
+                        let _ = tx.send(LiveUpdate::PlaybackUpdated(snap));
+                    }
+                }
+            }
+            Err(e) => {
+                let _ = tx.send(LiveUpdate::StatusBanner(format!("Queue jump failed: {e}")));
+            }
+        }
+    });
+}
+
+pub fn dispatch_play_next(track: Track) {
+    let Ok(rt) = runtime() else { return };
+    let controller = rt.controller.clone();
+    let tx = rt.tx.clone();
+    rt.rt.spawn(async move {
+        if controller.play_next(track).await.is_ok() {
+            let _ = tx.send(LiveUpdate::PlaybackUpdated(controller.snapshot().await));
+        }
+    });
+}
+
+pub fn dispatch_play_last(track: Track) {
+    let Ok(rt) = runtime() else { return };
+    let controller = rt.controller.clone();
+    let tx = rt.tx.clone();
+    rt.rt.spawn(async move {
+        if controller.play_last(track).await.is_ok() {
+            let _ = tx.send(LiveUpdate::PlaybackUpdated(controller.snapshot().await));
+        }
+    });
+}
+
+pub fn dispatch_move_queue_item(from: usize, to: usize) {
+    let Ok(rt) = runtime() else { return };
+    let controller = rt.controller.clone();
+    let tx = rt.tx.clone();
+    rt.rt.spawn(async move {
+        if controller.reorder_queue(from, to).await.is_ok() {
+            let _ = tx.send(LiveUpdate::PlaybackUpdated(controller.snapshot().await));
+        }
+    });
+}
+
+pub fn dispatch_remove_queue_item(index: usize) {
+    let Ok(rt) = runtime() else { return };
+    let controller = rt.controller.clone();
+    let tx = rt.tx.clone();
+    rt.rt.spawn(async move {
+        if controller.remove_from_queue(index).await.is_ok() {
+            let _ = tx.send(LiveUpdate::PlaybackUpdated(controller.snapshot().await));
+        }
+    });
+}
+
+pub fn dispatch_clear_queue() {
+    let Ok(rt) = runtime() else { return };
+    let controller = rt.controller.clone();
+    let tx = rt.tx.clone();
+    rt.rt.spawn(async move {
+        if controller.clear_queue().await.is_ok() {
+            let _ = tx.send(LiveUpdate::PlaybackUpdated(controller.snapshot().await));
+        }
+    });
+}
+
+pub fn dispatch_toggle_play_pause() {
+    let Ok(rt) = runtime() else { return };
+    let controller = rt.controller.clone();
+    let tx = rt.tx.clone();
+    rt.rt.spawn(async move {
+        match controller.toggle_play_pause().await {
+            Ok(()) => {
+                let snap = controller.snapshot().await;
+                let _ = tx.send(LiveUpdate::PlaybackUpdated(snap));
+            }
+            Err(e) => {
+                let _ = tx.send(LiveUpdate::StatusBanner(format!("Playback failed: {e}")));
+            }
+        }
+    });
+}
+
+pub fn dispatch_seek_ms(position_ms: u64) {
+    let Ok(rt) = runtime() else { return };
+    let controller = rt.controller.clone();
+    let tx = rt.tx.clone();
+    rt.rt.spawn(async move {
+        match controller.seek_ms(position_ms).await {
+            Ok(()) => {
+                let snap = controller.snapshot().await;
+                let _ = tx.send(LiveUpdate::PlaybackUpdated(snap));
+            }
+            Err(e) => {
+                let _ = tx.send(LiveUpdate::StatusBanner(format!("Seek failed: {e}")));
+            }
+        }
+    });
+}
+
+pub fn dispatch_set_volume(volume: f32) {
+    let Ok(rt) = runtime() else { return };
+    let controller = rt.controller.clone();
+    rt.rt.spawn(async move {
+        let _ = controller.set_volume(volume.clamp(0.0, 1.0)).await;
+    });
+}
+
+pub fn dispatch_set_shuffle(enabled: bool) {
+    let Ok(rt) = runtime() else { return };
+    let controller = rt.controller.clone();
+    rt.rt.spawn(async move {
+        controller.set_shuffle(enabled).await;
+    });
+}
+
+pub fn dispatch_set_repeat_mode(mode: RepeatMode) {
+    let Ok(rt) = runtime() else { return };
+    let controller = rt.controller.clone();
+    rt.rt.spawn(async move {
+        controller.set_repeat_mode(mode).await;
+    });
+}
+
+pub fn dispatch_set_autoplay_radio(enabled: bool) {
+    let Ok(rt) = runtime() else { return };
+    let controller = rt.controller.clone();
+    rt.rt.spawn(async move {
+        controller.set_autoplay_radio(enabled).await;
     });
 }
 
@@ -692,7 +930,7 @@ pub fn load_persisted_settings(cache: &dyn CacheStore) -> SettingsV1 {
     match cache.get_metadata(SETTINGS_METADATA_KEY, now) {
         Ok(Some((json, _))) => match serde_json::from_str::<SettingsV1>(&json) {
             Ok(mut s) => {
-                s.volume = s.volume.clamp(0.0, 1.0);
+                s.volume = s.volume.clamp(0.0, 1.6);
                 s
             }
             Err(e) => {

@@ -2,8 +2,10 @@
 //! and native `nsh/audio` driver snapshot/event handlers.
 
 use nsh_core::prelude::SharedString;
+use rand::seq::SliceRandom;
 use resonance_contract::{
-    LyricsDocument, PlayerSnapshot, PlayerState, QueueState, RepeatMode, Track,
+    CodecBadgeInfo, LyricsDocument, PlayerSnapshot, PlayerState, QueueState, RepeatMode,
+    ShuffleDeck, SleepTimerState, Track,
 };
 use resonance_core::fixture::fixture_lyrics;
 
@@ -53,6 +55,9 @@ pub struct PlaybackSlice {
     pub lyrics: Option<LyricsDocument>,
     pub seek_generation: u64,
     pub nsh_audio_available: bool,
+    pub shuffle_deck: ShuffleDeck,
+    pub codec_badge: Option<CodecBadgeInfo>,
+    pub sleep_timer: SleepTimerState,
 }
 
 impl PlaybackSlice {
@@ -94,7 +99,18 @@ impl PlaybackSlice {
             lyrics,
             seek_generation: 0,
             nsh_audio_available: false,
+            shuffle_deck: ShuffleDeck::default(),
+            codec_badge: None,
+            sleep_timer: SleepTimerState::Off,
         }
+    }
+
+    pub fn set_codec_badge(&mut self, badge: Option<CodecBadgeInfo>) {
+        self.codec_badge = badge;
+    }
+
+    pub fn set_sleep_timer(&mut self, timer: SleepTimerState) {
+        self.sleep_timer = timer;
     }
 
     pub fn queue_ids(&self) -> Vec<SharedString> {
@@ -108,6 +124,7 @@ impl PlaybackSlice {
     }
 
     pub fn play_track(&mut self, track: Track, live: bool, proxy_url: String) {
+        let mut inserted_at_front = false;
         let pos = self
             .player
             .queue
@@ -116,9 +133,21 @@ impl PlaybackSlice {
             .position(|t| t.id == track.id)
             .unwrap_or_else(|| {
                 self.player.queue.items.insert(0, track.clone());
+                inserted_at_front = true;
                 0
             });
         self.player.queue.current_index = Some(pos);
+        if self.player.queue.shuffle {
+            if inserted_at_front {
+                self.rebuild_shuffle_deck_keeping(Some(0));
+            } else if let Some(deck_pos) =
+                self.shuffle_deck.order.iter().position(|&idx| idx == pos)
+            {
+                self.shuffle_deck.cursor = deck_pos;
+            } else {
+                self.rebuild_shuffle_deck_keeping(Some(pos));
+            }
+        }
         self.player.current_track = Some(track.clone());
         self.player.duration_ms = track.duration_ms;
         self.player.position_ms = 0;
@@ -135,6 +164,22 @@ impl PlaybackSlice {
         };
     }
 
+    pub fn play_all_shuffled(
+        &mut self,
+        tracks: Vec<Track>,
+        live: bool,
+        proxy_url_for: impl Fn(&str) -> String,
+    ) -> Option<Track> {
+        if tracks.is_empty() {
+            return None;
+        }
+        self.player.queue.items = tracks;
+        self.player.queue.shuffle = true;
+        self.rebuild_shuffle_deck_keeping(None);
+        let first_idx = self.shuffle_deck.order.first().copied().unwrap_or(0);
+        self.activate_queue_index(first_idx, live, proxy_url_for)
+    }
+
     pub fn play_next(&mut self, track: Track) -> String {
         let idx = self
             .player
@@ -144,12 +189,33 @@ impl PlaybackSlice {
             .unwrap_or(0);
         let title = track.title.clone();
         self.player.queue.items.insert(idx, track);
+        if self.player.queue.shuffle {
+            if self.shuffle_deck.order.is_empty() {
+                self.rebuild_shuffle_deck_keeping(self.player.queue.current_index);
+            } else {
+                for entry in &mut self.shuffle_deck.order {
+                    if *entry >= idx {
+                        *entry += 1;
+                    }
+                }
+                let insert_pos = (self.shuffle_deck.cursor + 1).min(self.shuffle_deck.order.len());
+                self.shuffle_deck.order.insert(insert_pos, idx);
+            }
+        }
         format!("Added \"{title}\" to Play Next")
     }
 
     pub fn play_last(&mut self, track: Track) -> String {
         let title = track.title.clone();
         self.player.queue.items.push(track);
+        if self.player.queue.shuffle {
+            let new_idx = self.player.queue.items.len() - 1;
+            if self.shuffle_deck.order.is_empty() {
+                self.rebuild_shuffle_deck_keeping(self.player.queue.current_index);
+            } else {
+                self.shuffle_deck.order.push(new_idx);
+            }
+        }
         format!("Appended \"{title}\" to end of queue")
     }
 
@@ -184,6 +250,31 @@ impl PlaybackSlice {
         if len == 0 {
             return None;
         }
+        if self.player.queue.shuffle && !self.shuffle_deck.order.is_empty() {
+            let next_idx = match self.player.queue.repeat {
+                RepeatMode::One => self.shuffle_deck.order[self.shuffle_deck.cursor],
+                RepeatMode::None => {
+                    if self.shuffle_deck.cursor + 1 < self.shuffle_deck.order.len() {
+                        self.shuffle_deck.cursor += 1;
+                    }
+                    self.shuffle_deck.order[self.shuffle_deck.cursor]
+                }
+                RepeatMode::All => {
+                    if self.shuffle_deck.cursor + 1 < self.shuffle_deck.order.len() {
+                        self.shuffle_deck.cursor += 1;
+                    } else {
+                        let last_played = self
+                            .shuffle_deck
+                            .order
+                            .get(self.shuffle_deck.cursor)
+                            .copied();
+                        self.reshuffle_avoiding_first(len, last_played);
+                    }
+                    self.shuffle_deck.order[self.shuffle_deck.cursor]
+                }
+            };
+            return self.activate_queue_index(next_idx, live, proxy_url_for);
+        }
         let cur = self.player.queue.current_index.unwrap_or(0);
         let next = match self.player.queue.repeat {
             RepeatMode::One => cur,
@@ -208,6 +299,11 @@ impl PlaybackSlice {
         if len == 0 {
             return None;
         }
+        if self.player.queue.shuffle && !self.shuffle_deck.order.is_empty() {
+            self.shuffle_deck.cursor = self.shuffle_deck.cursor.saturating_sub(1);
+            let prev = self.shuffle_deck.order[self.shuffle_deck.cursor];
+            return self.activate_queue_index(prev, live, proxy_url_for);
+        }
         let cur = self.player.queue.current_index.unwrap_or(0);
         let prev = cur.saturating_sub(1);
         self.activate_queue_index(prev, live, proxy_url_for)
@@ -219,6 +315,11 @@ impl PlaybackSlice {
         live: bool,
         proxy_url_for: impl Fn(&str) -> String,
     ) -> Option<Track> {
+        if self.player.queue.shuffle
+            && let Some(deck_pos) = self.shuffle_deck.order.iter().position(|&i| i == index)
+        {
+            self.shuffle_deck.cursor = deck_pos;
+        }
         self.activate_queue_index(index, live, proxy_url_for)
     }
 
@@ -266,6 +367,19 @@ impl PlaybackSlice {
                 cur
             });
         }
+        if self.player.queue.shuffle {
+            for entry in &mut self.shuffle_deck.order {
+                *entry = if *entry == from {
+                    to
+                } else if from < *entry && *entry <= to {
+                    *entry - 1
+                } else if to <= *entry && *entry < from {
+                    *entry + 1
+                } else {
+                    *entry
+                };
+            }
+        }
     }
 
     pub fn remove_queue_item(&mut self, index: usize, proxy_url_for: impl Fn(&str) -> String) {
@@ -273,11 +387,33 @@ impl PlaybackSlice {
             return;
         }
         self.player.queue.items.remove(index);
+        if self.player.queue.shuffle {
+            if let Some(pos) = self.shuffle_deck.order.iter().position(|&i| i == index) {
+                self.shuffle_deck.order.remove(pos);
+                if pos < self.shuffle_deck.cursor {
+                    self.shuffle_deck.cursor = self.shuffle_deck.cursor.saturating_sub(1);
+                }
+            }
+            for entry in &mut self.shuffle_deck.order {
+                if *entry > index {
+                    *entry -= 1;
+                }
+            }
+            if !self.shuffle_deck.order.is_empty() {
+                self.shuffle_deck.cursor = self
+                    .shuffle_deck
+                    .cursor
+                    .min(self.shuffle_deck.order.len() - 1);
+            } else {
+                self.shuffle_deck.cursor = 0;
+            }
+        }
         if self.player.queue.items.is_empty() {
             self.player.queue.current_index = None;
             self.player.current_track = None;
             self.player.active_proxy_url = None;
             self.player.state = PlayerState::Idle;
+            self.shuffle_deck = ShuffleDeck::default();
         } else if let Some(cur) = self.player.queue.current_index {
             if index < cur {
                 self.player.queue.current_index = Some(cur - 1);
@@ -297,10 +433,63 @@ impl PlaybackSlice {
         self.player.current_track = None;
         self.player.active_proxy_url = None;
         self.player.state = PlayerState::Idle;
+        self.shuffle_deck = ShuffleDeck::default();
     }
 
     pub fn toggle_shuffle(&mut self) {
-        self.player.queue.shuffle = !self.player.queue.shuffle;
+        let next = !self.player.queue.shuffle;
+        self.player.queue.shuffle = next;
+        if next {
+            self.rebuild_shuffle_deck_keeping(self.player.queue.current_index);
+        } else {
+            if let Some(restored) = self
+                .shuffle_deck
+                .order
+                .get(self.shuffle_deck.cursor)
+                .copied()
+                .filter(|&i| i < self.player.queue.items.len())
+            {
+                self.player.queue.current_index = Some(restored);
+            }
+            self.shuffle_deck = ShuffleDeck::default();
+        }
+    }
+
+    fn rebuild_shuffle_deck_keeping(&mut self, keep_first: Option<usize>) {
+        let len = self.player.queue.items.len();
+        if len == 0 {
+            self.shuffle_deck = ShuffleDeck::default();
+            return;
+        }
+        let mut rng = rand::rng();
+        let order = match keep_first.filter(|&i| i < len) {
+            Some(first) => {
+                let mut rest: Vec<usize> = (0..len).filter(|&i| i != first).collect();
+                rest.shuffle(&mut rng);
+                let mut full = Vec::with_capacity(len);
+                full.push(first);
+                full.extend(rest);
+                full
+            }
+            None => {
+                let mut full: Vec<usize> = (0..len).collect();
+                full.shuffle(&mut rng);
+                full
+            }
+        };
+        self.shuffle_deck = ShuffleDeck { order, cursor: 0 };
+    }
+
+    fn reshuffle_avoiding_first(&mut self, len: usize, avoid_first: Option<usize>) {
+        self.rebuild_shuffle_deck_keeping(None);
+        if len > 1
+            && let Some(avoid) = avoid_first
+            && self.shuffle_deck.order.first().copied() == Some(avoid)
+            && let Some(swap_pos) = self.shuffle_deck.order.iter().position(|&i| i != avoid)
+        {
+            self.shuffle_deck.order.swap(0, swap_pos);
+        }
+        self.shuffle_deck.cursor = 0;
     }
 
     pub fn cycle_repeat(&mut self) {
@@ -373,18 +562,23 @@ impl PlaybackSlice {
         if self.player.current_track.is_none() {
             return;
         }
-        self.player.position_ms = position_ms;
-        self.player.queue.resume_position_ms = position_ms;
         if let Some(dur) = duration_ms.filter(|d| *d > 0) {
             let has_metadata_duration = self
                 .player
                 .current_track
                 .as_ref()
                 .is_some_and(|t| t.duration_ms > 0);
-            if !has_metadata_duration {
+            if !has_metadata_duration || self.player.duration_ms == 0 {
                 self.player.duration_ms = dur;
             }
         }
+        let clamped = if self.player.duration_ms > 0 {
+            position_ms.min(self.player.duration_ms)
+        } else {
+            position_ms
+        };
+        self.player.position_ms = clamped;
+        self.player.queue.resume_position_ms = clamped;
     }
 
     pub fn on_native_audio_ended(
@@ -397,6 +591,38 @@ impl PlaybackSlice {
             self.player.state = PlayerState::Idle;
             self.player.active_proxy_url = None;
             return None;
+        }
+        if self.player.queue.shuffle && !self.shuffle_deck.order.is_empty() {
+            let next_idx = match self.player.queue.repeat {
+                RepeatMode::One => Some(self.shuffle_deck.order[self.shuffle_deck.cursor]),
+                RepeatMode::All => {
+                    if self.shuffle_deck.cursor + 1 < self.shuffle_deck.order.len() {
+                        self.shuffle_deck.cursor += 1;
+                    } else {
+                        let last_played = self
+                            .shuffle_deck
+                            .order
+                            .get(self.shuffle_deck.cursor)
+                            .copied();
+                        self.reshuffle_avoiding_first(len, last_played);
+                    }
+                    Some(self.shuffle_deck.order[self.shuffle_deck.cursor])
+                }
+                RepeatMode::None => {
+                    if self.shuffle_deck.cursor + 1 < self.shuffle_deck.order.len() {
+                        self.shuffle_deck.cursor += 1;
+                        Some(self.shuffle_deck.order[self.shuffle_deck.cursor])
+                    } else {
+                        None
+                    }
+                }
+            };
+            return if let Some(idx) = next_idx {
+                self.activate_queue_index(idx, live, proxy_url_for)
+            } else {
+                self.player.state = PlayerState::Paused;
+                None
+            };
         }
         let cur = self.player.queue.current_index.unwrap_or(0);
         let next = match self.player.queue.repeat {

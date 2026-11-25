@@ -269,6 +269,11 @@ pub fn mount_nsh_audio_driver() {
                         }
                     }
                     AudioEvent::Ended => {
+                        if let Some(entry) = driver_for_pump.borrow_mut().active.as_mut()
+                            && entry.generation == generation
+                        {
+                            entry.is_playing = false;
+                        }
                         let _ = bus
                             .telemetry_tx
                             .send(NshAudioTelemetry::Ended { generation });
@@ -381,6 +386,7 @@ pub fn mount_nsh_audio_driver() {
         spawn(async move {
             let bus = nsh_audio_bus();
             let mut volume = 1.0_f32;
+            let mut playback_speed = 1.0_f32;
             loop {
                 let cmd = std::future::poll_fn(|cx| {
                     if driver_for_ctrl.borrow().shutdown {
@@ -411,13 +417,19 @@ pub fn mount_nsh_audio_driver() {
                         }
                         let mut settings = PlayerSettings::default();
                         settings.volume = volume.clamp(0.0, 1.0);
-                        settings.rate = 1.0;
+                        settings.rate = playback_speed.clamp(0.25, 3.0);
                         let player = audio_player(&proxy_url, settings);
                         player.play();
+                        let parsed_gen = parse_generation_from_url(&proxy_url);
                         let waker = {
                             let mut state = driver_for_ctrl.borrow_mut();
-                            state.next_generation += 1;
-                            let generation = state.next_generation;
+                            let generation = if let Some(g) = parsed_gen {
+                                state.next_generation = state.next_generation.max(g);
+                                g
+                            } else {
+                                state.next_generation += 1;
+                                state.next_generation
+                            };
                             state.active = Some(ActiveNativePlayer {
                                 generation,
                                 url: proxy_url,
@@ -467,6 +479,13 @@ pub fn mount_nsh_audio_driver() {
                             entry.player.set_settings(entry.last_settings);
                         }
                     }
+                    NshAudioControl::SetPlaybackSpeed(speed) => {
+                        playback_speed = speed.clamp(0.25, 3.0);
+                        if let Some(entry) = driver_for_ctrl.borrow_mut().active.as_mut() {
+                            entry.last_settings.rate = playback_speed;
+                            entry.player.set_settings(entry.last_settings);
+                        }
+                    }
                     NshAudioControl::UpdateDsp(_) | NshAudioControl::SetTrackLoudnessDb(_) => {}
                 }
             }
@@ -497,6 +516,21 @@ pub fn mount_nsh_audio_driver() {
     });
 }
 
+/// Extracts the monotonic `gen=<u64>` query parameter from a loopback proxy URL
+/// so `mount_nsh_audio_driver()` stays generation-fenced with `PlaybackController`.
+pub fn parse_generation_from_url(url: &str) -> Option<u64> {
+    let query = url.split('?').nth(1)?;
+    for pair in query.split('&') {
+        if let Some(val) = pair.strip_prefix("gen=")
+            && let Ok(parsed) = val.parse::<u64>()
+            && parsed > 0
+        {
+            return Some(parsed);
+        }
+    }
+    None
+}
+
 /// Control messages sent from `PlaybackController` (Tokio) to the NSH engine-thread
 /// native `AudioPlayer` driver.
 #[derive(Debug, Clone, PartialEq)]
@@ -510,6 +544,7 @@ pub enum NshAudioControl {
     Stop,
     SeekMs(u64),
     SetVolume(f32),
+    SetPlaybackSpeed(f32),
     UpdateDsp(DspConfig),
     SetTrackLoudnessDb(Option<f32>),
 }
@@ -577,6 +612,12 @@ impl NshAudioBackend {
 
     pub fn active_stream_url(&self) -> Option<String> {
         self.active_url.lock().unwrap().clone()
+    }
+
+    pub async fn set_playback_speed(&self, speed: f32) -> CoreResult<()> {
+        let clamped = speed.clamp(0.25, 3.0);
+        self.emit_control(NshAudioControl::SetPlaybackSpeed(clamped));
+        Ok(())
     }
 
     fn emit_control(&self, cmd: NshAudioControl) {

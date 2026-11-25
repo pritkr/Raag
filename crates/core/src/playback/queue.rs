@@ -161,17 +161,131 @@ impl QueueManager {
             .map(|t| t.id.clone())
     }
 
-    /// Merges autoplay radio tracks into the tail of the queue without duplicating existing IDs.
+    /// Merges autoplay radio tracks into the tail of the queue, deduplicating existing IDs
+    /// and interleaving artists for YouTube Music-style variety.
     /// Returns the index of the first newly appended track if any were added.
     pub fn merge_radio_tracks(queue: &mut QueueState, radio: Vec<Track>) -> Option<usize> {
-        let existing_ids: HashSet<String> = queue.items.iter().map(|t| t.id.clone()).collect();
+        let seed = queue.current_track().cloned();
+        let diversified = Self::diversify_radio_tracks(seed.as_ref(), &queue.items, radio);
         let start = queue.items.len();
-        for track in radio {
-            if !existing_ids.contains(&track.id) {
-                queue.items.push(track);
+        queue.items.extend(diversified);
+        (queue.items.len() > start).then_some(start)
+    }
+
+    /// Deduplicates and interleaves candidate radio tracks so no single artist dominates
+    /// consecutive Up Next slots, while preserving relevance ordering.
+    pub fn diversify_radio_tracks(
+        seed: Option<&Track>,
+        existing_queue: &[Track],
+        candidates: Vec<Track>,
+    ) -> Vec<Track> {
+        fn norm_artist(t: &Track) -> String {
+            let primary = t
+                .artists
+                .first()
+                .map(|a| a.name.trim())
+                .filter(|s| !s.is_empty())
+                .unwrap_or("");
+            if !primary.is_empty() {
+                return primary.to_lowercase();
+            }
+            let disp = t.artist_display();
+            let trimmed = disp.trim();
+            if trimmed.eq_ignore_ascii_case("unknown artist") {
+                String::new()
+            } else {
+                trimmed.to_lowercase()
             }
         }
-        (queue.items.len() > start).then_some(start)
+
+        fn norm_title_key(t: &Track) -> (String, String) {
+            let title = t.title.trim().to_lowercase();
+            (title, norm_artist(t))
+        }
+
+        let mut seen_ids: HashSet<String> = existing_queue.iter().map(|t| t.id.clone()).collect();
+        let mut seen_titles: HashSet<(String, String)> = existing_queue
+            .iter()
+            .filter(|t| !t.title.trim().is_empty())
+            .map(norm_title_key)
+            .collect();
+        if let Some(s) = seed {
+            seen_ids.insert(s.id.clone());
+            if !s.title.trim().is_empty() {
+                seen_titles.insert(norm_title_key(s));
+            }
+        }
+
+        let mut pool: Vec<Track> = Vec::with_capacity(candidates.len());
+        for t in candidates {
+            if t.id.is_empty() || !seen_ids.insert(t.id.clone()) {
+                continue;
+            }
+            let tkey = norm_title_key(&t);
+            if !tkey.0.is_empty() && !tkey.1.is_empty() && !seen_titles.insert(tkey) {
+                continue;
+            }
+            pool.push(t);
+        }
+
+        if pool.len() <= 2 {
+            return pool;
+        }
+
+        let distinct_artists: HashSet<String> = pool
+            .iter()
+            .map(norm_artist)
+            .filter(|a| !a.is_empty())
+            .collect();
+        if distinct_artists.len() < 2 {
+            return pool;
+        }
+
+        let mut last_artist: Option<String> = existing_queue
+            .last()
+            .map(norm_artist)
+            .filter(|a| !a.is_empty())
+            .or_else(|| seed.map(norm_artist).filter(|a| !a.is_empty()));
+
+        let mut remaining_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for t in &pool {
+            let a = norm_artist(t);
+            if !a.is_empty() {
+                *remaining_counts.entry(a).or_insert(0) += 1;
+            }
+        }
+
+        let mut out = Vec::with_capacity(pool.len());
+
+        while !pool.is_empty() {
+            let chosen_idx = pool
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| {
+                    let a = norm_artist(t);
+                    a.is_empty() || last_artist.as_deref() != Some(a.as_str())
+                })
+                .min_by_key(|(idx, t)| {
+                    let a = norm_artist(t);
+                    let rem = remaining_counts.get(&a).copied().unwrap_or(0);
+                    (std::cmp::Reverse(rem), *idx)
+                })
+                .map(|(idx, _)| idx)
+                .unwrap_or(0);
+
+            let picked = pool.remove(chosen_idx);
+            let artist = norm_artist(&picked);
+            if !artist.is_empty() {
+                if let Some(c) = remaining_counts.get_mut(&artist) {
+                    *c = c.saturating_sub(1);
+                }
+                last_artist = Some(artist);
+            }
+            out.push(picked);
+        }
+
+        out
     }
 }
 
@@ -225,5 +339,45 @@ mod tests {
         let added_idx = QueueManager::merge_radio_tracks(&mut q, vec![track("a"), track("c")]);
         assert_eq!(added_idx, Some(2));
         assert_eq!(q.items.len(), 3);
+    }
+
+    #[test]
+    fn diversify_radio_tracks_spreads_artists_and_dedups() {
+        use resonance_contract::ArtistRef;
+        let mk = |id: &str, title: &str, artist: &str| Track {
+            id: id.to_owned(),
+            title: title.to_owned(),
+            artists: vec![ArtistRef {
+                id: None,
+                name: artist.to_owned(),
+            }],
+            album: None,
+            duration_ms: 180_000,
+            artwork_url: None,
+            is_explicit: false,
+            is_liked: false,
+            is_video: false,
+        };
+
+        let seed = mk("s1", "Seed Song", "Artist A");
+        let candidates = vec![
+            mk("s1", "Seed Song", "Artist A"), // duplicate of seed
+            mk("a1", "Song A1", "Artist A"),
+            mk("a2", "Song A2", "Artist A"),
+            mk("a3", "Song A3", "Artist A"),
+            mk("b1", "Song B1", "Artist B"),
+            mk("c1", "Song C1", "Artist C"),
+            mk("d1", "Song D1", "Artist D"),
+        ];
+
+        let out = QueueManager::diversify_radio_tracks(Some(&seed), &[seed.clone()], candidates);
+        assert_eq!(out.len(), 6);
+        assert_ne!(out[0].artists[0].name, "Artist A");
+        for pair in out.windows(2) {
+            assert_ne!(
+                pair[0].artists[0].name, pair[1].artists[0].name,
+                "same artist should not appear back-to-back when alternatives exist"
+            );
+        }
     }
 }

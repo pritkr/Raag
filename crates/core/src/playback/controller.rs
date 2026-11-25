@@ -5,14 +5,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use resonance_contract::{
-    AppEvent, AudioBackend, CacheStore, CoreError, CoreResult, EventBus, HistoryEntry,
-    LyricsProvider, MediaCommand, MusicProvider, NowPlayingMetadata, OfflineStore, PlaybackError,
-    PlayerSnapshot, PlayerState, RepeatMode, Track,
+    AppEvent, AudioBackend, AudioCodec, CacheStore, CodecBadgeInfo, CoreError, CoreResult,
+    EventBus, HistoryEntry, LyricsProvider, MediaCommand, MusicProvider, NowPlayingMetadata,
+    OfflineStore, PlaybackError, PlayerSnapshot, PlayerState, RepeatMode, SleepTimerState, Track,
 };
 use tokio::sync::Mutex;
 
 use crate::innertube::auth::redact_secrets;
-use crate::playback::fsm::PlaybackFsm;
+use crate::playback::fsm::{PlaybackFsm, SleepTimerTickEffect};
 use crate::playback::prefetch::PrefetchCoordinator;
 use crate::playback::queue::QueueManager;
 use crate::proxy::LoopbackProxy;
@@ -72,6 +72,7 @@ pub struct PlaybackController {
     bus: EventBus,
     play_generation: AtomicU64,
     last_now_playing_sync_ms: AtomicU64,
+    last_resume_persist_ms: AtomicU64,
     fsm: Mutex<PlaybackFsm>,
 }
 
@@ -97,6 +98,7 @@ impl PlaybackController {
             bus,
             play_generation: AtomicU64::new(0),
             last_now_playing_sync_ms: AtomicU64::new(0),
+            last_resume_persist_ms: AtomicU64::new(0),
             fsm: Mutex::new(PlaybackFsm::from_restored_queue(restored_queue)),
         }
     }
@@ -122,6 +124,34 @@ impl PlaybackController {
     /// Returns the video ID of the next track pre-warmed into Proxy v2 at the 75% progress threshold.
     pub async fn prewarmed_next_video_id(&self) -> Option<String> {
         self.fsm.lock().await.prewarmed_video_id.clone()
+    }
+
+    pub async fn codec_badge(&self) -> Option<CodecBadgeInfo> {
+        self.fsm.lock().await.codec_badge.clone()
+    }
+
+    pub async fn set_sleep_timer(&self, state: SleepTimerState) {
+        let mut fsm = self.fsm.lock().await;
+        fsm.set_sleep_timer(state);
+    }
+
+    pub async fn sleep_timer(&self) -> SleepTimerState {
+        self.fsm.lock().await.sleep_timer
+    }
+
+    pub async fn tick_sleep_timer(&self, elapsed_secs: u64) -> CoreResult<()> {
+        let effect = {
+            let mut fsm = self.fsm.lock().await;
+            fsm.tick_sleep_timer(elapsed_secs)
+        };
+        match effect {
+            SleepTimerTickEffect::None => Ok(()),
+            SleepTimerTickEffect::AttenuateVolume(vol) => self.audio.set_volume(vol).await,
+            SleepTimerTickEffect::ExpireAndPause { restore_volume } => {
+                self.pause().await?;
+                self.audio.set_volume(restore_volume).await
+            }
+        }
     }
 
     pub fn event_bus(&self) -> EventBus {
@@ -265,6 +295,8 @@ impl PlaybackController {
     async fn load_and_play_current(&self, resume_ms: u64) -> CoreResult<()> {
         let my_gen = self.play_generation.fetch_add(1, Ordering::SeqCst) + 1;
         self.last_now_playing_sync_ms.store(0, Ordering::SeqCst);
+        self.last_resume_persist_ms
+            .store(resume_ms, Ordering::SeqCst);
         let proxy_gen = self.proxy.advance_generation();
 
         let track = {
@@ -286,12 +318,23 @@ impl PlaybackController {
             }
         });
 
-        let (proxy_url, duration_ms, offline_used) = if let Some(rec) = offline_hit {
+        let (proxy_url, duration_ms, offline_used, codec_badge) = if let Some(rec) = offline_hit {
+            let codec = if matches!(rec.itag, 140 | 141) {
+                AudioCodec::Aac
+            } else {
+                AudioCodec::Opus
+            };
             (
                 self.proxy
                     .stream_url_with_gen(&track.id, rec.itag, proxy_gen),
                 track.duration_ms,
                 true,
+                Some(CodecBadgeInfo {
+                    codec,
+                    bitrate_kbps: if rec.itag == 140 { 128 } else { 160 },
+                    sample_rate_hz: Some(48_000),
+                    source_label: "Offline Vault".to_owned(),
+                }),
             )
         } else {
             let stream_res = self.provider.resolve_stream(&track.id).await;
@@ -309,11 +352,18 @@ impl PlaybackController {
                         track.duration_ms
                     };
                     let itag = info.itag;
+                    let badge = CodecBadgeInfo {
+                        codec: info.codec,
+                        bitrate_kbps: info.bitrate_kbps,
+                        sample_rate_hz: Some(48_000),
+                        source_label: info.resolved_by_client.clone(),
+                    };
                     self.proxy.register_current_stream(info);
                     (
                         self.proxy.stream_url_with_gen(&track.id, itag, proxy_gen),
                         dur,
                         false,
+                        Some(badge),
                     )
                 }
                 Err(e) => {
@@ -329,6 +379,16 @@ impl PlaybackController {
                                 .stream_url_with_gen(&track.id, fallback_itag, proxy_gen),
                             track.duration_ms,
                             true,
+                            Some(CodecBadgeInfo {
+                                codec: if fallback_itag == 140 {
+                                    AudioCodec::Aac
+                                } else {
+                                    AudioCodec::Opus
+                                },
+                                bitrate_kbps: if fallback_itag == 140 { 128 } else { 160 },
+                                sample_rate_hz: Some(48_000),
+                                source_label: "ChunkCache".to_owned(),
+                            }),
                         )
                     } else {
                         let mut fsm = self.fsm.lock().await;
@@ -346,6 +406,7 @@ impl PlaybackController {
 
         {
             let mut fsm = self.fsm.lock().await;
+            fsm.codec_badge = codec_badge;
             fsm.enter_buffering(proxy_url.clone(), duration_ms, offline_used);
             self.publish_and_persist(&fsm);
         }
@@ -473,6 +534,7 @@ impl PlaybackController {
         self.audio.seek_ms(clamped).await?;
         let mut fsm = self.fsm.lock().await;
         fsm.apply_seek(clamped);
+        self.last_resume_persist_ms.store(clamped, Ordering::SeqCst);
         self.publish_and_persist(&fsm);
         Ok(())
     }
@@ -497,7 +559,7 @@ impl PlaybackController {
         };
         if autoplay
             && let Some(video_id) = seed_id
-            && let Ok(radio) = self.provider.autoplay_next(&video_id).await
+            && let Ok(radio) = self.fetch_diverse_radio(&video_id).await
         {
             let next_idx = {
                 let mut fsm = self.fsm.lock().await;
@@ -509,6 +571,80 @@ impl PlaybackController {
         }
 
         self.pause().await
+    }
+
+    /// Fetches autoplay radio candidates for `seed_video_id`, expanding with a secondary
+    /// artist seed when the initial response has low artist diversity.
+    async fn fetch_diverse_radio(&self, seed_video_id: &str) -> CoreResult<Vec<Track>> {
+        let mut tracks = self.provider.autoplay_next(seed_video_id).await?;
+        let distinct_artists: std::collections::HashSet<String> = tracks
+            .iter()
+            .filter(|t| t.id != seed_video_id)
+            .map(|t| t.artist_display().trim().to_lowercase())
+            .filter(|a| !a.is_empty() && a != "unknown artist")
+            .collect();
+
+        if distinct_artists.len() < 4 || tracks.len() < 10 {
+            if let Some(secondary_seed) = tracks
+                .iter()
+                .find(|t| t.id != seed_video_id)
+                .map(|t| t.id.clone())
+                && let Ok(more) = self.provider.autoplay_next(&secondary_seed).await
+            {
+                tracks.extend(more);
+            }
+        }
+        Ok(tracks)
+    }
+
+    /// Automatically populates or tops up the Up Next queue when `autoplay_radio` is enabled
+    /// and fewer than 5 upcoming tracks remain after the current track.
+    pub async fn expand_autoplay_queue(&self, seed_video_id: &str) -> CoreResult<usize> {
+        let should_expand = {
+            let fsm = self.fsm.lock().await;
+            let q = &fsm.snapshot.queue;
+            if !q.autoplay_radio || q.repeat == RepeatMode::One {
+                false
+            } else {
+                let remaining = q
+                    .current_index
+                    .map(|cur| q.items.len().saturating_sub(cur + 1))
+                    .unwrap_or(0);
+                remaining < 5
+            }
+        };
+        if !should_expand {
+            return Ok(0);
+        }
+
+        let radio = self.fetch_diverse_radio(seed_video_id).await?;
+        if radio.is_empty() {
+            return Ok(0);
+        }
+
+        let mut fsm = self.fsm.lock().await;
+        let still_relevant = fsm
+            .snapshot
+            .current_track
+            .as_ref()
+            .is_some_and(|t| t.id == seed_video_id)
+            || fsm
+                .snapshot
+                .queue
+                .items
+                .iter()
+                .any(|t| t.id == seed_video_id);
+        if !still_relevant {
+            return Ok(0);
+        }
+
+        let before = fsm.snapshot.queue.items.len();
+        QueueManager::merge_radio_tracks(&mut fsm.snapshot.queue, radio);
+        let added = fsm.snapshot.queue.items.len().saturating_sub(before);
+        if added > 0 {
+            self.publish_and_persist(&fsm);
+        }
+        Ok(added)
     }
 
     pub async fn previous(&self) -> CoreResult<()> {
@@ -539,6 +675,10 @@ impl PlaybackController {
             self.offline.clone(),
         );
 
+        if effects.reached_end {
+            return self.on_track_ended().await;
+        }
+
         if let Some((video_id, target_ms)) = effects.sponsor_skip {
             self.seek_ms(target_ms).await?;
             {
@@ -559,14 +699,32 @@ impl PlaybackController {
         }
 
         let fsm = self.fsm.lock().await;
-        self.publish_and_persist(&fsm);
+        // Throttle SQLite queue resume persistence to every 5s of playback delta.
+        let last_persist = self.last_resume_persist_ms.load(Ordering::SeqCst);
+        if position_ms.abs_diff(last_persist) >= 5_000 {
+            self.last_resume_persist_ms
+                .store(position_ms, Ordering::SeqCst);
+            let _ = self.cache.save_queue(&fsm.snapshot.queue);
+        }
+        self.bus
+            .publish(AppEvent::PlayerUpdated(fsm.snapshot.clone()));
         Ok(())
     }
 
-    /// Handles track completion from the native audio driver (`RepeatMode::One`, queue advance,
-    /// or `autoplay_next` radio expansion).
+    /// Handles track completion from the native audio driver (`SleepTimerState::EndOfTrack`,
+    /// `RepeatMode::One`, queue advance, or `autoplay_next` radio expansion).
     pub async fn on_track_ended(&self) -> CoreResult<()> {
-        let repeat = self.fsm.lock().await.snapshot.queue.repeat;
+        let (end_of_track_sleep, repeat) = {
+            let mut fsm = self.fsm.lock().await;
+            let eot = matches!(fsm.sleep_timer, SleepTimerState::EndOfTrack);
+            if eot {
+                fsm.set_sleep_timer(SleepTimerState::Off);
+            }
+            (eot, fsm.snapshot.queue.repeat)
+        };
+        if end_of_track_sleep {
+            return self.pause().await;
+        }
         if repeat == RepeatMode::One {
             return self.load_and_play_current(0).await;
         }
@@ -588,7 +746,7 @@ impl PlaybackController {
             AudioTelemetry::Loaded { duration_ms, .. } => {
                 if duration_ms > 0 {
                     let mut fsm = self.fsm.lock().await;
-                    if fsm.snapshot.duration_ms == 0 {
+                    if fsm.snapshot.duration_ms != duration_ms {
                         fsm.snapshot.duration_ms = duration_ms;
                         self.publish_and_persist(&fsm);
                     }
@@ -622,7 +780,7 @@ impl PlaybackController {
             } => {
                 if let Some(dur) = duration_ms.filter(|d| *d > 0) {
                     let mut fsm = self.fsm.lock().await;
-                    if fsm.snapshot.duration_ms == 0 {
+                    if fsm.snapshot.duration_ms != dur {
                         fsm.snapshot.duration_ms = dur;
                     }
                 }
