@@ -14,6 +14,7 @@ pub mod innertube;
 pub mod lyrics;
 pub mod palette;
 pub mod playback;
+pub mod potoken;
 pub mod proxy;
 pub mod solver;
 pub mod sponsorblock;

@@ -11,13 +11,15 @@ use std::sync::{Arc, OnceLock};
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use resonance_contract::{
-    AuthSession, CacheStats, CacheStore, HomeSection, LyricsDocument, LyricsProvider,
-    MusicProvider, PlayerSnapshot, Playlist, SearchResults, Track,
+    AppEvent, AuthSession, CacheStats, CacheStore, HomeSection, LikeAction, LyricsDocument,
+    LyricsProvider, MusicProvider, MutationCommand, PlayerSnapshot, Playlist, PlaylistEditOp,
+    SearchResults, Track, TrackId, WatchtimeReport,
 };
 use resonance_core::cache::{ChunkCache, DEFAULT_MAX_AUDIO_CACHE_BYTES, SqliteCacheStore};
-use resonance_core::innertube::{FileAuthStore, InnerTubeClient};
+use resonance_core::innertube::{FileAuthStore, InnerTubeClient, MutationWorker};
 use resonance_core::lyrics::CascadeLyricsProvider;
 use resonance_core::playback::PlaybackController;
+use resonance_core::potoken::{CachingPoTokenProvider, SidecarPoTokenProvider};
 use resonance_core::proxy::LoopbackProxy;
 use resonance_core::solver::QuickJsSolver;
 use resonance_core::sponsorblock::HttpSponsorBlockProvider;
@@ -47,6 +49,10 @@ pub enum LiveUpdate {
         signed_in: bool,
         banner: String,
     },
+    MutationFailed {
+        command: MutationCommand,
+        reason: String,
+    },
     StatusBanner(String),
 }
 
@@ -57,6 +63,7 @@ struct LiveRuntime {
     chunks: Arc<ChunkCache>,
     lyrics: Arc<CascadeLyricsProvider>,
     controller: Arc<PlaybackController>,
+    mutations: MutationWorker,
     tx: Sender<LiveUpdate>,
     rx: Receiver<LiveUpdate>,
 }
@@ -98,6 +105,19 @@ fn init_runtime() -> Result<LiveRuntime, String> {
         InnerTubeClient::new(cache.clone(), auth, solver)
             .map_err(|e| format!("InnerTubeClient init failed: {e}"))?,
     );
+    if let Ok(pot_url) = std::env::var("RESONANCE_POTOKEN_URL")
+        && !pot_url.trim().is_empty()
+    {
+        match SidecarPoTokenProvider::new(pot_url.trim()) {
+            Ok(sidecar) => {
+                let cached = CachingPoTokenProvider::new(sidecar).into_arc();
+                provider.set_po_token_provider(Some(cached));
+            }
+            Err(e) => {
+                log::warn!("ignoring invalid RESONANCE_POTOKEN_URL: {e}");
+            }
+        }
+    }
     let proxy = rt.block_on(async {
         LoopbackProxy::start(provider.clone(), chunks.clone())
             .await
@@ -109,6 +129,10 @@ fn init_runtime() -> Result<LiveRuntime, String> {
     let lyrics = Arc::new(CascadeLyricsProvider::new(provider.clone(), cache.clone()));
     let sponsorblock = Arc::new(HttpSponsorBlockProvider::new());
     let bus = resonance_contract::EventBus::new(128);
+    let mutations = {
+        let _guard = rt.enter();
+        MutationWorker::spawn(provider.clone(), bus.clone())
+    };
     let controller = Arc::new(PlaybackController::new(
         provider.clone(),
         audio,
@@ -116,10 +140,33 @@ fn init_runtime() -> Result<LiveRuntime, String> {
         proxy.clone(),
         lyrics.clone(),
         sponsorblock,
-        bus,
+        bus.clone(),
     ));
 
     let (tx, rx) = unbounded();
+    {
+        let mut bus_rx = bus.subscribe();
+        let ui_tx = tx.clone();
+        rt.spawn(async move {
+            while let Ok(ev) = bus_rx.recv().await {
+                match ev {
+                    AppEvent::MutationFailed { command, reason } => {
+                        let _ = ui_tx.send(LiveUpdate::MutationFailed { command, reason });
+                    }
+                    AppEvent::AuthStateChanged {
+                        signed_in: false,
+                        ..
+                    } => {
+                        let _ = ui_tx.send(LiveUpdate::AuthUpdated {
+                            signed_in: false,
+                            banner: "Session expired — please sign in again".into(),
+                        });
+                    }
+                    _ => {}
+                }
+            }
+        });
+    }
     let initial_snap = rt.block_on(controller.snapshot());
     let stats = cache.stats().unwrap_or_default();
     let signed_in = provider.current_session().is_some();
@@ -139,6 +186,7 @@ fn init_runtime() -> Result<LiveRuntime, String> {
         chunks,
         lyrics,
         controller,
+        mutations,
         tx,
         rx,
     })
@@ -264,4 +312,37 @@ pub fn dispatch_clear_caches() {
         let stats = cache.stats().unwrap_or_default();
         let _ = tx.send(LiveUpdate::CacheStatsUpdated(stats));
     });
+}
+
+pub fn dispatch_set_like(video_id: TrackId, action: LikeAction) {
+    let Some(rt) = runtime() else { return };
+    let cmd = MutationCommand::SetLike { video_id, action };
+    if let Err(e) = rt.mutations.enqueue(cmd.clone()) {
+        let _ = rt.tx.send(LiveUpdate::MutationFailed {
+            command: cmd,
+            reason: e.to_string(),
+        });
+    }
+}
+
+pub fn dispatch_edit_playlist(playlist_id: String, op: PlaylistEditOp) {
+    let Some(rt) = runtime() else { return };
+    let cmd = MutationCommand::EditPlaylist { playlist_id, op };
+    if let Err(e) = rt.mutations.enqueue(cmd.clone()) {
+        let _ = rt.tx.send(LiveUpdate::MutationFailed {
+            command: cmd,
+            reason: e.to_string(),
+        });
+    }
+}
+
+pub fn dispatch_report_atr(report: WatchtimeReport) {
+    let Some(rt) = runtime() else { return };
+    let cmd = MutationCommand::ReportAtr(report);
+    if let Err(e) = rt.mutations.enqueue(cmd.clone()) {
+        let _ = rt.tx.send(LiveUpdate::MutationFailed {
+            command: cmd,
+            reason: e.to_string(),
+        });
+    }
 }

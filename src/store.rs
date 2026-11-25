@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use nsh_core::prelude::*;
 use resonance_contract::{
-    CacheStats, HistoryEntry, HomeSection, LyricsDocument, PlayerSnapshot, PlayerState, Playlist,
-    QueueState, RepeatMode, Track,
+    CacheStats, HistoryEntry, HomeSection, LikeAction, LyricsDocument, MutationCommand,
+    PlayerSnapshot, PlayerState, Playlist, QueueState, RepeatMode, Track, TrackId,
 };
 use resonance_core::fixture::{fixture_home_sections, fixture_lyrics, fixture_tracks};
 use resonance_core::palette::{AmbientPalette, palette_for_track};
@@ -418,6 +418,36 @@ fn apply_live_update(update: LiveUpdate) {
                 s.status_banner = Some(banner);
             });
         }
+        LiveUpdate::MutationFailed { command, reason } => {
+            state_signal().update(|s| {
+                if let MutationCommand::SetLike { video_id, action } = command {
+                    match action {
+                        LikeAction::Like => {
+                            s.liked_tracks.retain(|t| t.id != video_id);
+                            if let Some(cur) = s.player.current_track.as_mut()
+                                && cur.id == video_id
+                            {
+                                cur.is_liked = false;
+                            }
+                        }
+                        LikeAction::RemoveLike => {
+                            if let Some(cur) = s.player.current_track.as_mut()
+                                && cur.id == video_id
+                            {
+                                cur.is_liked = true;
+                                if !s.liked_tracks.iter().any(|t| t.id == video_id) {
+                                    s.liked_tracks.insert(0, cur.clone());
+                                }
+                            }
+                        }
+                        LikeAction::Dislike => {
+                            s.disliked_ids.retain(|id| id != &video_id);
+                        }
+                    }
+                }
+                s.status_banner = Some(format!("Action failed: {reason}"));
+            });
+        }
         LiveUpdate::StatusBanner(msg) => {
             state_signal().update(|s| {
                 s.status_banner = Some(msg);
@@ -754,18 +784,29 @@ pub fn is_current_disliked() -> bool {
 }
 
 pub fn toggle_dislike_current() {
+    let live = !is_fixture_mode();
+    let mut dispatch: Option<(TrackId, LikeAction)> = None;
     state_signal().update(|s| {
         if let Some(cur) = s.player.current_track.as_mut() {
             if let Some(pos) = s.disliked_ids.iter().position(|id| id == &cur.id) {
                 s.disliked_ids.remove(pos);
+                if live && s.signed_in {
+                    dispatch = Some((cur.id.clone(), LikeAction::RemoveLike));
+                }
             } else {
                 s.disliked_ids.push(cur.id.clone());
                 cur.is_liked = false;
                 s.liked_tracks.retain(|t| t.id != cur.id);
                 s.status_banner = Some(format!("Less like \"{}\"", cur.title));
+                if live && s.signed_in {
+                    dispatch = Some((cur.id.clone(), LikeAction::Dislike));
+                }
             }
         }
     });
+    if let Some((video_id, action)) = dispatch {
+        live_engine::dispatch_set_like(video_id, action);
+    }
 }
 
 pub fn library_filter() -> LibraryFilter {
@@ -1148,6 +1189,8 @@ pub fn cycle_repeat() {
 }
 
 pub fn toggle_like_current() {
+    let live = !is_fixture_mode();
+    let mut dispatch: Option<(TrackId, LikeAction)> = None;
     state_signal().update(|s| {
         if let Some(cur) = s.player.current_track.as_mut() {
             cur.is_liked = !cur.is_liked;
@@ -1156,14 +1199,25 @@ pub fn toggle_like_current() {
                 if !s.liked_tracks.iter().any(|t| t.id == cur.id) {
                     s.liked_tracks.insert(0, cur.clone());
                 }
+                if live && s.signed_in {
+                    dispatch = Some((cur.id.clone(), LikeAction::Like));
+                }
             } else {
                 s.liked_tracks.retain(|t| t.id != cur.id);
+                if live && s.signed_in {
+                    dispatch = Some((cur.id.clone(), LikeAction::RemoveLike));
+                }
             }
         }
     });
+    if let Some((video_id, action)) = dispatch {
+        live_engine::dispatch_set_like(video_id, action);
+    }
 }
 
 pub fn toggle_like_track(mut track: Track) {
+    let live = !is_fixture_mode();
+    let mut dispatch: Option<(TrackId, LikeAction)> = None;
     state_signal().update(|s| {
         let already = s.liked_tracks.iter().any(|t| t.id == track.id);
         let next_liked = !already;
@@ -1179,7 +1233,18 @@ pub fn toggle_like_track(mut track: Track) {
         {
             cur.is_liked = next_liked;
         }
+        if live && s.signed_in {
+            let action = if next_liked {
+                LikeAction::Like
+            } else {
+                LikeAction::RemoveLike
+            };
+            dispatch = Some((track.id.clone(), action));
+        }
     });
+    if let Some((video_id, action)) = dispatch {
+        live_engine::dispatch_set_like(video_id, action);
+    }
 }
 
 pub fn set_autoplay_radio(enabled: bool) {

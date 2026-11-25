@@ -6,6 +6,7 @@ pub mod client;
 pub mod clients;
 pub mod formats;
 pub mod matrix;
+pub mod mutations;
 pub mod parser;
 pub mod provider_adapter;
 
@@ -14,4 +15,5 @@ pub use client::InnerTubeClient;
 pub use clients::{AuthMode, ClientConfig, ClientKind};
 pub use formats::TargetPlatform;
 pub use matrix::{AccountTier, ClientMatrix, ClientMatrixEntry, PoTokenPolicy};
+pub use mutations::MutationWorker;
 pub use provider_adapter::{BrowseDelegate, CompositeMusicProvider, PlaybackResolver};

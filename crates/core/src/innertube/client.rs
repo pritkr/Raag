@@ -12,12 +12,13 @@ use std::time::Duration;
 use async_trait::async_trait;
 use resonance_contract::{
     AuthError, AuthSession, AuthStore, CacheStore, CoreError, CoreResult, HomeSection,
-    LyricsDocument, MusicProvider, Playlist, ProviderError, SearchResults, StreamInfo, Track,
+    LyricsDocument, MusicProvider, Playlist, PoTokenError, PoTokenProvider, PoTokenRequest,
+    PoTokenScope, ProviderError, SearchResults, StreamInfo, Track,
 };
 use serde_json::{Value, json};
 
 use crate::innertube::auth::{apply_cookie_rotation, build_auth_headers};
-use crate::innertube::clients::{ClientConfig, WEB_REMIX};
+use crate::innertube::clients::{AuthMode, ClientConfig, WEB_REMIX};
 use crate::innertube::formats::TargetPlatform;
 use crate::innertube::matrix::{AccountTier, ClientMatrix};
 use crate::innertube::parser::{
@@ -26,6 +27,7 @@ use crate::innertube::parser::{
     parse_player_response_for_platform, parse_search_response, parse_ytm_lyrics_response,
 };
 use crate::innertube::provider_adapter::PlaybackResolver;
+use crate::potoken::attach_pot_param;
 use crate::solver::SharedSolver;
 use crate::unix_secs;
 
@@ -54,6 +56,8 @@ pub struct InnerTubeClient {
     target_platform: TargetPlatform,
     /// Optional GVS PO token for free/anonymous web playback (bypassed for Premium subscribers).
     gvs_po_token: RwLock<Option<String>>,
+    /// Dependency-injected PO token provider (e.g. `CachingPoTokenProvider<SidecarPoTokenProvider>`).
+    po_token_provider: RwLock<Option<Arc<dyn PoTokenProvider>>>,
     /// Whether the active signed-in session has YouTube Music Premium (bypasses GVS PO token & unlocks 256 kbps).
     is_premium_account: RwLock<bool>,
 }
@@ -88,6 +92,7 @@ impl InnerTubeClient {
             client_matrix: RwLock::new(matrix),
             target_platform: TargetPlatform::current(),
             gvs_po_token: RwLock::new(None),
+            po_token_provider: RwLock::new(None),
             is_premium_account: RwLock::new(false),
         })
     }
@@ -98,6 +103,21 @@ impl InnerTubeClient {
 
     pub fn set_gvs_po_token(&self, token: Option<String>) {
         *self.gvs_po_token.write().unwrap() = token;
+    }
+
+    pub fn with_po_token_provider(self, provider: Arc<dyn PoTokenProvider>) -> Self {
+        *self.po_token_provider.write().unwrap() = Some(provider);
+        self
+    }
+
+    pub fn set_po_token_provider(&self, provider: Option<Arc<dyn PoTokenProvider>>) {
+        *self.po_token_provider.write().unwrap() = provider;
+    }
+
+    pub fn invalidate_po_token(&self) {
+        if let Some(provider) = self.po_token_provider.read().unwrap().as_ref() {
+            provider.invalidate(PoTokenScope::Gvs);
+        }
     }
 
     pub fn set_premium_account(&self, premium: bool) {
@@ -268,19 +288,90 @@ impl InnerTubeClient {
         Ok(json_val)
     }
 
+    pub(crate) fn web_remix_base_url(&self) -> String {
+        self.api_base_override
+            .read()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| WEB_REMIX.api_base.to_owned())
+    }
+
+    pub(crate) async fn post_authenticated_web_remix(
+        &self,
+        endpoint: &str,
+        payload: Value,
+    ) -> CoreResult<Value> {
+        if self.current_session().is_none() {
+            return Err(CoreError::Auth(AuthError::NotSignedIn));
+        }
+        self.post_innertube(&WEB_REMIX, endpoint, payload).await
+    }
+
+    pub(crate) fn evict_swr_cache(&self, key: &str) {
+        let _ = self.cache.evict_metadata(key);
+    }
+
     async fn resolve_with_client(
         &self,
         client: &ClientConfig,
         video_id: &str,
     ) -> CoreResult<StreamInfo> {
-        let payload = json!({
+        let tier = self.account_tier();
+        let entry = self
+            .client_matrix
+            .read()
+            .unwrap()
+            .entry_for(client.kind)
+            .cloned();
+
+        // Hard guard: AnonymousOnly clients (`ANDROID_VR`, `IOS`) NEVER receive cookies,
+        // `SAPISIDHASH`, `serviceIntegrityDimensions`, or `&pot=`.
+        let needs_pot = if matches!(client.auth_mode, AuthMode::AnonymousOnly)
+            || !client.allows_browser_cookies()
+        {
+            false
+        } else {
+            entry.is_some_and(|e| e.po_token_policy.requires_gvs_po_token(tier))
+        };
+
+        let pot_value = if needs_pot {
+            let provider = self.po_token_provider.read().unwrap().clone();
+            if let Some(provider) = provider {
+                let req = PoTokenRequest {
+                    client_name: client.client_name.to_owned(),
+                    scope: PoTokenScope::Gvs,
+                    video_id: video_id.to_owned(),
+                    visitor_data: self.current_visitor_data(),
+                    signed_in: self.current_session().is_some(),
+                };
+                Some(provider.mint_token(&req).await?.value)
+            } else if let Some(legacy) = self.gvs_po_token.read().unwrap().clone() {
+                Some(legacy)
+            } else {
+                return Err(CoreError::PoToken(PoTokenError::Unavailable(
+                    "no po token provider configured".to_owned(),
+                )));
+            }
+        } else {
+            None
+        };
+
+        let mut payload = json!({
             "videoId": video_id,
             "contentCheckOk": true,
             "racyCheckOk": true,
         });
+        if let Some(ref pot) = pot_value
+            && let Some(obj) = payload.as_object_mut()
+        {
+            obj.insert(
+                "serviceIntegrityDimensions".into(),
+                json!({ "poToken": pot }),
+            );
+        }
+
         let resp = self.post_innertube(client, "player", payload).await?;
         let now = unix_secs();
-        let tier = self.account_tier();
         let raw = parse_player_response_for_platform(
             video_id,
             client.client_name,
@@ -321,11 +412,17 @@ impl InnerTubeClient {
             }));
         };
 
+        let final_url = if let Some(ref pot) = pot_value {
+            attach_pot_param(&url, pot)?
+        } else {
+            url
+        };
+
         Ok(finalize_stream_info(
             video_id,
             client.client_name,
             raw,
-            url,
+            final_url,
             now,
         ))
     }
@@ -456,7 +553,8 @@ impl MusicProvider for InnerTubeClient {
         }
 
         let tier = self.account_tier();
-        let has_gvs_po = self.gvs_po_token.read().unwrap().is_some();
+        let has_gvs_po = self.po_token_provider.read().unwrap().is_some()
+            || self.gvs_po_token.read().unwrap().is_some();
         let chain = self
             .client_matrix
             .read()

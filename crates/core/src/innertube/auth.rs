@@ -111,6 +111,8 @@ pub fn redact_secrets(input: &str) -> String {
             || lower.contains("authorization:")
             || lower.contains("cookie:")
             || lower.contains("googlevideo.com/videoplayback")
+            || lower.contains("pot=")
+            || lower.contains("potoken")
         {
             let has_nl = line.ends_with('\n');
             out.push_str("[REDACTED_SENSITIVE_LINE]");
