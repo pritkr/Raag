@@ -20,6 +20,8 @@ jobs:
   verify:
     name: Fast Verification
     runs-on: ubuntu-24.04
+    env:
+      RUSTFLAGS: "-C link-arg=-Wl,--allow-multiple-definition"
     steps:
       - uses: actions/checkout@v4
 
@@ -69,6 +71,13 @@ jobs:
           yes | "$SDKMANAGER" --licenses > /dev/null || true
           "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0" "ndk;28.2.13676358"
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
+          NDK_TOOLCHAIN="$ANDROID_HOME/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$NDK_TOOLCHAIN/bin/aarch64-linux-android26-clang" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_AR=$NDK_TOOLCHAIN/bin/llvm-ar" >> "$GITHUB_ENV"
+          echo "CC_aarch64_linux_android=$NDK_TOOLCHAIN/bin/aarch64-linux-android26-clang" >> "$GITHUB_ENV"
+          echo "CXX_aarch64_linux_android=$NDK_TOOLCHAIN/bin/aarch64-linux-android26-clang++" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=$NDK_TOOLCHAIN/bin/llvm-ar" >> "$GITHUB_ENV"
+          echo "BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android=--sysroot=$NDK_TOOLCHAIN/sysroot -target aarch64-linux-android26" >> "$GITHUB_ENV"
           echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
           echo "$ANDROID_HOME/build-tools/35.0.0" >> "$GITHUB_PATH"
 
@@ -260,6 +269,8 @@ jobs:
   linux:
     name: Linux (.deb + .tar.gz)
     runs-on: ubuntu-24.04
+    env:
+      RUSTFLAGS: "-C link-arg=-Wl,--allow-multiple-definition"
     steps:
       - uses: actions/checkout@v4
 
