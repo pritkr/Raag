@@ -8,6 +8,7 @@
 use std::rc::Rc;
 
 use nsh_base::{avatar, button, input, tab, tabs, theme};
+use nsh_core::element::ImageSrc;
 use nsh_core::prelude::*;
 
 use crate::screens::{
@@ -23,9 +24,74 @@ use crate::ui::controls::{
 use crate::ui::icons::{IconKind, icon, liked_music_tile_svg, yt_music_icon};
 use crate::ui::tokens::{
     MOBILE_MIN_TOUCH_TARGET, color_ambient_warm, color_sidebar_border, color_sidebar_surface,
-    frosted_bar_surface, glass_hairline, is_desktop_layout, is_desktop_panel_visible,
-    pill_glass_hover, pill_glass_surface, radius_card, radius_pill, sidebar_active_surface,
+    cover_gradient_pair, frosted_bar_surface, glass_hairline, is_desktop_layout,
+    is_desktop_panel_visible, pill_glass_hover, pill_glass_surface, radius_card, radius_pill,
+    sidebar_active_surface,
 };
+
+fn side_panel_queue_artwork(
+    track: Memo<Option<resonance_contract::Track>>,
+) -> impl IntoElement {
+    let has_art = move || {
+        track.with(|t| {
+            t.as_ref()
+                .and_then(|x| store::resolve_artwork_url(x.artwork_url.clone()))
+                .is_some()
+        })
+    };
+
+    view()
+        .w(px(38.0))
+        .h(px(38.0))
+        .rounded(px(6.0))
+        .bg_linear_to_br()
+        .gradient_from(move || {
+            let seed = track.with(|t| {
+                t.as_ref()
+                    .map(|x| x.id.clone())
+                    .unwrap_or_else(|| "q".into())
+            });
+            cover_gradient_pair(&seed).0
+        })
+        .gradient_to(move || {
+            let seed = track.with(|t| {
+                t.as_ref()
+                    .map(|x| x.id.clone())
+                    .unwrap_or_else(|| "q".into())
+            });
+            cover_gradient_pair(&seed).1
+        })
+        .border_1()
+        .border_color(glass_hairline)
+        .items_center()
+        .justify_center()
+        .overflow_hidden()
+        .child(
+            when(has_art, move || {
+                image(move || {
+                    let raw = track.with(|t| t.as_ref().and_then(|x| x.artwork_url.clone()));
+                    ImageSrc::from(store::resolve_artwork_url(raw).unwrap_or_default())
+                })
+                .size(px(38.0))
+                .object_fit(ResizeMode::Cover)
+                .rounded(px(6.0))
+            })
+            .otherwise(move || {
+                text(move || {
+                    track.with(|t| {
+                        SharedString::from(
+                            t.as_ref()
+                                .map(|x| x.fallback_monogram())
+                                .unwrap_or_else(|| "♪".into()),
+                        )
+                    })
+                })
+                .text_xs()
+                .font_weight(FontWeight::BOLD)
+                .text_color(move || theme().primary_foreground)
+            }),
+        )
+}
 
 fn nav_test_id(tab: AppTab) -> &'static str {
     match tab {
@@ -590,6 +656,12 @@ fn desktop_top_header() -> impl IntoElement {
                                     input()
                                         .test_id("header-search-input")
                                         .value(move || header_query.get())
+                                        .on_focus(|| {
+                                            crate::ui::controls::set_text_input_focused(true);
+                                        })
+                                        .on_blur(|| {
+                                            crate::ui::controls::set_text_input_focused(false);
+                                        })
                                         .on_change(move |txt: &str| {
                                             header_query.set(txt.to_owned());
                                             store::run_search(txt);
@@ -786,48 +858,65 @@ fn desktop_side_panel() -> impl IntoElement {
                         button()
                             .w_full()
                             .min_h(px(48.0))
-                            .px_3()
-                            .py_2()
+                            .px_2p5()
+                            .py_1p5()
                             .rounded(radius_card)
                             .style_when(active, |s| s.bg(sidebar_active_surface))
                             .hover(|s| s.bg(pill_glass_surface))
                             .on_press(move || store::jump_queue(at.index()))
                             .child(
-                                text(move || {
-                                    track.with(|t| {
-                                        SharedString::from(
-                                            t.as_ref().map(|x| x.title.clone()).unwrap_or_default(),
-                                        )
-                                    })
-                                })
-                                .number_of_lines(1)
-                                .text_xs()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(move || {
-                                    if active() {
-                                        theme().primary
-                                    } else {
-                                        theme().foreground
-                                    }
-                                }),
-                            )
-                            .child(
-                                text(move || {
-                                    track.with(|t| {
-                                        SharedString::from(
-                                            t.as_ref()
-                                                .map(|x| x.artist_display())
-                                                .unwrap_or_default(),
-                                        )
-                                    })
-                                })
-                                .number_of_lines(1)
-                                .text_xs()
-                                .text_color(move || theme().muted_foreground),
+                                view()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap_2p5()
+                                    .w_full()
+                                    .min_w(px(0.0))
+                                    .child(side_panel_queue_artwork(track))
+                                    .child(
+                                        view()
+                                            .flex_1()
+                                            .min_w(px(0.0))
+                                            .gap_0p5()
+                                            .child(
+                                                text(move || {
+                                                    track.with(|t| {
+                                                        SharedString::from(
+                                                            t.as_ref()
+                                                                .map(|x| x.title.clone())
+                                                                .unwrap_or_default(),
+                                                        )
+                                                    })
+                                                })
+                                                .number_of_lines(1)
+                                                .text_xs()
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_color(move || {
+                                                    if active() {
+                                                        theme().primary
+                                                    } else {
+                                                        theme().foreground
+                                                    }
+                                                }),
+                                            )
+                                            .child(
+                                                text(move || {
+                                                    track.with(|t| {
+                                                        SharedString::from(
+                                                            t.as_ref()
+                                                                .map(|x| x.artist_display())
+                                                                .unwrap_or_default(),
+                                                        )
+                                                    })
+                                                })
+                                                .number_of_lines(1)
+                                                .text_xs()
+                                                .text_color(move || theme().muted_foreground),
+                                            ),
+                                    ),
                             )
                     })
                     .keys(store::queue_ids)
-                    .estimated_item_size(px(52.0))
+                    .estimated_item_size(px(54.0))
                     .flex_1()
                 })
                 .otherwise(|| {
