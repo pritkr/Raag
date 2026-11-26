@@ -143,6 +143,15 @@ pub struct QueueState {
     pub resume_position_ms: u64,
 }
 
+/// Non-repeating shuffle order preserving original queue order.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ShuffleDeck {
+    /// Original unshuffled indices into `QueueState::items` in shuffled playback order.
+    pub order: Vec<usize>,
+    /// Current cursor inside `order`.
+    pub cursor: usize,
+}
+
 impl QueueState {
     pub fn current_track(&self) -> Option<&Track> {
         self.current_index.and_then(|idx| self.items.get(idx))

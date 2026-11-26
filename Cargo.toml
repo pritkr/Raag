@@ -94,6 +94,7 @@ crossbeam-channel.workspace = true
 ed25519-dalek.workspace = true
 hex.workspace = true
 rand.workspace = true
+sha2.workspace = true
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni.workspace = true

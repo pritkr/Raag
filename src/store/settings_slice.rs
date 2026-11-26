@@ -1,8 +1,9 @@
 //! Settings, Theme, Auth credentials status, Audio DSP config, and PO Token diagnostics slice.
 
 use resonance_contract::{
-    AccountProfile, AuthBackendStatus, CredentialBackendKind, PersistedEqPreset, PersistedTheme,
-    PoTokenDiagnostics, PoTokenHealthStatus, RemoteConfigStatus, SettingsV1,
+    AccountProfile, AuthBackendStatus, CredentialBackendKind, OfflineQualityPreference,
+    PersistedEqPreset, PersistedTheme, PoTokenDiagnostics, PoTokenHealthStatus, RemoteConfigStatus,
+    SettingsV1,
 };
 use resonance_core::audio_dsp::{DspConfig, EqPreset};
 
@@ -48,6 +49,27 @@ impl AudioDspCapability {
             }
         }
     }
+
+    pub fn to_contract(self) -> resonance_contract::AudioDspCapability {
+        match self {
+            Self::ActivePcmPipeline => resonance_contract::AudioDspCapability::NativePcmPipeline,
+            Self::ExternalUrlStreamOnly => {
+                resonance_contract::AudioDspCapability::ExternalUrlStreamOnly
+            }
+        }
+    }
+
+    pub fn from_contract(cap: resonance_contract::AudioDspCapability) -> Self {
+        match cap {
+            resonance_contract::AudioDspCapability::NativePcmPipeline
+            | resonance_contract::AudioDspCapability::AndroidAudioProcessorJni => {
+                Self::ActivePcmPipeline
+            }
+            resonance_contract::AudioDspCapability::ExternalUrlStreamOnly => {
+                Self::ExternalUrlStreamOnly
+            }
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -69,6 +91,12 @@ pub struct SettingsSlice {
     pub tv_oauth_verification_url: Option<String>,
     pub tv_oauth_expires_in_secs: u64,
     pub tv_oauth_status: Option<String>,
+    pub playback_speed: f32,
+    pub preserve_pitch: bool,
+    pub wifi_only_downloads: bool,
+    pub offline_quality: OfflineQualityPreference,
+    pub keep_liked_songs_offline: bool,
+    pub atr_watchtime_sync: bool,
 }
 
 impl Default for SettingsSlice {
@@ -143,6 +171,12 @@ impl SettingsSlice {
             tv_oauth_verification_url: None,
             tv_oauth_expires_in_secs: 0,
             tv_oauth_status: None,
+            playback_speed: defaults.playback_speed,
+            preserve_pitch: defaults.preserve_pitch,
+            wifi_only_downloads: defaults.wifi_only_downloads,
+            offline_quality: defaults.offline_quality,
+            keep_liked_songs_offline: defaults.keep_liked_songs_offline,
+            atr_watchtime_sync: defaults.atr_watchtime_sync,
         }
     }
 
@@ -172,10 +206,17 @@ impl SettingsSlice {
         self.offline_quota_bytes = persisted.offline_quota_bytes;
         self.update_channel = persisted.update_channel.clone();
         self.local_music_dirs = persisted.local_music_dirs.clone();
+        self.playback_speed = persisted.playback_speed.clamp(0.5, 2.0);
+        self.preserve_pitch = persisted.preserve_pitch;
+        self.wifi_only_downloads = persisted.wifi_only_downloads;
+        self.offline_quality = persisted.offline_quality;
+        self.keep_liked_songs_offline = persisted.keep_liked_songs_offline;
+        self.atr_watchtime_sync = persisted.atr_watchtime_sync;
 
         playback.player.sponsorblock_enabled = persisted.sponsorblock_enabled;
         playback.player.offline_mode = persisted.offline_mode;
-        playback.player.volume = persisted.volume.clamp(0.0, 1.0);
+        playback.player.volume = persisted.volume.clamp(0.0, 1.6);
+        playback.player.queue.autoplay_radio = persisted.autoplay_radio;
     }
 
     pub fn to_persisted_settings(&self, playback: &PlaybackSlice) -> SettingsV1 {
@@ -198,8 +239,15 @@ impl SettingsSlice {
         };
         settings.eq_gains_db = self.dsp_config.eq_gains_db;
         settings.crossfade_ms = self.dsp_config.crossfade_ms;
+        settings.playback_speed = self.playback_speed.clamp(0.5, 2.0);
+        settings.preserve_pitch = self.preserve_pitch;
         settings.offline_mode = playback.player.offline_mode;
-        settings.volume = playback.player.volume.clamp(0.0, 1.0);
+        settings.wifi_only_downloads = self.wifi_only_downloads;
+        settings.offline_quality = self.offline_quality;
+        settings.keep_liked_songs_offline = self.keep_liked_songs_offline;
+        settings.volume = playback.player.volume.clamp(0.0, 1.6);
+        settings.autoplay_radio = playback.player.queue.autoplay_radio;
+        settings.atr_watchtime_sync = self.atr_watchtime_sync;
         settings.offline_quota_bytes = self.offline_quota_bytes;
         settings.update_channel = self.update_channel.clone();
         settings.local_music_dirs = self.local_music_dirs.clone();

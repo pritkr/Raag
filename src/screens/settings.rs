@@ -381,94 +381,6 @@ fn cache_card() -> impl IntoElement {
         .child(secondary_button("Clear Cache", store::clear_caches))
 }
 
-fn audio_dsp_card() -> impl IntoElement {
-    view()
-        .p_4()
-        .gap_3()
-        .rounded(radius_card)
-        .bg(move || theme().card)
-        .border_1()
-        .border_color(glass_hairline)
-        .child(
-            view()
-                .gap_1()
-                .child(
-                    view()
-                        .flex_row()
-                        .items_center()
-                        .justify_between()
-                        .gap_2()
-                        .child(
-                            text("Audio DSP & Gapless")
-                                .text_base()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(move || theme().foreground),
-                        )
-                        .child(
-                            view()
-                                .px_2p5()
-                                .py_1()
-                                .rounded_full()
-                                .bg(pill_glass_surface)
-                                .child(
-                                    text(move || {
-                                        SharedString::from(store::dsp_capability().badge_label())
-                                    })
-                                    .test_id("audio-dsp-capability-badge")
-                                    .text_xs()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(move || {
-                                        if store::dsp_capability().is_active() {
-                                            color_status_ok()
-                                        } else {
-                                            theme().muted_foreground
-                                        }
-                                    }),
-                                ),
-                        ),
-                )
-                .child(
-                    text(move || SharedString::from(store::dsp_capability().detail_text()))
-                        .text_xs()
-                        .text_color(move || theme().muted_foreground),
-                ),
-        )
-        .child(setting_switch(
-            "ReplayGain / EBU R128 Loudness",
-            || store::dsp_config().loudness_normalization,
-            store::set_loudness_normalization,
-        ))
-        .child(setting_switch(
-            "Skip Silence",
-            || store::dsp_config().silence_skip_enabled,
-            store::set_silence_skip,
-        ))
-        .child(
-            view()
-                .flex_row()
-                .flex_wrap()
-                .gap_2()
-                .child(secondary_button(
-                    move || {
-                        let preset = store::dsp_config().eq_preset;
-                        SharedString::from(format!("10-Band EQ: {}", preset.label()))
-                    },
-                    store::cycle_eq_preset,
-                ))
-                .child(secondary_button(
-                    move || {
-                        let ms = store::dsp_config().crossfade_ms;
-                        if ms == 0 {
-                            SharedString::from("Gapless (0s)")
-                        } else {
-                            SharedString::from(format!("Crossfade {}s", ms / 1000))
-                        }
-                    },
-                    store::cycle_crossfade_ms,
-                )),
-        )
-}
-
 fn stream_diagnostics_card() -> impl IntoElement {
     view()
         .p_4()
@@ -585,7 +497,7 @@ pub fn settings_sections() -> impl IntoElement {
                     .min_w(px(0.0))
                     .gap_4()
                     .child(preferences_card())
-                    .child(audio_dsp_card())
+                    .child(crate::screens::settings_dsp_card::dsp_settings_section())
                     .child(updater_card()),
             )
             .child(
@@ -605,7 +517,7 @@ pub fn settings_sections() -> impl IntoElement {
             .child(account_card(cookie_draft))
             .child(stream_diagnostics_card())
             .child(preferences_card())
-            .child(audio_dsp_card())
+            .child(crate::screens::settings_dsp_card::dsp_settings_section())
             .child(updater_card())
             .child(cache_card())
     })

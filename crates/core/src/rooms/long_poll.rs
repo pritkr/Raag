@@ -7,7 +7,8 @@ use resonance_contract::RoomWireMessage;
 use url::Url;
 
 use crate::rooms::protocol::{
-    CreateRoomRequest, CreateRoomResponse, JoinRoomRequest, JoinRoomResponse, RoomCommandRequest,
+    CreateRoomRequest, CreateRoomResponse, JoinRoomRequest, JoinRoomResponse,
+    KickParticipantRequest, RoomCommandRequest, VoteSkipRequest, VoteSkipResponse,
     redact_room_secrets,
 };
 
@@ -97,15 +98,63 @@ impl LongPollClient {
         room_code: &str,
         cmd: &RoomCommandRequest,
     ) -> Result<(), String> {
-        let resp = self
+        let mut req = self
             .http
             .post(self.endpoint(&format!("v1/rooms/{room_code}/cmd")))
-            .json(cmd)
+            .json(cmd);
+        if let Some(secret) = cmd.host_secret.as_deref() {
+            req = req.header("X-Host-Secret", secret);
+        }
+        let resp = req
             .send()
             .await
             .map_err(|e| redact_room_secrets(&e.to_string()))?;
         if !resp.status().is_success() {
             return Err(format!("room cmd failed with HTTP {}", resp.status()));
+        }
+        Ok(())
+    }
+
+    pub async fn vote_skip(
+        &self,
+        room_code: &str,
+        peer_id: &str,
+    ) -> Result<VoteSkipResponse, String> {
+        let resp = self
+            .http
+            .post(self.endpoint(&format!("v1/rooms/{room_code}/vote-skip")))
+            .json(&VoteSkipRequest {
+                peer_id: peer_id.to_owned(),
+            })
+            .send()
+            .await
+            .map_err(|e| redact_room_secrets(&e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(format!("vote_skip failed with HTTP {}", resp.status()));
+        }
+        resp.json::<VoteSkipResponse>()
+            .await
+            .map_err(|e| format!("invalid vote_skip response: {e}"))
+    }
+
+    pub async fn kick_participant(
+        &self,
+        room_code: &str,
+        req_body: &KickParticipantRequest,
+    ) -> Result<(), String> {
+        let mut req = self
+            .http
+            .post(self.endpoint(&format!("v1/rooms/{room_code}/kick")))
+            .json(req_body);
+        if let Some(secret) = req_body.host_secret.as_deref() {
+            req = req.header("X-Host-Secret", secret);
+        }
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| redact_room_secrets(&e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(format!("kick failed with HTTP {}", resp.status()));
         }
         Ok(())
     }

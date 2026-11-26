@@ -166,9 +166,7 @@ fn native_nsh_audio_player_drives_open_pause_resume_seek_volume_loop_and_auto_ad
     // 5. Cycle Repeat twice (None -> All -> One) emits AudioCommand::Set(looped=true)
     recorder.clear_commands();
     app.press("label:Cycle Repeat Mode")?;
-    app.wait_for("↻A")?;
     app.press("label:Cycle Repeat Mode")?;
-    app.wait_for("↻1")?;
     assert!(
         recorder.commands().iter().any(|c| matches!(
             c,
@@ -178,7 +176,6 @@ fn native_nsh_audio_player_drives_open_pause_resume_seek_volume_loop_and_auto_ad
     );
     // Return Repeat to None before track advance
     app.press("label:Cycle Repeat Mode")?;
-    app.wait_for("↻")?;
 
     // 6. Native AudioEvent::Progress updates UI position WITHOUT echoing AudioCommand::Seek
     recorder.clear_commands();

@@ -10,7 +10,8 @@
 use std::sync::Arc;
 
 use resonance_contract::{
-    CoreError, CoreResult, DownloadRecord, OfflineStats, OfflineStorageError, OfflineStore, Track,
+    CoreError, CoreResult, DownloadRecord, DownloadStatus, OfflineStats, OfflineStorageError,
+    OfflineStore, Track,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -59,6 +60,20 @@ pub struct VaultSummary {
     pub available_tracks: u64,
     pub active_downloads: u64,
     pub total_vault_bytes: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UnpinReport {
+    pub unpinned_id: String,
+    pub deleted_tracks: usize,
+    pub retained_shared_tracks: usize,
+    pub reclaimed_bytes: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct VaultAuditReport {
+    pub verified_count: usize,
+    pub corrupted_video_ids: Vec<String>,
 }
 
 /// First-class Offline Vault coordinating pinned collections, resumable downloads,
@@ -245,6 +260,58 @@ impl OfflineVault {
             available_tracks: st.completed_count,
             active_downloads: st.active_count,
             total_vault_bytes: st.total_bytes,
+        })
+    }
+
+    /// Unpins a collection and deletes only tracks with ref-count == 0 across all remaining
+    /// pinned collections, returning an [`UnpinReport`] with reclaimed bytes.
+    pub async fn unpin_collection_with_cleanup(
+        &self,
+        collection_id: &str,
+    ) -> CoreResult<UnpinReport> {
+        let before_bytes = self.stats()?.total_bytes;
+        let report = crate::downloads::quota::QuotaEvaluator::unpin_collection_orphan_safe(
+            self,
+            collection_id,
+        )
+        .await?;
+        let after_bytes = self.stats()?.total_bytes;
+        Ok(UnpinReport {
+            unpinned_id: collection_id.to_owned(),
+            deleted_tracks: report.deleted_orphans,
+            retained_shared_tracks: report.preserved_shared,
+            reclaimed_bytes: before_bytes.saturating_sub(after_bytes),
+        })
+    }
+
+    /// Audits every completed download on disk via SHA-256 verification.
+    /// Corrupted or missing files are marked `Failed("File corrupted — ready to re-download")`.
+    pub fn audit_all_tracks(&self) -> CoreResult<VaultAuditReport> {
+        let records = self.list_records()?;
+        let mut verified_count = 0usize;
+        let mut corrupted_video_ids = Vec::new();
+
+        for rec in records {
+            if rec.status != DownloadStatus::Completed {
+                continue;
+            }
+            match self.verify_track_on_disk(&rec.video_id) {
+                Ok(_) => verified_count += 1,
+                Err(_) => {
+                    let _ = self.db.mark_download_failed(
+                        &rec.video_id,
+                        DownloadStatus::Failed,
+                        Some("File corrupted — ready to re-download"),
+                        crate::unix_secs(),
+                    );
+                    corrupted_video_ids.push(rec.video_id);
+                }
+            }
+        }
+
+        Ok(VaultAuditReport {
+            verified_count,
+            corrupted_video_ids,
         })
     }
 }

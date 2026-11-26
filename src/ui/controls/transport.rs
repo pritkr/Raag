@@ -7,6 +7,8 @@ use resonance_contract::format_duration_ms;
 
 use crate::store::{self, AppTab, DesktopSidePanel};
 use crate::ui::controls::primitives::svg_icon_button;
+use crate::ui::controls::sleep_timer_sheet::{open_sleep_timer_sheet, sleep_timer_badge_label};
+use crate::ui::controls::speed_sheet::{open_speed_sheet, speed_badge_label};
 use crate::ui::icons::{IconKind, icon, reactive_icon};
 use crate::ui::tokens::{
     MOBILE_MIN_TOUCH_TARGET, color_control, color_control_fg, color_liked, color_player_accent,
@@ -401,6 +403,54 @@ pub fn desktop_player_bar() -> impl IntoElement {
                             .tabular_nums()
                             .text_color(move || theme().muted_foreground),
                         )
+                        .child(when(
+                            || speed_badge_label().is_some(),
+                            || {
+                                button()
+                                    .on_press(open_speed_sheet)
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_full()
+                                    .bg(move || theme().muted)
+                                    .child(
+                                        text(move || {
+                                            SharedString::from(
+                                                speed_badge_label().unwrap_or_default(),
+                                            )
+                                        })
+                                        .text_xs()
+                                        .tabular_nums()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(color_player_accent),
+                                    )
+                            },
+                        ))
+                        .child(when(
+                            || sleep_timer_badge_label().is_some(),
+                            || {
+                                button()
+                                    .on_press(open_sleep_timer_sheet)
+                                    .px_2()
+                                    .py_1()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap_1()
+                                    .rounded_full()
+                                    .bg(move || theme().muted)
+                                    .child(icon(IconKind::Moon, 12.0, color_player_accent))
+                                    .child(
+                                        text(move || {
+                                            SharedString::from(
+                                                sleep_timer_badge_label().unwrap_or_default(),
+                                            )
+                                        })
+                                        .text_xs()
+                                        .tabular_nums()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(color_player_accent),
+                                    )
+                            },
+                        ))
                         .child(
                             button()
                                 .accessibility_label("Player Bar Mute")

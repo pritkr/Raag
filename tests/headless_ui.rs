@@ -96,7 +96,7 @@ fn mobile_dark_fixture_journey_covers_now_playing_lyrics_queue_search_and_librar
     // Open Queue (Priority Surface #3)
     app.press("Up Next Queue")?;
     app.wait_for("Queue")?;
-    app.wait_for("Autoplay Radio")?;
+    app.wait_for("AUTOPLAY RADIO")?;
 
     // Open Search & filter by Tokyo
     app.press("id:nav-search")?;
@@ -104,9 +104,11 @@ fn mobile_dark_fixture_journey_covers_now_playing_lyrics_queue_search_and_librar
     app.type_text("id:search-input", "Tokyo")?;
     app.wait_for("夜に駆ける 🌙✨ — Tokyo Midnight Synthwave (2026 Remaster)")?;
 
-    // Open Library & Settings -> Clear Cache updates readout to 0.0 MB
+    // Open Library -> navigate to Settings via Library gear -> Clear Cache updates readout to 0.0 MB
     app.press("id:nav-library")?;
-    app.wait_for("Library & Settings")?;
+    app.wait_for("Library")?;
+    app.press("id:nav-settings-shortcut")?;
+    app.wait_for("Settings")?;
     app.wait_for("Clear Cache")?;
     app.press("Clear Cache")?;
     app.wait_for("Audio chunks: 0.0 MB (0 chunks) • Artwork: 0.0 MB • Metadata: 0 rows")?;
@@ -124,7 +126,7 @@ fn desktop_wide_layout_and_mobile_light_theme_render_cleanly() -> Result<(), Str
 
     let mut light_mobile = start_mobile(ColorScheme::Light);
     light_mobile.wait_for("Quick Picks")?;
-    light_mobile.press("id:nav-library")?;
+    light_mobile.press("id:nav-settings")?;
     light_mobile.wait_for("SponsorBlock (auto-skip non-music)")?;
     Ok(())
 }

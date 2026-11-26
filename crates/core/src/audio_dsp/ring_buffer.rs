@@ -177,6 +177,35 @@ impl<T: Copy + Send> SpscConsumer<T> {
     }
 }
 
+impl SpscConsumer<f32> {
+    /// Pops up to `out.len()` f32 samples; if an underrun occurs mid-buffer, applies a
+    /// smooth up-to-64-frame fade-to-zero on the tail of popped samples and zeroes the rest
+    /// so hardware callbacks never emit square-wave clicks.
+    pub fn pop_with_underrun_fade(&mut self, out: &mut [f32], channels: usize) -> usize {
+        let popped = self.pop_slice(out);
+        if popped < out.len() {
+            let ch = channels.max(1);
+            let popped_frames = popped / ch;
+            let fade_frames = popped_frames.min(64);
+            if fade_frames > 0 {
+                let start_frame = popped_frames - fade_frames;
+                let denom = fade_frames as f32;
+                for f in 0..fade_frames {
+                    let gain = 1.0 - ((f + 1) as f32 / denom);
+                    let base = (start_frame + f) * ch;
+                    for c in 0..ch {
+                        if base + c < popped {
+                            out[base + c] *= gain;
+                        }
+                    }
+                }
+            }
+            out[popped..].fill(0.0);
+        }
+        popped
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

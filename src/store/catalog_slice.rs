@@ -105,6 +105,8 @@ pub struct CatalogSlice {
     pub home_sections: Vec<HomeSection>,
     pub explore_sections: Vec<HomeSection>,
     pub explore_page: Option<ExplorePage>,
+    pub explore_loading: bool,
+    pub explore_error: Option<String>,
     pub home_mood_chips: Vec<MoodCategory>,
     pub mood_playlists: Vec<LibraryCollectionRef>,
     pub home_loading: bool,
@@ -156,6 +158,8 @@ impl CatalogSlice {
             home_sections,
             explore_sections: Vec::new(),
             explore_page: None,
+            explore_loading: false,
+            explore_error: None,
             home_mood_chips: Vec::new(),
             mood_playlists: Vec::new(),
             home_loading: !fixture,
@@ -231,6 +235,30 @@ impl CatalogSlice {
         if self.search_query == prefix {
             self.search_suggestions = suggestions;
         }
+    }
+
+    /// Records a search query in MRU-deduplicated local history (capped at 50 entries).
+    pub fn record_search_history(&mut self, query: &str) {
+        let trimmed = query.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        self.search_history
+            .retain(|q| !q.eq_ignore_ascii_case(trimmed));
+        self.search_history.insert(0, trimmed.to_owned());
+        self.search_history.truncate(50);
+    }
+
+    pub fn remove_search_history_item(&mut self, query: &str) {
+        self.search_history.retain(|q| q != query);
+    }
+
+    pub fn clear_search_history(&mut self) {
+        self.search_history.clear();
+    }
+
+    pub fn set_home_mood_chips(&mut self, chips: Vec<MoodCategory>) {
+        self.home_mood_chips = chips;
     }
 
     pub fn apply_search_loaded(
@@ -409,25 +437,6 @@ impl CatalogSlice {
     pub fn close_collection(&mut self) {
         self.selected_collection = None;
         self.collection_search_query.clear();
-    }
-
-    pub fn record_search_history(&mut self, query: &str) {
-        let trimmed = query.trim();
-        if trimmed.is_empty() {
-            return;
-        }
-        self.search_history
-            .retain(|item| !item.eq_ignore_ascii_case(trimmed));
-        self.search_history.insert(0, trimmed.to_owned());
-        self.search_history.truncate(20);
-    }
-
-    pub fn remove_search_history_item(&mut self, query: &str) {
-        self.search_history.retain(|item| item != query);
-    }
-
-    pub fn clear_search_history(&mut self) {
-        self.search_history.clear();
     }
 
     pub fn current_entity_route(&self) -> Option<&EntityRoute> {

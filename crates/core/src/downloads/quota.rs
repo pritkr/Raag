@@ -15,6 +15,65 @@ pub const DEFAULT_ESTIMATED_OPUS_BYTES: u64 = 4_500_000;
 /// Default estimated size per 256 kbps Premium track (7.5 MB).
 pub const DEFAULT_ESTIMATED_PREMIUM_BYTES: u64 = 7_500_000;
 
+/// Reserved collection IDs for ref-counted standalone downloads & auto-synced liked songs.
+pub const EXPLICIT_SINGLES_COLLECTION_ID: &str = "__explicit_singles__";
+pub const LIKED_SONGS_COLLECTION_ID: &str = "__liked_songs__";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QuotaAdmission {
+    Allowed {
+        remaining_bytes: u64,
+    },
+    BlockedQuotaExceeded {
+        used_bytes: u64,
+        quota_bytes: u64,
+        needed_bytes: u64,
+    },
+    DeferredMeteredNetwork,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VaultQuotaGuard {
+    /// `0` = Unlimited.
+    pub quota_bytes: u64,
+    pub wifi_only: bool,
+    pub is_metered_network: bool,
+}
+
+impl VaultQuotaGuard {
+    pub fn estimate_bytes(duration_ms: u64, target_kbps: u32) -> u64 {
+        if duration_ms == 0 || target_kbps == 0 {
+            return DEFAULT_ESTIMATED_OPUS_BYTES;
+        }
+        duration_ms
+            .saturating_mul(u64::from(target_kbps))
+            .saturating_div(8)
+    }
+
+    pub fn evaluate(&self, current_vault_bytes: u64, needed_bytes: u64) -> QuotaAdmission {
+        if self.wifi_only && self.is_metered_network {
+            return QuotaAdmission::DeferredMeteredNetwork;
+        }
+        if self.quota_bytes == 0 {
+            return QuotaAdmission::Allowed {
+                remaining_bytes: u64::MAX,
+            };
+        }
+        let projected = current_vault_bytes.saturating_add(needed_bytes);
+        if projected > self.quota_bytes {
+            QuotaAdmission::BlockedQuotaExceeded {
+                used_bytes: current_vault_bytes,
+                quota_bytes: self.quota_bytes,
+                needed_bytes,
+            }
+        } else {
+            QuotaAdmission::Allowed {
+                remaining_bytes: self.quota_bytes.saturating_sub(projected),
+            }
+        }
+    }
+}
+
 /// Standard quota presets offered in Settings & Library storage bar (bytes; `0` = Unlimited).
 pub const QUOTA_PRESETS_BYTES: [(u64, &str); 6] = [
     (1_024 * 1024 * 1024, "1 GB"),

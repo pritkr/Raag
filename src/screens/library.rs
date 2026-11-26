@@ -1,9 +1,8 @@
 //! Library Screen matching YouTube Music Desktop (`ref_5.jpg`) with:
 //! - Horizontal filter pills (`Playlists`, `Songs`, `Liked songs`, `Albums`, `Artists`,
-//!   `Podcasts`, `History`, `Uploads`, `Downloads`, `Settings`)
+//!   `Pinned Offline`, `Downloads`, `Local Files`, `Podcasts`, `History`, `Uploads`)
 //! - Action toolbar (`Play`, `Shuffle`, `Sort`, `"Find in this list"` live search)
 //! - Filtered track/collection/artist rows (`track_row_view`)
-//! - Always-mounted Preferences, Account & Offline Cache sections (`settings_sections()`)
 
 use std::collections::{HashMap, HashSet};
 
@@ -11,10 +10,10 @@ use nsh_base::{button, input, theme};
 use nsh_core::prelude::*;
 use resonance_contract::{DownloadRecord, DownloadStatus, HomeItem, Track};
 
-use crate::screens::settings::settings_sections;
 use crate::store::{self, AppTab, LibraryFilter};
 use crate::ui::controls::{
-    artwork_box, glass_pill_button, hero_pill_button, status_card, track_row_view,
+    artwork_box, glass_pill_button, hero_pill_button, set_text_input_focused, status_card,
+    track_row_view,
 };
 use crate::ui::icons::{IconKind, icon, liked_music_tile_svg};
 use crate::ui::tokens::{
@@ -83,9 +82,10 @@ fn active_tracks_for_filter(filter: LibraryFilter, query: &str, sort_asc: bool) 
         LibraryFilter::Playlists
         | LibraryFilter::Albums
         | LibraryFilter::Artists
+        | LibraryFilter::PinnedOffline
+        | LibraryFilter::LocalFiles
         | LibraryFilter::Podcasts
-        | LibraryFilter::Uploads
-        | LibraryFilter::Settings => store::liked_tracks(),
+        | LibraryFilter::Uploads => store::liked_tracks(),
     };
     filter_and_sort_tracks(raw, query, sort_asc)
 }
@@ -116,11 +116,12 @@ fn filter_pill(filter: LibraryFilter) -> impl IntoElement {
         LibraryFilter::LikedSongs => "lib-filter-liked",
         LibraryFilter::Albums => "lib-filter-albums",
         LibraryFilter::Artists => "lib-filter-artists",
+        LibraryFilter::PinnedOffline => "lib-filter-pinned",
+        LibraryFilter::Downloads => "lib-filter-downloads",
+        LibraryFilter::LocalFiles => "lib-filter-local",
         LibraryFilter::Podcasts => "lib-filter-podcasts",
         LibraryFilter::History => "lib-filter-history",
         LibraryFilter::Uploads => "lib-filter-uploads",
-        LibraryFilter::Downloads => "lib-filter-downloads",
-        LibraryFilter::Settings => "lib-filter-settings",
     };
 
     button()
@@ -1007,6 +1008,8 @@ fn action_toolbar(search_query: Signal<String>) -> impl IntoElement {
                                     search_query.set(txt.to_owned());
                                     store::set_library_search_query(txt);
                                 })
+                                .on_focus(|| set_text_input_focused(true))
+                                .on_blur(|| set_text_input_focused(false))
                                 .placeholder("Find in this list")
                                 .placeholder_color(|| color(theme().muted_foreground))
                                 .caret_color(|| color(theme().primary))
@@ -1049,20 +1052,46 @@ pub fn library_screen() -> impl IntoElement {
             .p_4()
             .pb_8()
             .gap_5()
-            // Header ("Library" hero title + "Library & Settings" subtitle for headless QA)
+            // Header ("Library" hero title + Settings shortcut gear)
             .child(
                 view()
-                    .gap_0p5()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
                     .child(
-                        text("Library")
-                            .text_2xl()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(move || theme().foreground),
+                        view()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .gap_0p5()
+                            .child(
+                                text("Library")
+                                    .text_2xl()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(move || theme().foreground),
+                            )
+                            .child(
+                                text("Your saved music, playlists, and offline downloads")
+                                    .text_xs()
+                                    .text_color(move || theme().muted_foreground),
+                            ),
                     )
                     .child(
-                        text("Library & Settings")
-                            .text_xs()
-                            .text_color(move || theme().muted_foreground),
+                        button()
+                            .test_id("nav-settings-shortcut")
+                            .accessibility_label("Open Settings")
+                            .w(px(MOBILE_MIN_TOUCH_TARGET))
+                            .h(px(MOBILE_MIN_TOUCH_TARGET))
+                            .items_center()
+                            .justify_center()
+                            .rounded_full()
+                            .bg(pill_glass_surface)
+                            .border_1()
+                            .border_color(glass_hairline)
+                            .hover(|s| s.bg(pill_glass_hover))
+                            .active(|s| s.opacity(0.75))
+                            .on_press(|| store::set_tab(AppTab::Settings))
+                            .child(icon(IconKind::Settings, 18.0, move || theme().foreground)),
                     ),
             )
             // Horizontal Filter Pills Row (ref_5.jpg)
@@ -1075,114 +1104,165 @@ pub fn library_screen() -> impl IntoElement {
                         .children(LibraryFilter::all().iter().copied().map(filter_pill)),
                 ),
             )
-            // Music Action Toolbar & Filtered Content (hidden when Settings tab focuses Settings at top)
-            .child(when(
-                move || store::library_filter() != LibraryFilter::Settings,
-                move || {
-                    view()
-                        .gap_4()
-                        .child(action_toolbar(search_sig))
-                        .child(dynamic(move || {
-                            let filter = store::library_filter();
-                            let query = store::library_search_query();
-                            let sort_asc = store::collection_sort_asc();
-                            let current_id =
-                                store::player_snapshot().current_track.map(|t| t.id);
-
-                            match filter {
-                                LibraryFilter::LikedSongs => {
-                                    let tracks = filter_and_sort_tracks(
-                                        store::liked_tracks(),
-                                        &query,
-                                        sort_asc,
-                                    );
-                                    render_track_list_view(
-                                        "Liked Songs",
-                                        tracks,
-                                        current_id,
-                                        "No liked songs yet",
-                                        "Tap the heart icon on Now Playing or any track to save favorites locally.",
-                                    )
-                                }
-                                LibraryFilter::History => {
-                                    let hist: Vec<Track> = store::history_entries()
-                                        .into_iter()
-                                        .map(|e| e.track)
-                                        .collect();
-                                    let tracks = filter_and_sort_tracks(hist, &query, sort_asc);
-                                    render_track_list_view(
-                                        "Recently Played",
-                                        tracks,
-                                        current_id,
-                                        "No listening history yet",
-                                        "Tracks you play appear here automatically.",
-                                    )
-                                }
-                                LibraryFilter::Songs => {
-                                    let tracks = filter_and_sort_tracks(
-                                        collect_all_songs(),
-                                        &query,
-                                        sort_asc,
-                                    );
-                                    render_track_list_view(
-                                        "Songs",
-                                        tracks,
-                                        current_id,
-                                        "No songs in library",
-                                        "Play or search tracks on YouTube Music to build your song list.",
-                                    )
-                                }
-                                LibraryFilter::Playlists => {
-                                    render_playlists_view(&query, sort_asc)
-                                }
-                                LibraryFilter::Albums => render_albums_view(&query, sort_asc),
-                                LibraryFilter::Artists => render_artists_view(&query, sort_asc),
-                                LibraryFilter::Downloads => {
-                                    render_downloads_view(&query, sort_asc, current_id)
-                                }
-                                LibraryFilter::Podcasts => status_card(
-                                    "No podcasts saved",
-                                    "Browse Home or Search to discover shows and episodes.",
-                                    Some("Browse Home"),
-                                    Some(Box::new(|| store::set_tab(AppTab::Home))),
-                                )
-                                .into_element(),
-                                LibraryFilter::Uploads => status_card(
-                                    "No uploads available",
-                                    "Sign in with YouTube Music cookies below or browse Home.",
-                                    Some("Open Search"),
-                                    Some(Box::new(|| store::set_tab(AppTab::Search))),
-                                )
-                                .into_element(),
-                                LibraryFilter::Settings => view().into_element(),
-                            }
-                        }))
-                },
-            ))
-            // Always-mounted Settings, Account & Offline Cache section so headless QA and quick access work seamlessly
+            // Music Action Toolbar & Filtered Content
             .child(
                 view()
-                    .pt_2()
-                    .gap_3()
-                    .border_t_1()
-                    .border_color(glass_hairline)
-                    .child(
-                        view()
-                            .flex_row()
-                            .items_center()
-                            .justify_between()
-                            .gap_2()
-                            .child(
-                                text("Account, Preferences & Offline Cache")
-                                    .text_lg()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(move || theme().foreground),
+                    .gap_4()
+                    .child(action_toolbar(search_sig))
+                    .child(dynamic(move || {
+                        let filter = store::library_filter();
+                        let query = store::library_search_query();
+                        let sort_asc = store::collection_sort_asc();
+                        let current_id =
+                            store::player_snapshot().current_track.map(|t| t.id);
+
+                        match filter {
+                            LibraryFilter::LikedSongs => {
+                                let tracks = filter_and_sort_tracks(
+                                    store::liked_tracks(),
+                                    &query,
+                                    sort_asc,
+                                );
+                                render_track_list_view(
+                                    "Liked Songs",
+                                    tracks,
+                                    current_id,
+                                    "No liked songs yet",
+                                    "Tap the heart icon on Now Playing or any track to save favorites locally.",
+                                )
+                            }
+                            LibraryFilter::History => {
+                                let hist: Vec<Track> = store::history_entries()
+                                    .into_iter()
+                                    .map(|e| e.track)
+                                    .collect();
+                                let tracks = filter_and_sort_tracks(hist, &query, sort_asc);
+                                render_track_list_view(
+                                    "Recently Played",
+                                    tracks,
+                                    current_id,
+                                    "No listening history yet",
+                                    "Tracks you play appear here automatically.",
+                                )
+                            }
+                            LibraryFilter::Songs => {
+                                let tracks = filter_and_sort_tracks(
+                                    collect_all_songs(),
+                                    &query,
+                                    sort_asc,
+                                );
+                                render_track_list_view(
+                                    "Songs",
+                                    tracks,
+                                    current_id,
+                                    "No songs in library",
+                                    "Play or search tracks on YouTube Music to build your song list.",
+                                )
+                            }
+                            LibraryFilter::Playlists => {
+                                render_playlists_view(&query, sort_asc)
+                            }
+                            LibraryFilter::Albums => render_albums_view(&query, sort_asc),
+                            LibraryFilter::Artists => render_artists_view(&query, sort_asc),
+                            LibraryFilter::PinnedOffline => {
+                                let pinned = store::pinned_collections();
+                                if pinned.is_empty() {
+                                    status_card(
+                                        "No pinned collections",
+                                        "Pin an album or playlist to keep it available offline.",
+                                        None,
+                                        None,
+                                    )
+                                    .into_element()
+                                } else {
+                                    view()
+                                        .gap_2()
+                                        .children(pinned.into_iter().map(|p| {
+                                            let pid = p.id.clone();
+                                            let title = p.title.clone();
+                                            let sub = format!("{} tracks", p.tracks.len());
+                                            button()
+                                                .w_full()
+                                                .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                                                .px_3()
+                                                .py_2()
+                                                .flex_row()
+                                                .items_center()
+                                                .justify_between()
+                                                .rounded(radius_card)
+                                                .bg(move || theme().card)
+                                                .border_1()
+                                                .border_color(glass_hairline)
+                                                .on_press(move || {
+                                                    store::open_collection(
+                                                        pid.clone(),
+                                                        title.clone(),
+                                                        "Pinned Offline".to_owned(),
+                                                        None,
+                                                    );
+                                                })
+                                                .child(
+                                                    text(p.title)
+                                                        .text_sm()
+                                                        .font_weight(FontWeight::SEMIBOLD)
+                                                        .text_color(move || theme().foreground),
+                                                )
+                                                .child(
+                                                    text(sub)
+                                                        .text_xs()
+                                                        .tabular_nums()
+                                                        .text_color(move || {
+                                                            theme().muted_foreground
+                                                        }),
+                                                )
+                                        }))
+                                        .into_element()
+                                }
+                            }
+                            LibraryFilter::Downloads => {
+                                render_downloads_view(&query, sort_asc, current_id)
+                            }
+                            LibraryFilter::LocalFiles => {
+                                let local_tracks: Vec<Track> = store::local_media_tracks()
+                                    .into_iter()
+                                    .map(|r| r.track)
+                                    .collect();
+                                if local_tracks.is_empty() {
+                                    status_card(
+                                        "No local audio files",
+                                        "Import local folders in Settings to play your own FLAC, MP3, or M4A library.",
+                                        Some("Open Settings"),
+                                        Some(Box::new(|| store::set_tab(AppTab::Settings))),
+                                    )
+                                    .into_element()
+                                } else {
+                                    let tracks =
+                                        filter_and_sort_tracks(local_tracks, &query, sort_asc);
+                                    render_track_list_view(
+                                        "Local Files",
+                                        tracks,
+                                        current_id,
+                                        "No matching local files",
+                                        "Try another song title or artist name.",
+                                    )
+                                }
+                            }
+                            LibraryFilter::Podcasts => status_card(
+                                "No podcasts saved",
+                                "Browse Home or Search to discover shows and episodes.",
+                                Some("Browse Home"),
+                                Some(Box::new(|| store::set_tab(AppTab::Home))),
                             )
-                            .child(icon(IconKind::Settings, 16.0, move || {
-                                theme().muted_foreground
-                            })),
-                    )
-                    .child(settings_sections()),
+                            .into_element(),
+                            LibraryFilter::Uploads => status_card(
+                                "No uploads available",
+                                "Sign in with your YouTube Music account in Settings or browse Home.",
+                                Some("Open Search"),
+                                Some(Box::new(|| store::set_tab(AppTab::Search))),
+                            )
+                            .into_element(),
+                        }
+                    })),
             ),
     )
 }

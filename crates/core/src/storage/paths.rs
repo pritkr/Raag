@@ -157,10 +157,23 @@ pub fn migrate_legacy_temp_dir_from(legacy_dir: &Path, paths: &AppPaths) -> Core
 
     let mut migrated_any = false;
     migrated_any |= copy_file_if_absent(&legacy_db, &target_db)?;
-    migrated_any |= copy_file_if_absent(
-        &legacy_dir.join("auth_session.json"),
-        &paths.data_dir.join("auth_session.json"),
+    let _ = copy_file_if_absent(
+        &legacy_dir.join("resonance.db-wal"),
+        &paths.data_dir.join("resonance.db-wal"),
     )?;
+    let _ = copy_file_if_absent(
+        &legacy_dir.join("resonance.db-shm"),
+        &paths.data_dir.join("resonance.db-shm"),
+    )?;
+    let auth_dst = paths.data_dir.join("auth_session.json");
+    if copy_file_if_absent(&legacy_dir.join("auth_session.json"), &auth_dst)? {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&auth_dst, fs::Permissions::from_mode(0o600));
+        }
+        migrated_any = true;
+    }
     if copy_dir_if_absent(&legacy_dir.join("downloads"), &paths.downloads_dir)? > 0 {
         migrated_any = true;
     }

@@ -94,4 +94,20 @@ object AndroidAutoBrowseTree {
         val to = (from + boundedSize).coerceAtMost(items.size)
         return items.subList(from, to)
     }
+
+    /**
+     * Offline-safe fallback search for Google Assistant / Android Auto voice queries
+     * when cellular connectivity drops.
+     */
+    fun offlineFallbackSearch(query: String, candidates: List<MediaItem>): List<MediaItem> {
+        val q = query.trim().lowercase()
+        if (q.isEmpty()) return candidates.take(MAX_ITEMS_PER_PAGE)
+        return candidates.filter { item ->
+            val meta = item.mediaMetadata
+            val title = meta.title?.toString()?.lowercase().orEmpty()
+            val artist = meta.artist?.toString()?.lowercase().orEmpty()
+            val album = meta.albumTitle?.toString()?.lowercase().orEmpty()
+            title.contains(q) || artist.contains(q) || album.contains(q)
+        }.take(MAX_ITEMS_PER_PAGE)
+    }
 }

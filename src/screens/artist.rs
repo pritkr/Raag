@@ -114,10 +114,9 @@ pub fn artist_screen_with_detail(
 ) -> impl IntoElement {
     let show_all_songs = signal(false);
     let show_about = signal(false);
-    let desktop = is_desktop_layout();
     let palette = palette_for_track(&artist.channel_id, &artist.name);
     let hero_bg = move || ambient_backdrop_color(palette);
-    let art_size = if desktop { 172.0 } else { 128.0 };
+    let art_size = 156.0;
     let mono = monogram_for(&artist.name);
 
     let top_for_play = artist.top_songs.clone();
@@ -155,7 +154,7 @@ pub fn artist_screen_with_detail(
         view()
             .test_id("artist-entity-screen")
             .p_4()
-            .when(desktop, |v| v.px_8().py_6())
+            .style_when(is_desktop_layout, |s| s.px_8().py_6())
             .gap_6()
             .child(
                 view()
@@ -172,7 +171,7 @@ pub fn artist_screen_with_detail(
                     .bg(hero_bg)
                     .border_1()
                     .border_color(glass_hairline)
-                    .when(desktop, |v| v.flex_row().items_end().gap_6())
+                    .style_when(is_desktop_layout, |s| s.flex_row().items_end().gap_6())
                     .child(
                         view()
                             .w(px(art_size))

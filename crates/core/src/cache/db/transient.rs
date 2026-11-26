@@ -297,7 +297,7 @@ impl TransientCacheRepo {
     pub fn clear_all_caches(&self) -> CoreResult<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute_batch(
-            "DELETE FROM metadata_cache WHERE cache_key NOT LIKE 'settings:%'; DELETE FROM audio_chunks;",
+            "DELETE FROM metadata_cache WHERE cache_key NOT LIKE 'settings:%' AND cache_key NOT LIKE 'library:%'; DELETE FROM audio_chunks;",
         )
         .map_err(|e| CoreError::Cache(CacheError::Sqlite(e.to_string())))?;
         Ok(())

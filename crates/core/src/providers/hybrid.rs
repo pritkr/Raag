@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use resonance_contract::{
@@ -31,6 +32,48 @@ use crate::providers::ytmapi_adapter::YtmapiBrowseAdapter;
 const TTL_HYBRID_HOME_SECS: u64 = 15 * 60;
 const TTL_HYBRID_SEARCH_SECS: u64 = 5 * 60;
 const TTL_HYBRID_COLLECTION_SECS: u64 = 60 * 60;
+const CIRCUIT_FAILURE_THRESHOLD: u32 = 3;
+const CIRCUIT_COOLDOWN_SECS: u64 = 120;
+
+#[derive(Default)]
+struct PrimaryCircuitBreaker {
+    consecutive_failures: AtomicU32,
+    cooldown_until_unix_secs: AtomicU64,
+}
+
+impl PrimaryCircuitBreaker {
+    fn is_open(&self) -> bool {
+        let until = self.cooldown_until_unix_secs.load(Ordering::Acquire);
+        if until == 0 {
+            return false;
+        }
+        if unix_secs() >= until {
+            self.cooldown_until_unix_secs.store(0, Ordering::Release);
+            self.consecutive_failures.store(0, Ordering::Release);
+            return false;
+        }
+        true
+    }
+
+    fn record_success(&self) {
+        self.consecutive_failures.store(0, Ordering::Release);
+        self.cooldown_until_unix_secs.store(0, Ordering::Release);
+    }
+
+    fn record_failure(&self, err: &CoreError) {
+        // Auth errors must never trip the parser/provider circuit breaker.
+        if matches!(err, CoreError::Auth(_)) {
+            return;
+        }
+        let failures = self.consecutive_failures.fetch_add(1, Ordering::AcqRel) + 1;
+        if failures >= CIRCUIT_FAILURE_THRESHOLD {
+            self.cooldown_until_unix_secs.store(
+                unix_secs().saturating_add(CIRCUIT_COOLDOWN_SECS),
+                Ordering::Release,
+            );
+        }
+    }
+}
 
 /// Single unified music provider orchestrating `ytmapi-rs`, `rustypipe`, and `InnerTubeClient`
 /// behind one SWR cache layer and one facade API.
@@ -45,6 +88,7 @@ pub struct HybridMusicProvider {
     secondary_browse: Option<Arc<dyn BrowseDelegate>>,
     primary_playback: Option<Arc<dyn PlaybackResolver>>,
     secondary_playback: Option<Arc<dyn PlaybackResolver>>,
+    primary_breaker: PrimaryCircuitBreaker,
 }
 
 impl HybridMusicProvider {
@@ -102,6 +146,7 @@ impl HybridMusicProvider {
             primary_browse,
             secondary_browse,
             secondary_playback,
+            primary_breaker: PrimaryCircuitBreaker::default(),
         }
     }
 
@@ -121,6 +166,7 @@ impl HybridMusicProvider {
             secondary_browse: None,
             primary_playback: Some(playback),
             secondary_playback: None,
+            primary_breaker: PrimaryCircuitBreaker::default(),
         }
     }
 
@@ -145,6 +191,7 @@ impl HybridMusicProvider {
             secondary_browse,
             primary_playback,
             secondary_playback,
+            primary_breaker: PrimaryCircuitBreaker::default(),
         }
     }
 
@@ -191,6 +238,11 @@ impl HybridMusicProvider {
                 last_checked_unix_secs: unix_secs(),
             }
         }
+    }
+
+    /// Returns `true` when the primary browse circuit breaker is currently open.
+    pub fn is_primary_circuit_open(&self) -> bool {
+        self.primary_breaker.is_open()
     }
 
     /// Synchronizes `AuthSession` into `InnerTubeClient` and `YtmapiBrowseAdapter`.
@@ -302,11 +354,17 @@ impl MusicProvider for HybridMusicProvider {
             return Ok(fresh.clone());
         }
 
-        if let Some(primary) = &self.primary_browse
-            && let Ok(res) = primary.search(query).await
+        if !self.primary_breaker.is_open()
+            && let Some(primary) = &self.primary_browse
         {
-            self.write_swr(&cache_key, &res, TTL_HYBRID_SEARCH_SECS);
-            return Ok(res);
+            match primary.search(query).await {
+                Ok(res) => {
+                    self.primary_breaker.record_success();
+                    self.write_swr(&cache_key, &res, TTL_HYBRID_SEARCH_SECS);
+                    return Ok(res);
+                }
+                Err(e) => self.primary_breaker.record_failure(&e),
+            }
         }
         if let Some(secondary) = &self.secondary_browse
             && let Ok(res) = secondary.search(query).await
@@ -335,12 +393,18 @@ impl MusicProvider for HybridMusicProvider {
             return Ok(fresh.clone());
         }
 
-        if let Some(primary) = &self.primary_browse
-            && let Ok(sections) = primary.home().await
-            && !sections.is_empty()
+        if !self.primary_breaker.is_open()
+            && let Some(primary) = &self.primary_browse
         {
-            self.write_swr(cache_key, &sections, TTL_HYBRID_HOME_SECS);
-            return Ok(sections);
+            match primary.home().await {
+                Ok(sections) if !sections.is_empty() => {
+                    self.primary_breaker.record_success();
+                    self.write_swr(cache_key, &sections, TTL_HYBRID_HOME_SECS);
+                    return Ok(sections);
+                }
+                Ok(_) => {}
+                Err(e) => self.primary_breaker.record_failure(&e),
+            }
         }
         if let Some(secondary) = &self.secondary_browse
             && let Ok(sections) = secondary.home().await

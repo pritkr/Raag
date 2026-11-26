@@ -39,9 +39,9 @@ impl ClockSyncFilter {
         let server_proc = server_send_ms.saturating_sub(server_recv_ms);
         let rtt_ms = total_elapsed.saturating_sub(server_proc);
 
-        if let Some(med_rtt) = self.median_rtt_ms()
+        if let Some(min_rtt) = self.min_rtt_ms()
             && self.samples.len() >= 3
-            && rtt_ms > med_rtt.saturating_mul(2).max(20)
+            && rtt_ms > min_rtt.saturating_mul(2).max(20)
         {
             return None;
         }
@@ -55,7 +55,9 @@ impl ClockSyncFilter {
         }
         self.samples.push_back(ClockSample { rtt_ms, offset_ms });
 
-        let mut offsets: Vec<i64> = self.samples.iter().map(|s| s.offset_ms).collect();
+        let mut by_rtt: Vec<ClockSample> = self.samples.iter().copied().collect();
+        by_rtt.sort_unstable_by_key(|s| s.rtt_ms);
+        let mut offsets: Vec<i64> = by_rtt.into_iter().take(5).map(|s| s.offset_ms).collect();
         offsets.sort_unstable();
         self.current_offset_ms = offsets[offsets.len() / 2];
         Some(self.current_offset_ms)
@@ -63,6 +65,10 @@ impl ClockSyncFilter {
 
     pub fn offset_ms(&self) -> i64 {
         self.current_offset_ms
+    }
+
+    pub fn min_rtt_ms(&self) -> Option<u64> {
+        self.samples.iter().map(|s| s.rtt_ms).min()
     }
 
     pub fn median_rtt_ms(&self) -> Option<u64> {

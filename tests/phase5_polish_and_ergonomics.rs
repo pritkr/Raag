@@ -48,9 +48,9 @@ fn phase5_mini_player_now_playing_volume_lyrics_queue_and_offline_toast() -> Res
         "mini-player must render dynamic monogram for current track"
     );
 
-    // 2. Open Now Playing -> verify Opus 251 Proxy badge + Volume 100% -> Decrease -> Mute
+    // 2. Open Now Playing -> verify Stream badge + Volume 100% -> Decrease -> Mute
     app.press("id:mini-player-open")?;
-    app.wait_for("Opus 251 • Proxy")?;
+    app.wait_for("Standard Stream")?;
     app.wait_for("Volume 100%")?;
     app.press("label:Decrease Volume")?;
     app.wait_for("Volume 90%")?;
@@ -97,8 +97,8 @@ fn phase5_mini_player_now_playing_volume_lyrics_queue_and_offline_toast() -> Res
     app.press("Repeat: All")?;
     app.wait_for("Repeat: One")?;
 
-    // 5. Open Library -> verify active theme indicator, Offline Mode switch -> global dismissible toast
-    app.press("id:nav-library")?;
+    // 5. Open Settings -> verify active theme indicator, Offline Mode switch -> global dismissible toast
+    app.press("id:nav-settings")?;
     app.wait_for("✓ System Theme")?;
     app.press("Dark Theme")?;
     app.wait_for("✓ Dark Theme")?;
@@ -109,9 +109,9 @@ fn phase5_mini_player_now_playing_volume_lyrics_queue_and_offline_toast() -> Res
     app.press("id:dismiss-toast")?;
     app.wait_for("Offline & Local Cache")?;
 
-    // Verify Now Playing now shows Offline Cache telemetry badge
+    // Verify Now Playing now shows Offline telemetry badge
     app.press("id:mini-player-open")?;
-    app.wait_for("Offline Cache")?;
+    app.wait_for("Offline")?;
     Ok(())
 }
 

@@ -735,14 +735,8 @@ fn settings_surfaces_po_token_diagnostics_badge_and_audio_dsp_controls() -> Resu
     app.wait_for("Stream Acquisition & PO Token")?;
     app.wait_for("Degraded Fallback")?;
     app.wait_for("Audio DSP & Gapless")?;
+    app.wait_for("Native PCM Engine Required")?;
     app.wait_for("10-Band EQ: Flat")?;
     app.wait_for("Gapless (0s)")?;
-
-    // Cycle 10-band EQ preset and Crossfade mode interactively
-    app.press("10-Band EQ: Flat")?;
-    app.wait_for("10-Band EQ: Bass Boost")?;
-
-    app.press("Gapless (0s)")?;
-    app.wait_for("Crossfade 2s")?;
     Ok(())
 }

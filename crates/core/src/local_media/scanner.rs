@@ -306,7 +306,8 @@ fn index_single_file(
     let embedded_lyrics = tag
         .and_then(|t| t.get_string(&ItemKey::Lyrics))
         .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty());
+        .filter(|s| !s.is_empty())
+        .or_else(|| read_sidecar_lrc(path));
 
     let art_hash = extract_and_cache_artwork(&tagged, artwork);
     let artwork_url = art_hash
@@ -343,4 +344,21 @@ fn index_single_file(
     };
 
     Ok((record, art_hash))
+}
+
+/// Reads an optional sidecar `.lrc` file next to the audio file (capped at 512 KB).
+fn read_sidecar_lrc(audio_path: &Path) -> Option<String> {
+    let lrc_path = audio_path.with_extension("lrc");
+    let meta = std::fs::symlink_metadata(&lrc_path).ok()?;
+    if meta.file_type().is_symlink()
+        || !meta.is_file()
+        || meta.len() == 0
+        || meta.len() > 512 * 1024
+    {
+        return None;
+    }
+    std::fs::read_to_string(&lrc_path)
+        .ok()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
 }

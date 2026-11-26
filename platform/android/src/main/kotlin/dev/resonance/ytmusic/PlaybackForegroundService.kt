@@ -21,6 +21,7 @@ import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
@@ -227,7 +228,11 @@ class PlaybackForegroundService : MediaLibraryService() {
                 query: String,
                 params: LibraryParams?,
             ): ListenableFuture<LibraryResult<Void>> {
-                val results = cachedSearchResults[query].orEmpty()
+                val results = cachedSearchResults[query]
+                    ?: AndroidAutoBrowseTree.offlineFallbackSearch(
+                        query,
+                        cachedSearchResults.values.flatten(),
+                    )
                 session.notifySearchResultChanged(browser, query, results.size, params)
                 return Futures.immediateFuture(LibraryResult.ofVoid())
             }
@@ -240,8 +245,13 @@ class PlaybackForegroundService : MediaLibraryService() {
                 pageSize: Int,
                 params: LibraryParams?,
             ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
+                val raw = cachedSearchResults[query]
+                    ?: AndroidAutoBrowseTree.offlineFallbackSearch(
+                        query,
+                        cachedSearchResults.values.flatten(),
+                    )
                 val results = AndroidAutoBrowseTree.paginate(
-                    cachedSearchResults[query].orEmpty(),
+                    raw,
                     page,
                     pageSize,
                 )
@@ -343,6 +353,12 @@ class PlaybackForegroundService : MediaLibraryService() {
         player?.volume = volume.coerceIn(0f, 1f)
     }
 
+    fun setPlaybackSpeed(speed: Float, preservePitch: Boolean) {
+        val clamped = speed.coerceIn(0.25f, 4.0f)
+        val pitch = if (preservePitch) 1.0f else clamped
+        player?.playbackParameters = PlaybackParameters(clamped, pitch)
+    }
+
     fun updateNowPlayingMetadata(
         title: String,
         artist: String,
@@ -409,7 +425,7 @@ class PlaybackForegroundService : MediaLibraryService() {
     }
 
     companion object {
-        private const val PROGRESS_INTERVAL_MS = 500L
+        private const val PROGRESS_INTERVAL_MS = 250L
 
         init {
             runCatching { System.loadLibrary("resonance") }

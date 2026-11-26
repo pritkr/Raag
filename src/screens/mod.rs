@@ -13,5 +13,6 @@ pub mod now_playing;
 pub mod queue;
 pub mod search;
 pub mod settings;
+pub mod settings_dsp_card;
 pub mod settings_updater_card;
 pub mod shell;

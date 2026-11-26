@@ -12,7 +12,9 @@ use resonance_contract::{DownloadStatus, LyricSyncKind, RepeatMode, format_durat
 
 use crate::store::{self, AppTab};
 use crate::ui::controls::{
-    secondary_button, seek_slider, status_card, svg_icon_button, volume_slider,
+    open_sleep_timer_sheet, open_speed_sheet, secondary_button, seek_slider,
+    sleep_timer_badge_label, sleep_timer_sheet, speed_badge_label, speed_sheet, status_card,
+    svg_icon_button, volume_slider,
 };
 use crate::ui::icons::{IconKind, icon, reactive_icon};
 use crate::ui::tokens::{
@@ -48,6 +50,8 @@ pub fn now_playing_screen() -> impl IntoElement {
                     ))
             }),
         )
+        .child(sleep_timer_sheet())
+        .child(speed_sheet())
 }
 
 fn header_pill_button(
@@ -137,9 +141,17 @@ fn top_header_bar(desktop: bool) -> impl IntoElement {
                                     text(move || {
                                         let snap = store::player_snapshot();
                                         if snap.offline_mode {
-                                            SharedString::from("Offline Cache")
+                                            SharedString::from("Offline")
+                                        } else if snap
+                                            .current_track
+                                            .as_ref()
+                                            .is_some_and(|t| t.id.starts_with("local_"))
+                                        {
+                                            SharedString::from("Local Audio")
+                                        } else if snap.active_proxy_url.is_some() {
+                                            SharedString::from("Standard Stream")
                                         } else {
-                                            SharedString::from("Opus 251 • Proxy")
+                                            SharedString::from("Audio")
                                         }
                                     })
                                     .test_id("now-playing-source-badge")
@@ -179,13 +191,47 @@ fn top_header_bar(desktop: bool) -> impl IntoElement {
                     ))
                 })
                 .child(svg_icon_button(
+                    IconKind::Moon,
+                    16.0,
+                    btn_box,
+                    "Sleep Timer",
+                    true,
+                    move || {
+                        if sleep_timer_badge_label().is_some() {
+                            color_player_accent()
+                        } else {
+                            theme().foreground
+                        }
+                    },
+                    open_sleep_timer_sheet,
+                ))
+                .child(svg_icon_button(
+                    IconKind::Gauge,
+                    16.0,
+                    btn_box,
+                    "Playback Speed",
+                    true,
+                    move || {
+                        if speed_badge_label().is_some() {
+                            color_player_accent()
+                        } else {
+                            theme().foreground
+                        }
+                    },
+                    open_speed_sheet,
+                ))
+                .child(svg_icon_button(
                     IconKind::MoreVertical,
                     16.0,
                     btn_box,
-                    "Queue Options",
+                    "Track Actions",
                     true,
                     move || theme().foreground,
-                    || store::set_tab(AppTab::Queue),
+                    || {
+                        if let Some(track) = store::player_snapshot().current_track {
+                            store::open_track_sheet(track, None);
+                        }
+                    },
                 )),
         )
 }
@@ -671,27 +717,36 @@ fn transport_bar() -> impl IntoElement {
                 .h(px(MOBILE_MIN_TOUCH_TARGET))
                 .items_center()
                 .justify_center()
+                .gap_0p5()
                 .rounded_full()
                 .hover(|s| s.bg(pill_glass_hover))
                 .active(|s| s.opacity(0.72))
                 .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                 .on_press(store::cycle_repeat)
-                .child(
-                    text(move || match store::player_snapshot().queue.repeat {
-                        RepeatMode::None => "↻",
-                        RepeatMode::All => "↻A",
-                        RepeatMode::One => "↻1",
-                    })
-                    .text_base()
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(move || {
+                .child(reactive_icon(
+                    move || match store::player_snapshot().queue.repeat {
+                        RepeatMode::One => IconKind::RepeatOne,
+                        _ => IconKind::Repeat,
+                    },
+                    19.0,
+                    move || {
                         if store::player_snapshot().queue.repeat == RepeatMode::None {
                             theme().muted_foreground
                         } else {
                             color_player_accent()
                         }
-                    }),
-                ),
+                    },
+                ))
+                .child(when(
+                    || store::player_snapshot().queue.repeat == RepeatMode::One,
+                    || {
+                        view()
+                            .w(px(4.0))
+                            .h(px(4.0))
+                            .rounded_full()
+                            .bg(color_player_accent)
+                    },
+                )),
         )
 }
 

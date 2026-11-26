@@ -6,6 +6,7 @@ use nsh_core::prelude::*;
 use resonance_contract::{DownloadStatus, Track, format_duration_ms};
 
 use crate::store;
+use crate::ui::controls::context_menu::{TrackMenuContext, track_context_menu};
 use crate::ui::controls::primitives::artwork_box;
 use crate::ui::icons::{IconKind, icon, reactive_icon};
 use crate::ui::tokens::{
@@ -13,9 +14,10 @@ use crate::ui::tokens::{
     is_desktop_layout, pill_glass_hover, pill_glass_surface, radius_card,
 };
 
-/// Reactive per-track download state badge & quick action button.
+/// Reactive per-track download state badge & quick action button (>= 48dp touch target).
 pub fn download_state_badge(track: Track) -> impl IntoElement {
     let track_id = track.id.clone();
+    let track_id_icon = track.id.clone();
     let track_id_label = track.id.clone();
     let track_id_color = track.id.clone();
     let track_for_press = track.clone();
@@ -26,8 +28,10 @@ pub fn download_state_badge(track: Track) -> impl IntoElement {
         .min_h(px(MOBILE_MIN_TOUCH_TARGET))
         .min_w(px(MOBILE_MIN_TOUCH_TARGET))
         .px_2()
+        .flex_row()
         .items_center()
         .justify_center()
+        .gap_1()
         .rounded_full()
         .hover(|s| s.bg(pill_glass_hover))
         .active(|s| s.opacity(0.75))
@@ -44,31 +48,18 @@ pub fn download_state_badge(track: Track) -> impl IntoElement {
                 DownloadStatus::Completed => store::delete_download(&rec.video_id),
             },
         })
-        .child(
-            text(move || match store::download_record(&track_id_label) {
-                None => SharedString::from("Save"),
-                Some(rec) => match rec.status {
-                    DownloadStatus::Queued => SharedString::from("Queued"),
-                    DownloadStatus::Downloading | DownloadStatus::Tagging => {
-                        let pct = rec
-                            .bytes_downloaded
-                            .saturating_mul(100)
-                            .checked_div(rec.total_bytes.max(1))
-                            .unwrap_or(0)
-                            .min(100);
-                        SharedString::from(format!("{pct}%"))
-                    }
-                    DownloadStatus::Paused => SharedString::from("Paused"),
-                    DownloadStatus::Completed => SharedString::from("Offline"),
-                    DownloadStatus::Failed | DownloadStatus::Cancelled => {
-                        SharedString::from("Retry")
-                    }
-                },
-            })
-            .text_xs()
-            .font_weight(FontWeight::MEDIUM)
-            .tabular_nums()
-            .text_color(move || match store::download_record(&track_id_color) {
+        .child(reactive_icon(
+            move || match store::download_record(&track_id_icon).map(|r| r.status) {
+                None => IconKind::Download,
+                Some(
+                    DownloadStatus::Queued | DownloadStatus::Downloading | DownloadStatus::Tagging,
+                ) => IconKind::Pause,
+                Some(DownloadStatus::Paused) => IconKind::Download,
+                Some(DownloadStatus::Completed) => IconKind::CheckCircle,
+                Some(DownloadStatus::Failed | DownloadStatus::Cancelled) => IconKind::AlertCircle,
+            },
+            15.0,
+            move || match store::download_record(&track_id_color) {
                 Some(rec) if rec.status == DownloadStatus::Completed => theme().primary,
                 Some(rec)
                     if matches!(
@@ -79,7 +70,31 @@ pub fn download_state_badge(track: Track) -> impl IntoElement {
                     theme().destructive
                 }
                 _ => theme().muted_foreground,
-            }),
+            },
+        ))
+        .child(
+            text(move || match store::download_record(&track_id_label) {
+                Some(rec)
+                    if matches!(
+                        rec.status,
+                        DownloadStatus::Downloading | DownloadStatus::Tagging
+                    ) =>
+                {
+                    let pct = rec
+                        .bytes_downloaded
+                        .saturating_mul(100)
+                        .checked_div(rec.total_bytes.max(1))
+                        .unwrap_or(0)
+                        .min(100);
+                    SharedString::from(format!("{pct}%"))
+                }
+                Some(rec) if rec.status == DownloadStatus::Queued => SharedString::from("…"),
+                _ => SharedString::from(""),
+            })
+            .text_xs()
+            .font_weight(FontWeight::MEDIUM)
+            .tabular_nums()
+            .text_color(move || theme().muted_foreground),
         )
 }
 
@@ -99,8 +114,9 @@ pub fn compact_mix_row(
     let monogram = track.fallback_monogram();
     let art_url = track.artwork_url.clone();
     let track_id = track.id.clone();
+    let track_id_color = track.id.clone();
     let track_for_like = track.clone();
-    let track_for_sheet = track.clone();
+    let track_for_menu = track.clone();
 
     view()
         .flex_row()
@@ -196,8 +212,8 @@ pub fn compact_mix_row(
         .child(
             button()
                 .accessibility_label("Toggle Like Track")
-                .w(px(34.0))
-                .h(px(34.0))
+                .min_w(px(40.0))
+                .min_h(px(40.0))
                 .items_center()
                 .justify_center()
                 .rounded_full()
@@ -212,23 +228,19 @@ pub fn compact_mix_row(
                         }
                     },
                     14.0,
-                    move || theme().muted_foreground,
+                    move || {
+                        if store::is_track_liked(&track_id_color) {
+                            color_liked()
+                        } else {
+                            theme().muted_foreground
+                        }
+                    },
                 )),
         )
-        .child(
-            button()
-                .accessibility_label("Track Actions")
-                .w(px(MOBILE_MIN_TOUCH_TARGET))
-                .h(px(MOBILE_MIN_TOUCH_TARGET))
-                .items_center()
-                .justify_center()
-                .rounded_full()
-                .hover(|s| s.bg(pill_glass_hover))
-                .on_press(move || store::open_track_sheet(track_for_sheet.clone(), None))
-                .child(icon(IconKind::MoreVertical, 15.0, move || {
-                    theme().muted_foreground
-                })),
-        )
+        .child(track_context_menu(
+            track_for_menu,
+            TrackMenuContext::General,
+        ))
 }
 
 /// Full track list row with optional album column, heart, download badge, duration, and action sheet.
@@ -248,9 +260,10 @@ pub fn track_row_view(
     let monogram = track.fallback_monogram();
     let art_url = track.artwork_url.clone();
     let track_id = track.id.clone();
+    let track_id_color = track.id.clone();
     let track_for_like = track.clone();
     let track_for_badge = track.clone();
-    let track_for_sheet = track.clone();
+    let track_for_menu = track.clone();
 
     view()
         .flex_row()
@@ -345,8 +358,8 @@ pub fn track_row_view(
         .child(
             button()
                 .accessibility_label("Toggle Like Track")
-                .w(px(36.0))
-                .h(px(36.0))
+                .min_w(px(MOBILE_MIN_TOUCH_TARGET))
+                .min_h(px(MOBILE_MIN_TOUCH_TARGET))
                 .items_center()
                 .justify_center()
                 .rounded_full()
@@ -362,7 +375,7 @@ pub fn track_row_view(
                     },
                     15.0,
                     move || {
-                        if is_current {
+                        if store::is_track_liked(&track_id_color) {
                             color_liked()
                         } else {
                             theme().muted_foreground
@@ -371,21 +384,10 @@ pub fn track_row_view(
                 )),
         )
         .child(download_state_badge(track_for_badge))
-        .child(
-            button()
-                .accessibility_label("Track Actions")
-                .w(px(MOBILE_MIN_TOUCH_TARGET))
-                .h(px(MOBILE_MIN_TOUCH_TARGET))
-                .items_center()
-                .justify_center()
-                .rounded_full()
-                .hover(|s| s.bg(pill_glass_hover))
-                .active(|s| s.opacity(0.7))
-                .on_press(move || store::open_track_sheet(track_for_sheet.clone(), None))
-                .child(icon(IconKind::MoreVertical, 16.0, move || {
-                    theme().muted_foreground
-                })),
-        )
+        .child(track_context_menu(
+            track_for_menu,
+            TrackMenuContext::General,
+        ))
 }
 
 /// Subtle loading skeleton placeholder row (zero layout shift while Home or Search loads).

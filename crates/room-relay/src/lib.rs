@@ -6,7 +6,7 @@
 //! - Enforces 256-bit `host_secret`, 32-participant cap, 60 msg/min/peer rate limit,
 //!   45s host disconnect auto-promotion, and 30-min idle room eviction.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::{
@@ -27,8 +27,9 @@ use resonance_contract::{
     AuthoritativePlaybackState, QueuePermission, RoomParticipant, RoomRole, RoomWireMessage,
 };
 use resonance_core::rooms::{
-    CreateRoomRequest, CreateRoomResponse, JoinRoomRequest, JoinRoomResponse, RoomCommandRequest,
-    generate_host_secret, generate_room_code, is_local_track,
+    CreateRoomRequest, CreateRoomResponse, JoinRoomRequest, JoinRoomResponse,
+    KickParticipantRequest, MAX_FRAME_BYTES, ReactionRequest, RoomCommandRequest, VoteSkipRequest,
+    VoteSkipResponse, generate_host_secret, generate_room_code, is_local_track,
 };
 use tokio::net::TcpListener;
 use tokio::sync::{RwLock, broadcast, watch};
@@ -75,6 +76,8 @@ struct RoomState {
     queue_permission: QueuePermission,
     participants: Vec<RoomParticipant>,
     playback: AuthoritativePlaybackState,
+    vote_skip_track_id: Option<String>,
+    vote_skips: HashSet<String>,
     last_activity: Instant,
     host_disconnected_at: Option<Instant>,
     rate_windows: HashMap<String, VecDeque<Instant>>,
@@ -343,6 +346,8 @@ async fn handle_http(
                 anchor_position_ms: 0,
                 anchor_server_ms: now_ms(),
             },
+            vote_skip_track_id: None,
+            vote_skips: HashSet::new(),
             last_activity: Instant::now(),
             host_disconnected_at: None,
             rate_windows: HashMap::new(),
@@ -440,22 +445,156 @@ async fn handle_http(
 
         // POST /v1/rooms/:code/cmd
         if method == Method::POST && action == "cmd" {
+            let header_secret = req
+                .headers()
+                .get("x-host-secret")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned);
             let Ok(body) = req.into_body().collect().await else {
                 return Ok(text_resp(StatusCode::BAD_REQUEST, "invalid body"));
             };
-            let Ok(cmd) = serde_json::from_slice::<RoomCommandRequest>(&body.to_bytes()) else {
+            let bytes = body.to_bytes();
+            if bytes.len() > MAX_FRAME_BYTES {
+                return Ok(text_resp(StatusCode::PAYLOAD_TOO_LARGE, "frame too large"));
+            }
+            let Ok(cmd) = serde_json::from_slice::<RoomCommandRequest>(&bytes) else {
                 return Ok(text_resp(StatusCode::BAD_REQUEST, "invalid JSON"));
             };
+            let secret = cmd.host_secret.as_deref().or(header_secret.as_deref());
             let mut room = room_arc.write().await;
-            if let Err((status, msg)) = apply_room_message(
-                &mut room,
-                &cmd.peer_id,
-                cmd.host_secret.as_deref(),
-                cmd.message,
-            ) {
+            if let Err((status, msg)) =
+                apply_room_message(&mut room, &cmd.peer_id, secret, cmd.message)
+            {
                 return Ok(text_resp(status, msg));
             }
             return Ok(json_resp(StatusCode::OK, &room.snapshot_msg()));
+        }
+
+        // POST /v1/rooms/:code/vote-skip
+        if method == Method::POST && action == "vote-skip" {
+            let Ok(body) = req.into_body().collect().await else {
+                return Ok(text_resp(StatusCode::BAD_REQUEST, "invalid body"));
+            };
+            let bytes = body.to_bytes();
+            if bytes.len() > MAX_FRAME_BYTES {
+                return Ok(text_resp(StatusCode::PAYLOAD_TOO_LARGE, "frame too large"));
+            }
+            let Ok(parsed) = serde_json::from_slice::<VoteSkipRequest>(&bytes) else {
+                return Ok(text_resp(StatusCode::BAD_REQUEST, "invalid JSON"));
+            };
+            let mut room = room_arc.write().await;
+            if !room
+                .participants
+                .iter()
+                .any(|p| p.peer_id == parsed.peer_id)
+            {
+                return Ok(text_resp(StatusCode::FORBIDDEN, "unknown peer"));
+            }
+            if !room.check_rate_limit(&parsed.peer_id) {
+                return Ok(text_resp(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "rate limit exceeded",
+                ));
+            }
+            room.last_activity = Instant::now();
+            let current_id = room
+                .playback
+                .current_track
+                .as_ref()
+                .map(|t| t.video_id.clone());
+            if room.vote_skip_track_id != current_id {
+                room.vote_skip_track_id = current_id;
+                room.vote_skips.clear();
+            }
+            room.vote_skips.insert(parsed.peer_id);
+            let votes = room.vote_skips.len();
+            let threshold = (room.participants.len() / 2) + 1;
+            let skipped = votes >= threshold;
+            if skipped {
+                room.vote_skips.clear();
+                let next_track = if room.playback.queue.is_empty() {
+                    None
+                } else {
+                    Some(room.playback.queue.remove(0))
+                };
+                room.playback.current_track = next_track;
+                room.playback.anchor_position_ms = 0;
+                room.playback.anchor_server_ms = now_ms();
+                room.playback.is_playing = room.playback.current_track.is_some();
+                room.playback.revision = room.playback.revision.saturating_add(1);
+                room.vote_skip_track_id = room
+                    .playback
+                    .current_track
+                    .as_ref()
+                    .map(|t| t.video_id.clone());
+                room.broadcast_snapshot();
+            }
+            return Ok(json_resp(
+                StatusCode::OK,
+                &VoteSkipResponse {
+                    votes,
+                    threshold,
+                    skipped,
+                },
+            ));
+        }
+
+        // POST /v1/rooms/:code/kick
+        if method == Method::POST && action == "kick" {
+            let header_secret = req
+                .headers()
+                .get("x-host-secret")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned);
+            let Ok(body) = req.into_body().collect().await else {
+                return Ok(text_resp(StatusCode::BAD_REQUEST, "invalid body"));
+            };
+            let bytes = body.to_bytes();
+            if bytes.len() > MAX_FRAME_BYTES {
+                return Ok(text_resp(StatusCode::PAYLOAD_TOO_LARGE, "frame too large"));
+            }
+            let Ok(parsed) = serde_json::from_slice::<KickParticipantRequest>(&bytes) else {
+                return Ok(text_resp(StatusCode::BAD_REQUEST, "invalid JSON"));
+            };
+            let secret = parsed.host_secret.as_deref().or(header_secret.as_deref());
+            let mut room = room_arc.write().await;
+            if parsed.peer_id != room.host_peer_id || secret != Some(room.host_secret.as_str()) {
+                return Ok(text_resp(StatusCode::FORBIDDEN, "host auth required"));
+            }
+            if parsed.target_peer_id != room.host_peer_id {
+                room.participants
+                    .retain(|p| p.peer_id != parsed.target_peer_id);
+                room.vote_skips.remove(&parsed.target_peer_id);
+                room.playback.revision = room.playback.revision.saturating_add(1);
+                room.broadcast_snapshot();
+            }
+            return Ok(json_resp(StatusCode::OK, &room.snapshot_msg()));
+        }
+
+        // POST /v1/rooms/:code/reaction
+        if method == Method::POST && action == "reaction" {
+            let Ok(body) = req.into_body().collect().await else {
+                return Ok(text_resp(StatusCode::BAD_REQUEST, "invalid body"));
+            };
+            let bytes = body.to_bytes();
+            if bytes.len() > MAX_FRAME_BYTES {
+                return Ok(text_resp(StatusCode::PAYLOAD_TOO_LARGE, "frame too large"));
+            }
+            let Ok(parsed) = serde_json::from_slice::<ReactionRequest>(&bytes) else {
+                return Ok(text_resp(StatusCode::BAD_REQUEST, "invalid JSON"));
+            };
+            let mut room = room_arc.write().await;
+            if !room.check_rate_limit(&parsed.peer_id) {
+                return Ok(text_resp(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "rate limit exceeded",
+                ));
+            }
+            if parsed.emoji.is_empty() || parsed.emoji.len() > 16 {
+                return Ok(text_resp(StatusCode::BAD_REQUEST, "invalid reaction"));
+            }
+            room.last_activity = Instant::now();
+            return Ok(text_resp(StatusCode::OK, "ok"));
         }
 
         // GET /v1/rooms/:code/ws
@@ -537,6 +676,11 @@ fn apply_room_message(
             playback.queue.retain(|t| !is_local_track(&t.video_id));
             playback.revision = room.playback.revision.saturating_add(1);
             playback.anchor_server_ms = now_ms();
+            let next_track_id = playback.current_track.as_ref().map(|t| t.video_id.clone());
+            if room.vote_skip_track_id != next_track_id {
+                room.vote_skip_track_id = next_track_id;
+                room.vote_skips.clear();
+            }
             room.playback = playback;
             room.broadcast_snapshot();
             Ok(None)
@@ -615,6 +759,16 @@ async fn run_ws_peer(
             incoming = stream.next() => {
                 match incoming {
                     Some(Ok(Message::Text(txt))) => {
+                        if txt.len() > MAX_FRAME_BYTES {
+                            let err = RoomWireMessage::Error {
+                                code: "frame_too_large".to_owned(),
+                                message: "frame exceeds 16KB limit".to_owned(),
+                            };
+                            if let Ok(s) = serde_json::to_string(&err) {
+                                let _ = sink.send(Message::Text(s.into())).await;
+                            }
+                            continue;
+                        }
                         if let Ok(msg) = serde_json::from_str::<RoomWireMessage>(&txt) {
                             let reply = {
                                 let mut room = room_arc.write().await;

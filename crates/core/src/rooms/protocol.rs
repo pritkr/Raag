@@ -116,9 +116,37 @@ pub struct JoinRoomResponse {
     pub snapshot: RoomWireMessage,
 }
 
+/// Maximum WebSocket / HTTP JSON control frame size (16 KB).
+pub const MAX_FRAME_BYTES: usize = 16 * 1024;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoomCommandRequest {
     pub peer_id: String,
     pub host_secret: Option<String>,
     pub message: RoomWireMessage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VoteSkipRequest {
+    pub peer_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VoteSkipResponse {
+    pub votes: usize,
+    pub threshold: usize,
+    pub skipped: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KickParticipantRequest {
+    pub peer_id: String,
+    pub host_secret: Option<String>,
+    pub target_peer_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReactionRequest {
+    pub peer_id: String,
+    pub emoji: String,
 }

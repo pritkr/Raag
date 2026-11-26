@@ -10,6 +10,7 @@
 pub mod android;
 pub mod desktop;
 pub mod nsh_audio;
+pub mod pcm_backend;
 
 use resonance_contract::{AudioBackend, AuthBackendStatus, AuthSession, AuthStore};
 use resonance_core::innertube::auth::extract_cookie;

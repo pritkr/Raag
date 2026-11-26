@@ -1,7 +1,9 @@
 //! Optimistic account-mutation slice (`MutationSlice`) handling like/dislike
 //! and playlist edit transitions with deterministic rollbacks on `LiveUpdate::MutationFailed`.
 
-use resonance_contract::{LikeAction, MutationCommand, PlaylistEditOp, Track, TrackId};
+use resonance_contract::{
+    LibraryCollectionRef, LikeAction, MutationCommand, PlaylistEditOp, Track, TrackId,
+};
 
 use super::catalog_slice::CatalogSlice;
 use super::library_slice::LibrarySlice;
@@ -9,6 +11,7 @@ use super::playback_slice::PlaybackSlice;
 
 #[derive(Clone)]
 pub struct PendingPlaylistEdit {
+    pub mutation_gen: u64,
     pub playlist_id: String,
     pub previous_tracks: Vec<Track>,
     pub previous_count: Option<u32>,
@@ -17,6 +20,7 @@ pub struct PendingPlaylistEdit {
 #[derive(Clone, Default)]
 pub struct MutationSlice {
     pub pending_mutations: usize,
+    pub next_mutation_gen: u64,
     pub pending_playlist_edits: Vec<PendingPlaylistEdit>,
 }
 
@@ -141,7 +145,9 @@ impl MutationSlice {
 
         if live && signed_in {
             self.pending_mutations += 1;
+            self.next_mutation_gen = self.next_mutation_gen.saturating_add(1);
             self.pending_playlist_edits.push(PendingPlaylistEdit {
+                mutation_gen: self.next_mutation_gen,
                 playlist_id: playlist_id.to_owned(),
                 previous_tracks,
                 previous_count,
@@ -271,6 +277,96 @@ impl MutationSlice {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Generation-guarded rollback for playlist mutations, returning a user-facing toast message.
+    pub fn rollback_playlist_edit_by_gen(
+        &mut self,
+        mutation_gen: u64,
+        library: &mut LibrarySlice,
+        catalog: &mut CatalogSlice,
+    ) -> Option<String> {
+        let pos = self
+            .pending_playlist_edits
+            .iter()
+            .rposition(|e| e.mutation_gen == mutation_gen)?;
+        self.pending_mutations = self.pending_mutations.saturating_sub(1);
+        let snapshot = self.pending_playlist_edits.remove(pos);
+        if let Some(col) = catalog.selected_collection.as_mut()
+            && col.id == snapshot.playlist_id
+        {
+            col.tracks = snapshot.previous_tracks;
+        }
+        if let Some(pl) = library.playlists.iter_mut().find(|p| {
+            p.playlist_id.as_deref() == Some(snapshot.playlist_id.as_str())
+                || p.browse_id == snapshot.playlist_id
+        }) {
+            pl.track_count = snapshot.previous_count;
+        }
+        Some("Couldn't update playlist — restored".to_owned())
+    }
+
+    /// Creates a new local playlist entry immediately in `LibrarySlice`.
+    pub fn create_local_playlist(
+        &mut self,
+        title: &str,
+        privacy: &str,
+        library: &mut LibrarySlice,
+    ) -> LibraryCollectionRef {
+        self.next_mutation_gen = self.next_mutation_gen.saturating_add(1);
+        let clean_title = title.trim();
+        let final_title = if clean_title.is_empty() {
+            "Untitled Playlist".to_owned()
+        } else {
+            clean_title.to_owned()
+        };
+        let id = format!(
+            "VL_LOCAL_{}_{}",
+            resonance_core::unix_secs(),
+            self.next_mutation_gen
+        );
+        let item = LibraryCollectionRef {
+            browse_id: id.clone(),
+            playlist_id: Some(id),
+            title: final_title,
+            subtitle: format!("Playlist • {privacy}"),
+            artwork_url: None,
+            track_count: Some(0),
+        };
+        library.playlists.insert(0, item.clone());
+        item
+    }
+
+    /// Deletes a playlist from `LibrarySlice`.
+    pub fn delete_local_playlist(&mut self, playlist_id: &str, library: &mut LibrarySlice) -> bool {
+        let before = library.playlists.len();
+        library.playlists.retain(|p| {
+            p.playlist_id.as_deref() != Some(playlist_id) && p.browse_id != playlist_id
+        });
+        library.playlists.len() < before
+    }
+
+    /// Renames a playlist in `LibrarySlice`.
+    pub fn rename_local_playlist(
+        &mut self,
+        playlist_id: &str,
+        new_title: &str,
+        library: &mut LibrarySlice,
+    ) -> bool {
+        let clean = new_title.trim();
+        if clean.is_empty() {
+            return false;
+        }
+        if let Some(pl) = library
+            .playlists
+            .iter_mut()
+            .find(|p| p.playlist_id.as_deref() == Some(playlist_id) || p.browse_id == playlist_id)
+        {
+            pl.title = clean.to_owned();
+            true
+        } else {
+            false
         }
     }
 }

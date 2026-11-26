@@ -16,11 +16,12 @@ pub enum LibraryFilter {
     LikedSongs,
     Albums,
     Artists,
+    PinnedOffline,
+    Downloads,
+    LocalFiles,
     Podcasts,
     History,
     Uploads,
-    Downloads,
-    Settings,
 }
 
 impl LibraryFilter {
@@ -31,11 +32,12 @@ impl LibraryFilter {
             Self::LikedSongs,
             Self::Albums,
             Self::Artists,
+            Self::PinnedOffline,
+            Self::Downloads,
+            Self::LocalFiles,
             Self::Podcasts,
             Self::History,
             Self::Uploads,
-            Self::Downloads,
-            Self::Settings,
         ]
     }
 
@@ -46,11 +48,12 @@ impl LibraryFilter {
             Self::LikedSongs => "Liked songs",
             Self::Albums => "Albums",
             Self::Artists => "Artists",
+            Self::PinnedOffline => "Pinned Offline",
+            Self::Downloads => "Downloads",
+            Self::LocalFiles => "Local Files",
             Self::Podcasts => "Podcasts",
             Self::History => "History",
             Self::Uploads => "Uploads",
-            Self::Downloads => "Downloads",
-            Self::Settings => "Settings",
         }
     }
 }

@@ -38,12 +38,35 @@ pub fn is_desktop_layout() -> bool {
     window().width.0 >= DESKTOP_MIN_WIDTH
 }
 
+/// Reactive breakpoint helper matching `is_desktop_layout()`.
+pub fn breakpoint_is_desktop() -> bool {
+    window().width.0 >= DESKTOP_MIN_WIDTH
+}
+
+/// Responsive grid column count based on current window width.
+pub fn grid_columns() -> u32 {
+    let w = window().width.0;
+    if w >= 1280.0 {
+        5
+    } else if w >= 960.0 {
+        4
+    } else if w >= 640.0 {
+        3
+    } else {
+        2
+    }
+}
+
 pub fn is_desktop_panel_visible() -> bool {
     window().width.0 >= DESKTOP_PANEL_MIN_WIDTH
 }
 
 pub fn radius_card() -> Points {
     px(theme().number("radius-card").unwrap_or(12.0))
+}
+
+pub fn radius_inset() -> Points {
+    px(theme().number("radius-inset").unwrap_or(8.0))
 }
 
 pub fn radius_panel() -> Points {

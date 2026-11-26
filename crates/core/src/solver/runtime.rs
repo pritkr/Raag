@@ -127,6 +127,9 @@ impl QuickJsRuntime {
                             })));
                             let res = eval_quickjs_solve(ctx, n_param, sig_param);
                             rt.set_interrupt_handler(None);
+                            if res.is_err() {
+                                loaded = None;
+                            }
                             let _ = reply.send(res);
                         }
                         Ok(WorkerJob::Jsc {
@@ -175,6 +178,9 @@ impl QuickJsRuntime {
                                 })));
                                 let res = eval_quickjs_jsc(ctx, &input_json);
                                 rt.set_interrupt_handler(None);
+                                if res.is_err() {
+                                    loaded = None;
+                                }
                                 let _ = reply.send(res);
                             }
                         }
@@ -265,6 +271,7 @@ fn load_quickjs_context(
         .map_err(|e| CoreError::Solver(format!("read solver script: {e}")))?;
     let rt = Runtime::new().map_err(|e| CoreError::Solver(format!("QuickJS runtime: {e}")))?;
     rt.set_memory_limit(heap_limit_bytes);
+    rt.set_max_stack_size(1024 * 1024);
     let ctx = Context::full(&rt).map_err(|e| CoreError::Solver(format!("QuickJS context: {e}")))?;
     ctx.with(|ctx| {
         ctx.eval::<(), _>(source.as_bytes())

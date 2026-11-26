@@ -6,6 +6,7 @@
 //! and Wave 0 frozen extension modules (`storage`, `settings`, `catalog_ext`,
 //! `rooms`, `local_media`, `updater`, `casting`).
 
+pub mod audio_ext;
 pub mod casting;
 pub mod catalog_ext;
 pub mod desktop_auth;
@@ -22,6 +23,7 @@ pub mod storage;
 pub mod traits;
 pub mod updater;
 
+pub use audio_ext::*;
 pub use casting::*;
 pub use catalog_ext::*;
 pub use desktop_auth::*;

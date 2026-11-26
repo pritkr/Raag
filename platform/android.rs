@@ -21,6 +21,27 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 pub const ANDROID_KEYSTORE_KEY: &str = "ytmusic_auth_session_v1";
 
+// Inbound MediaCommand opcodes — must stay 1:1 with `ResonanceNativeBridge.kt`
+pub const CMD_PLAY: i32 = 1;
+pub const CMD_PAUSE: i32 = 2;
+pub const CMD_TOGGLE_PLAY_PAUSE: i32 = 3;
+pub const CMD_NEXT: i32 = 4;
+pub const CMD_PREVIOUS: i32 = 5;
+pub const CMD_SEEK_MS: i32 = 6;
+pub const CMD_BECOMING_NOISY: i32 = 7;
+pub const CMD_AUDIO_FOCUS_LOST_TRANSIENT: i32 = 8;
+pub const CMD_AUDIO_FOCUS_GAINED: i32 = 9;
+pub const CMD_STOP: i32 = 10;
+
+// Inbound ExoPlayer state codes — must stay 1:1 with `ResonanceNativeBridge.kt`
+pub const STATE_ERROR: i32 = -1;
+pub const STATE_IDLE: i32 = 1;
+pub const STATE_BUFFERING: i32 = 2;
+pub const STATE_READY: i32 = 3;
+pub const STATE_ENDED: i32 = 4;
+pub const STATE_PLAYING: i32 = 5;
+pub const STATE_PAUSED: i32 = 6;
+
 /// Ensures `<data_dir>/downloads` exists and contains an empty `.nomedia` sentinel
 /// so Android `MediaStore` does not index internal app downloads.
 pub fn ensure_downloads_dir(data_dir: &Path) -> std::io::Result<PathBuf> {
@@ -73,6 +94,10 @@ pub enum BridgeCall {
     Stop,
     SeekMs(u64),
     SetVolume(f32),
+    SetPlaybackSpeed {
+        speed: f32,
+        preserve_pitch: bool,
+    },
     UpdateMetadata {
         title: String,
         playing: bool,
@@ -106,6 +131,7 @@ pub enum AndroidTelemetryEvent {
     AuthCookiesCaptured {
         cookie_header: String,
     },
+    AuthWebViewCancelled,
 }
 
 /// Testable seam abstracting outbound Rust -> Kotlin JNI calls.
@@ -121,6 +147,7 @@ pub trait AndroidBridgeInvoker: Send + Sync {
     fn audio_stop(&self) -> CoreResult<()>;
     fn audio_seek_ms(&self, position_ms: u64) -> CoreResult<()>;
     fn audio_set_volume(&self, volume: f32) -> CoreResult<()>;
+    fn audio_set_playback_speed(&self, speed: f32, preserve_pitch: bool) -> CoreResult<()>;
     fn audio_update_metadata(&self, meta: &NowPlayingMetadata, playing: bool, position_ms: u64);
 
     fn keystore_write(&self, key: &str, plaintext: &str) -> Result<bool, String>;
@@ -214,6 +241,17 @@ impl AndroidBridgeInvoker for MockAndroidBridgeInvoker {
         Ok(())
     }
 
+    fn audio_set_playback_speed(&self, speed: f32, preserve_pitch: bool) -> CoreResult<()> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push(BridgeCall::SetPlaybackSpeed {
+                speed,
+                preserve_pitch,
+            });
+        Ok(())
+    }
+
     fn audio_update_metadata(&self, meta: &NowPlayingMetadata, playing: bool, position_ms: u64) {
         self.calls.lock().unwrap().push(BridgeCall::UpdateMetadata {
             title: meta.title.clone(),
@@ -298,7 +336,11 @@ impl JniBridgeInvoker {
             .attach_current_thread()
             .map_err(|e| redact_secrets(&format!("JNI attach_current_thread failed: {e}")))?;
         let cls = <&jni::objects::JClass>::from(host.bridge_class.as_obj());
-        let result = f(&mut env, cls);
+        let result = env
+            .with_local_frame(32, |frame_env| -> jni::errors::Result<Result<R, String>> {
+                Ok(f(frame_env, cls))
+            })
+            .map_err(|e| redact_secrets(&format!("JNI local frame failed: {e}")))?;
         if env.exception_check().unwrap_or(false) {
             let _ = env.exception_clear();
             return Err("Kotlin JNI call threw an exception".to_owned());
@@ -399,6 +441,23 @@ impl AndroidBridgeInvoker for JniBridgeInvoker {
                 "audioSetVolume",
                 "(F)V",
                 &[jni::objects::JValue::Float(volume)],
+            )
+            .map_err(|e| redact_secrets(&e.to_string()))?;
+            Ok(())
+        })
+        .map_err(|e| CoreError::Playback(PlaybackError::BackendUnavailable(redact_secrets(&e))))
+    }
+
+    fn audio_set_playback_speed(&self, speed: f32, preserve_pitch: bool) -> CoreResult<()> {
+        self.with_env(|env, cls| {
+            env.call_static_method(
+                cls,
+                "audioSetPlaybackSpeed",
+                "(FZ)V",
+                &[
+                    jni::objects::JValue::Float(speed),
+                    jni::objects::JValue::Bool(u8::from(preserve_pitch)),
+                ],
             )
             .map_err(|e| redact_secrets(&e.to_string()))?;
             Ok(())
@@ -657,7 +716,18 @@ impl AndroidMediaBridge {
             AndroidTelemetryEvent::AuthCookiesCaptured { cookie_header } => {
                 Self::dispatch_auth_cookies_from_jni(cookie_header);
             }
+            AndroidTelemetryEvent::AuthWebViewCancelled => {
+                log::info!("android auth webview sign-in cancelled");
+            }
         }
+    }
+
+    pub async fn set_playback_speed(&self, speed: f32, preserve_pitch: bool) -> CoreResult<()> {
+        self.invoker.audio_set_playback_speed(speed, preserve_pitch)
+    }
+
+    pub fn launch_sign_in_webview(&self) -> CoreResult<()> {
+        self.invoker.launch_sign_in_webview()
     }
 }
 
@@ -900,19 +970,31 @@ impl AuthStore for AndroidKeystoreAuthStore {
     }
 }
 
+static ANDROID_BACK_HANDLER_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Allows the NSH UI/store to register whether a non-root route or modal can consume back.
+pub fn set_android_back_can_pop(can_pop: bool) {
+    ANDROID_BACK_HANDLER_ACTIVE.store(can_pop, Ordering::SeqCst);
+}
+
+/// Handles system/predictive back from `MainActivity`; returns `true` if NSH should consume it.
+pub fn handle_inbound_back_pressed() -> bool {
+    ANDROID_BACK_HANDLER_ACTIVE.load(Ordering::SeqCst)
+}
+
 /// Decodes and dispatches an inbound media command opcode from `ResonanceNativeBridge`.
 pub fn handle_inbound_media_command(opcode: i32, arg_ms: i64) -> Option<MediaCommand> {
     let cmd = match opcode {
-        1 => MediaCommand::Play,
-        2 => MediaCommand::Pause,
-        3 => MediaCommand::TogglePlayPause,
-        4 => MediaCommand::Next,
-        5 => MediaCommand::Previous,
-        6 => MediaCommand::SeekMs(arg_ms.max(0) as u64),
-        7 => MediaCommand::BecomingNoisy,
-        8 => MediaCommand::AudioFocusLostTransient,
-        9 => MediaCommand::AudioFocusGained,
-        10 => MediaCommand::Stop,
+        CMD_PLAY => MediaCommand::Play,
+        CMD_PAUSE => MediaCommand::Pause,
+        CMD_TOGGLE_PLAY_PAUSE => MediaCommand::TogglePlayPause,
+        CMD_NEXT => MediaCommand::Next,
+        CMD_PREVIOUS => MediaCommand::Previous,
+        CMD_SEEK_MS => MediaCommand::SeekMs(arg_ms.max(0) as u64),
+        CMD_BECOMING_NOISY => MediaCommand::BecomingNoisy,
+        CMD_AUDIO_FOCUS_LOST_TRANSIENT => MediaCommand::AudioFocusLostTransient,
+        CMD_AUDIO_FOCUS_GAINED => MediaCommand::AudioFocusGained,
+        CMD_STOP => MediaCommand::Stop,
         _ => return None,
     };
     AndroidMediaBridge::dispatch_from_jni(cmd);
@@ -950,8 +1032,10 @@ pub fn handle_inbound_playback_state(
         return false;
     }
     match state_code {
-        5 => ANDROID_REPORTED_PLAYING.store(true, Ordering::SeqCst),
-        4 | 6 | -1 => ANDROID_REPORTED_PLAYING.store(false, Ordering::SeqCst),
+        STATE_PLAYING => ANDROID_REPORTED_PLAYING.store(true, Ordering::SeqCst),
+        STATE_ENDED | STATE_PAUSED | STATE_ERROR => {
+            ANDROID_REPORTED_PLAYING.store(false, Ordering::SeqCst)
+        }
         _ => {}
     }
     let redacted_error = error_msg.map(|m| redact_secrets(&m));
@@ -974,6 +1058,11 @@ pub fn handle_inbound_auth_cookies(cookie_header: &str) -> bool {
         cookie_header: cookie_header.to_owned(),
     });
     true
+}
+
+/// Dispatches WebView sign-in cancellation from `WebViewSignInActivity`.
+pub fn handle_inbound_auth_cancelled() {
+    AndroidMediaBridge::dispatch_telemetry_from_jni(AndroidTelemetryEvent::AuthWebViewCancelled);
 }
 
 /// C-ABI JNI callbacks invoked by `dev.resonance.ytmusic.ResonanceNativeBridge`.
@@ -1060,6 +1149,39 @@ pub extern "system" fn Java_dev_resonance_ytmusic_ResonanceNativeBridge_nativeOn
 
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_resonance_ytmusic_ResonanceNativeBridge_nativeInitPaths(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    files_dir: jni::objects::JString<'_>,
+    cache_dir: jni::objects::JString<'_>,
+) {
+    let files_str: String = env
+        .get_string(&files_dir)
+        .map(Into::into)
+        .unwrap_or_default();
+    let cache_str: String = env
+        .get_string(&cache_dir)
+        .map(Into::into)
+        .unwrap_or_default();
+    if !files_str.is_empty() && !cache_str.is_empty() {
+        resonance_core::storage::set_android_app_paths(
+            PathBuf::from(files_str),
+            PathBuf::from(cache_str),
+        );
+    }
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_resonance_ytmusic_ResonanceNativeBridge_nativeOnBackPressed(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jboolean {
+    u8::from(handle_inbound_back_pressed())
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_resonance_ytmusic_ResonanceNativeBridge_nativeOnAuthCookiesCaptured(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
@@ -1072,4 +1194,13 @@ pub extern "system" fn Java_dev_resonance_ytmusic_ResonanceNativeBridge_nativeOn
         let cookies_str: String = cookies.into();
         let _ = handle_inbound_auth_cookies(&cookies_str);
     }
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_resonance_ytmusic_ResonanceNativeBridge_nativeOnWebViewCancelled(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) {
+    handle_inbound_auth_cancelled();
 }

@@ -446,7 +446,7 @@ fn verify_ed25519_raw(key: &VerifyingKey, payload: &[u8], sig_raw: &[u8]) -> Cor
     };
 
     let signature = Signature::from_bytes(&sig_bytes);
-    key.verify(payload, &signature).map_err(|e| {
+    key.verify_strict(payload, &signature).map_err(|e| {
         CoreError::Provider(ProviderError::Parse(format!(
             "Ed25519 signature verification failed: {e}"
         )))

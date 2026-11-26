@@ -19,6 +19,7 @@ pub mod local_media;
 pub mod lyrics;
 pub mod offline;
 pub mod palette;
+pub mod pcm_engine;
 pub mod playback;
 pub mod potoken;
 pub mod providers;

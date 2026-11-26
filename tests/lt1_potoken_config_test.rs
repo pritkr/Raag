@@ -127,12 +127,25 @@ async fn chained_potoken_provider_falls_through_tiers_and_respects_negative_cach
     assert_eq!(chain.diagnostics().status, PoTokenHealthStatus::Healthy);
 
     // Total failure with CachingPoTokenProvider triggers 30s negative-cache backoff
+    struct SharedFailingProvider(Arc<FailingProvider>);
+    #[async_trait]
+    impl PoTokenProvider for SharedFailingProvider {
+        async fn mint_token(&self, req: &PoTokenRequest) -> Result<PoToken, PoTokenError> {
+            self.0.mint_token(req).await
+        }
+        fn invalidate(&self, scope: PoTokenScope) {
+            self.0.invalidate(scope);
+        }
+        fn provider_name(&self) -> &'static str {
+            self.0.provider_name()
+        }
+    }
+
     let fail_inner = Arc::new(FailingProvider::new("all-fail"));
-    let fail_chain = ChainedPoTokenProvider::new(vec![fail_inner.clone()]);
     let clock = Arc::new(AtomicU64::new(1_700_000_000));
     let clock_clone = Arc::clone(&clock);
     let cached_fail = CachingPoTokenProvider::with_clock(
-        fail_chain,
+        SharedFailingProvider(Arc::clone(&fail_inner)),
         Arc::new(move || clock_clone.load(Ordering::SeqCst)),
     );
 

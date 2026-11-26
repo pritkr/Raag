@@ -10,7 +10,8 @@ use resonance_contract::{HomeItem, HomeSection, Track};
 use crate::store::{self, AppTab};
 use crate::ui::controls::{
     artwork_box, compact_mix_row, glass_pill_button, hero_pill_button, media_square_card,
-    mood_chip, secondary_button, skeleton_row, status_card, svg_icon_button, track_row_view,
+    mood_chip, secondary_button, set_text_input_focused, skeleton_row, status_card,
+    svg_icon_button, track_row_view,
 };
 use crate::ui::icons::IconKind;
 use crate::ui::tokens::{
@@ -208,6 +209,8 @@ fn collection_detail_view() -> impl IntoElement {
                                 .test_id("collection-filter-input")
                                 .value(store::collection_search_query)
                                 .on_change(store::set_collection_search_query)
+                                .on_focus(|| set_text_input_focused(true))
+                                .on_blur(|| set_text_input_focused(false))
                                 .placeholder("Find in this list")
                                 .placeholder_color(|| color(theme().muted_foreground))
                                 .caret_color(|| color(theme().primary))
@@ -632,19 +635,23 @@ fn home_feed_view() -> impl IntoElement {
             view()
                 .p_3()
                 .gap_3()
-                .when(is_desktop_layout(), |v| v.px_8().py_5().gap_6())
+                .style_when(is_desktop_layout, |s| s.px_8().py_5().gap_6())
                 // Mood / category filter chips row
-                .child(scroll().horizontal().w_full().h(px(36.0)).child(
-                    view().flex_row().items_center().gap_2().py_1().children(
-                        HOME_MOODS.into_iter().map(|mood| {
-                            mood_chip(
-                                mood,
-                                move || store::selected_mood().as_deref() == Some(mood),
-                                move || store::select_mood(mood),
-                            )
-                        }),
-                    ),
-                ))
+                .child(
+                    scroll()
+                        .horizontal()
+                        .w_full()
+                        .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                        .child(view().flex_row().items_center().gap_2().py_1().children(
+                            HOME_MOODS.into_iter().map(|mood| {
+                                mood_chip(
+                                    mood,
+                                    move || store::selected_mood().as_deref() == Some(mood),
+                                    move || store::select_mood(mood),
+                                )
+                            }),
+                        )),
+                )
                 // Loading skeletons
                 .child(when(store::is_home_loading, || {
                     view()

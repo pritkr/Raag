@@ -207,6 +207,7 @@ fn settings_v1_persists_via_put_metadata_and_survives_clear_all_caches() {
         offline_quota_bytes: 10 * 1024 * 1024 * 1024,
         update_channel: "beta".into(),
         local_music_dirs: vec!["/music".into()],
+        ..SettingsV1::default()
     };
 
     save_persisted_settings(&cache, &custom);

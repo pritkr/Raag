@@ -53,6 +53,7 @@
       "input": true
     },
     "audio": true,
+    "windows": true,
     "application": true,
     "statusBar": true,
     "clipboard": true

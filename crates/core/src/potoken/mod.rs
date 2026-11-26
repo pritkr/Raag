@@ -77,7 +77,7 @@ pub fn build_po_token_pipeline(config: PoTokenPipelineConfig) -> Arc<dyn PoToken
     if let Some(bin_path) = config.rustypipe_botguard_bin {
         tiers.push(Arc::new(RustyPipeBotguardProvider::new(bin_path)));
     } else if config.probe_rustypipe_botguard
-        && let Some(rp_bg) = RustyPipeBotguardProvider::discover()
+        && let Some(rp_bg) = RustyPipeBotguardProvider::discover(None)
     {
         tiers.push(Arc::new(rp_bg));
     }

@@ -9,10 +9,11 @@ use tokio::sync::mpsc;
 use url::Url;
 
 use crate::rooms::clock_sync::{ClockSyncFilter, DriftAction, DriftGuard};
+use crate::rooms::drift::{ThreeZoneDriftAction, ThreeZoneDriftController};
 use crate::rooms::long_poll::LongPollClient;
 use crate::rooms::protocol::{
-    CreateRoomRequest, JoinRoomRequest, RoomCommandRequest, is_local_track, to_ws_url,
-    validate_relay_url,
+    CreateRoomRequest, JoinRoomRequest, KickParticipantRequest, RoomCommandRequest,
+    VoteSkipResponse, is_local_track, to_ws_url, validate_relay_url,
 };
 use crate::rooms::ws_client::{WsRoomConnection, WsTransportError};
 
@@ -64,6 +65,7 @@ pub struct RoomController {
     playback: AuthoritativePlaybackState,
     clock_filter: ClockSyncFilter,
     drift_guard: DriftGuard,
+    three_zone_drift: ThreeZoneDriftController,
     local_track_blocked: bool,
     connected: bool,
 }
@@ -165,6 +167,7 @@ impl RoomController {
             playback,
             clock_filter: ClockSyncFilter::new(),
             drift_guard: DriftGuard::new(),
+            three_zone_drift: ThreeZoneDriftController::new(),
             local_track_blocked: false,
             connected: true,
         })
@@ -402,6 +405,51 @@ impl RoomController {
             local_now_ms,
             self.clock_filter.offset_ms(),
         )
+    }
+
+    pub fn evaluate_guest_drift_three_zone(
+        &mut self,
+        local_pos_ms: u64,
+        local_now_ms: u64,
+        slew_available: bool,
+    ) -> ThreeZoneDriftAction {
+        if self.role == RoomRole::Host {
+            return ThreeZoneDriftAction::Nominal;
+        }
+        self.three_zone_drift.evaluate(
+            &self.playback,
+            local_pos_ms,
+            local_now_ms,
+            self.clock_filter.offset_ms(),
+            slew_available,
+        )
+    }
+
+    pub async fn cast_vote_skip(&self) -> Result<VoteSkipResponse, String> {
+        self.long_poll
+            .vote_skip(&self.room_code, &self.peer_id)
+            .await
+    }
+
+    pub async fn kick_participant(&self, target_peer_id: &str) -> Result<(), String> {
+        if self.role != RoomRole::Host {
+            return Err("only host can kick participants".to_owned());
+        }
+        self.long_poll
+            .kick_participant(
+                &self.room_code,
+                &KickParticipantRequest {
+                    peer_id: self.peer_id.clone(),
+                    host_secret: self.host_secret.clone(),
+                    target_peer_id: target_peer_id.to_owned(),
+                },
+            )
+            .await
+    }
+
+    pub fn reconnect_backoff_ms(attempt: u32) -> u64 {
+        let exp = attempt.min(4);
+        500u64.saturating_mul(1u64 << exp)
     }
 }
 

@@ -34,6 +34,11 @@ pub struct ListenTogetherCallbacks {
     pub on_join_room: Arc<dyn Fn(String, String, String)>,
     pub on_leave_room: Arc<dyn Fn()>,
     pub on_start_local_radio: Arc<dyn Fn()>,
+    pub on_vote_skip: Arc<dyn Fn()>,
+    pub on_send_reaction: Arc<dyn Fn(String)>,
+    pub on_kick_participant: Arc<dyn Fn(String)>,
+    pub on_transfer_host: Arc<dyn Fn(String)>,
+    pub on_copy_invite: Arc<dyn Fn(String)>,
 }
 
 impl Default for ListenTogetherCallbacks {
@@ -43,6 +48,11 @@ impl Default for ListenTogetherCallbacks {
             on_join_room: Arc::new(|_, _, _| {}),
             on_leave_room: Arc::new(|| {}),
             on_start_local_radio: Arc::new(|| {}),
+            on_vote_skip: Arc::new(|| {}),
+            on_send_reaction: Arc::new(|_| {}),
+            on_kick_participant: Arc::new(|_| {}),
+            on_transfer_host: Arc::new(|_| {}),
+            on_copy_invite: Arc::new(|_| {}),
         }
     }
 }
@@ -62,6 +72,11 @@ pub fn listen_together_screen(
     let cb_join = Arc::clone(&cb.on_join_room);
     let cb_leave = Arc::clone(&cb.on_leave_room);
     let cb_radio = Arc::clone(&cb.on_start_local_radio);
+    let cb_vote_skip = Arc::clone(&cb.on_vote_skip);
+    let cb_reaction = Arc::clone(&cb.on_send_reaction);
+    let cb_kick = Arc::clone(&cb.on_kick_participant);
+    let cb_transfer = Arc::clone(&cb.on_transfer_host);
+    let cb_copy = Arc::clone(&cb.on_copy_invite);
 
     scroll()
         .flex_1()
@@ -163,10 +178,22 @@ pub fn listen_together_screen(
                         let cb_c = Arc::clone(&cb_create);
                         let cb_j = Arc::clone(&cb_join);
                         let cb_l = Arc::clone(&cb_leave);
+                        let cb_vs = Arc::clone(&cb_vote_skip);
+                        let cb_rx = Arc::clone(&cb_reaction);
+                        let cb_k = Arc::clone(&cb_kick);
+                        let cb_tr = Arc::clone(&cb_transfer);
+                        let cb_cp = Arc::clone(&cb_copy);
 
                         dynamic(move || {
                             if let Some(snap) = room_snapshot.get() {
                                 let cb_l_inner = Arc::clone(&cb_l);
+                                let cb_vs_inner = Arc::clone(&cb_vs);
+                                let cb_rx_inner = Arc::clone(&cb_rx);
+                                let cb_k_inner = Arc::clone(&cb_k);
+                                let cb_tr_inner = Arc::clone(&cb_tr);
+                                let cb_cp_inner = Arc::clone(&cb_cp);
+                                let room_code_copy = snap.room_code.clone();
+                                let is_host = snap.role == RoomRole::Host;
                                 let role_label = match snap.role {
                                     RoomRole::Host => "Host",
                                     RoomRole::Guest => "Guest",
@@ -189,8 +216,10 @@ pub fn listen_together_screen(
                                     .child(
                                         view()
                                             .flex_row()
+                                            .flex_wrap()
                                             .items_center()
                                             .justify_between()
+                                            .gap_2()
                                             .child(
                                                 view()
                                                     .gap_1()
@@ -202,17 +231,25 @@ pub fn listen_together_screen(
                                                     )
                                                     .child(
                                                         text(format!(
-                                                            "{role_label} • {} • Offset {} ms",
+                                                            "{role_label} • {} • Synced ±{} ms",
                                                             snap.transport.label(),
-                                                            snap.clock_offset_ms
+                                                            snap.clock_offset_ms.abs()
                                                         ))
                                                         .text_xs()
                                                         .text_color(move || theme().muted_foreground),
                                                     ),
                                             )
-                                            .child(secondary_button("Leave Room", move || {
-                                                cb_l_inner()
-                                            })),
+                                            .child(
+                                                view()
+                                                    .flex_row()
+                                                    .gap_2()
+                                                    .child(secondary_button("Copy Invite", move || {
+                                                        cb_cp_inner(room_code_copy.clone())
+                                                    }))
+                                                    .child(secondary_button("Leave Room", move || {
+                                                        cb_l_inner()
+                                                    })),
+                                            ),
                                     )
                                     .when_some(warning, |v, msg| {
                                         v.child(
@@ -233,14 +270,64 @@ pub fn listen_together_screen(
                                     .child(
                                         view()
                                             .p_3()
+                                            .gap_3()
                                             .rounded(radius_card)
                                             .bg(pill_glass_surface)
                                             .child(
                                                 text(format!("Now Syncing: {track_label}"))
                                                     .text_sm()
                                                     .text_color(move || theme().foreground),
+                                            )
+                                            .child(
+                                                view()
+                                                    .flex_row()
+                                                    .flex_wrap()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .child(secondary_button("Vote Skip", move || {
+                                                        cb_vs_inner()
+                                                    }))
+                                                    .children(["🔥", "❤️", "🎧", "✨"].into_iter().map(|emoji| {
+                                                        let cb_e = Arc::clone(&cb_rx_inner);
+                                                        let label = emoji.to_owned();
+                                                        button()
+                                                            .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                                                            .px_3()
+                                                            .rounded(radius_pill)
+                                                            .bg(move || theme().secondary)
+                                                            .on_press(move || cb_e(label.clone()))
+                                                            .child(
+                                                                text(emoji)
+                                                                    .text_sm()
+                                                                    .text_color(move || {
+                                                                        theme().foreground
+                                                                    }),
+                                                            )
+                                                    })),
                                             ),
                                     )
+                                    .when(!snap.playback.queue.is_empty(), |v| {
+                                        v.child(
+                                            view()
+                                                .gap_1()
+                                                .child(
+                                                    text(format!(
+                                                        "Up Next ({})",
+                                                        snap.playback.queue.len()
+                                                    ))
+                                                    .text_sm()
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .text_color(move || theme().foreground),
+                                                )
+                                                .children(snap.playback.queue.iter().map(|q| {
+                                                    text(format!("• {} — {}", q.title, q.artist))
+                                                        .text_xs()
+                                                        .text_color(move || {
+                                                            theme().muted_foreground
+                                                        })
+                                                })),
+                                        )
+                                    })
                                     .child(
                                         view()
                                             .gap_2()
@@ -258,23 +345,40 @@ pub fn listen_together_screen(
                                                     RoomRole::Host => "Host",
                                                     RoomRole::Guest => "Guest",
                                                 };
+                                                let peer_id = p.peer_id.clone();
+                                                let peer_id_kick = p.peer_id.clone();
+                                                let can_manage = is_host && p.role == RoomRole::Guest;
+                                                let cb_tr_p = Arc::clone(&cb_tr_inner);
+                                                let cb_k_p = Arc::clone(&cb_k_inner);
                                                 view()
                                                     .flex_row()
                                                     .items_center()
                                                     .justify_between()
                                                     .py_1()
                                                     .child(
-                                                        text(p.display_name.clone())
+                                                        text(format!("{} ({badge})", p.display_name))
                                                             .text_sm()
                                                             .text_color(move || theme().foreground),
                                                     )
-                                                    .child(
-                                                        text(badge)
-                                                            .text_xs()
-                                                            .text_color(move || {
-                                                                theme().muted_foreground
-                                                            }),
-                                                    )
+                                                    .when(can_manage, |row| {
+                                                        row.child(
+                                                            view()
+                                                                .flex_row()
+                                                                .gap_2()
+                                                                .child(secondary_button(
+                                                                    "Make Host",
+                                                                    move || {
+                                                                        cb_tr_p(peer_id.clone())
+                                                                    },
+                                                                ))
+                                                                .child(secondary_button(
+                                                                    "Kick",
+                                                                    move || {
+                                                                        cb_k_p(peer_id_kick.clone())
+                                                                    },
+                                                                )),
+                                                        )
+                                                    })
                                             })),
                                     )
                             } else {

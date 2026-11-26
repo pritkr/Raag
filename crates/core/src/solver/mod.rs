@@ -274,6 +274,11 @@ impl QuickJsSolver {
         }
 
         if let (Some(raw_n), Some(solved_n)) = (need_n_eval, solved.n_param.clone()) {
+            if !is_valid_solved_value(&solved_n) {
+                return Err(CoreError::Solver(
+                    "ejs returned invalid n challenge output".to_owned(),
+                ));
+            }
             let meta = serde_json::json!({
                 "runtime": self.runtime.runtime_name(),
                 "protocol": "jsc",
@@ -284,6 +289,13 @@ impl QuickJsSolver {
                 .insert(player_hash, &raw_n, &solved_n, Some(&meta));
         } else if solved.n_param.is_none() {
             solved.n_param = cached_n;
+        }
+        if let Some(ref sig) = solved.sig_param
+            && !is_valid_solved_value(sig)
+        {
+            return Err(CoreError::Solver(
+                "ejs returned invalid sig challenge output".to_owned(),
+            ));
         }
 
         Ok(solved)
@@ -351,3 +363,7 @@ impl QuickJsSolver {
 
 /// Helper wrapper to share a single `QuickJsSolver` across providers.
 pub type SharedSolver = Arc<QuickJsSolver>;
+
+fn is_valid_solved_value(val: &str) -> bool {
+    !val.is_empty() && val.bytes().all(|b| b.is_ascii_graphic())
+}

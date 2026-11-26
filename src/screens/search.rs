@@ -299,6 +299,7 @@ pub fn search_screen() -> impl IntoElement {
                                     .value(move || query_sig.get())
                                     .on_change(move |txt: &str| {
                                         query_sig.set(txt.to_owned());
+                                        store::fetch_search_suggestions(txt);
                                         store::run_search_debounced(txt);
                                     })
                                     .on_submit(move |txt: &str| {
@@ -355,6 +356,36 @@ pub fn search_screen() -> impl IntoElement {
                     .child(filter_tab(SearchFilter::Artists, "search-filter-artists"))
                     .child(filter_tab(SearchFilter::Podcasts, "search-filter-podcasts")),
             )
+            .child(dynamic(move || {
+                let suggestions = store::search_suggestions();
+                if suggestions.is_empty() {
+                    return view().into_element();
+                }
+                view()
+                    .flex_row()
+                    .flex_wrap()
+                    .gap_2()
+                    .children(suggestions.into_iter().take(6).map(|sugg| {
+                        let sugg_click = sugg.clone();
+                        button()
+                            .accessibility_label(sugg.clone())
+                            .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                            .px_3()
+                            .items_center()
+                            .justify_center()
+                            .rounded(radius_pill)
+                            .bg(pill_glass_surface)
+                            .border_1()
+                            .border_color(glass_hairline)
+                            .hover(|s| s.bg(pill_glass_hover))
+                            .on_press(move || {
+                                query_sig.set(sugg_click.clone());
+                                store::run_search(&sugg_click);
+                            })
+                            .child(text(sugg).text_xs().text_color(move || theme().foreground))
+                    }))
+                    .into_element()
+            }))
             .child(when(store::is_search_loading, || {
                 view()
                     .gap_2()
@@ -480,6 +511,32 @@ pub fn search_screen() -> impl IntoElement {
                             tracks
                                 .into_iter()
                                 .map(|t| search_track_row(t, current_id_memo, desktop)),
+                        ),
+                    );
+                }
+
+                if store::search_continuation().is_some() {
+                    out = out.child(
+                        view().pt_2().items_center().child(
+                            button()
+                                .test_id("search-load-more")
+                                .accessibility_label("Load more results")
+                                .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                                .px_5()
+                                .items_center()
+                                .justify_center()
+                                .rounded(radius_pill)
+                                .bg(pill_glass_surface)
+                                .border_1()
+                                .border_color(glass_hairline)
+                                .hover(|s| s.bg(pill_glass_hover))
+                                .on_press(store::load_more_search)
+                                .child(
+                                    text("Load more")
+                                        .text_xs()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(move || theme().foreground),
+                                ),
                         ),
                     );
                 }

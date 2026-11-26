@@ -111,19 +111,27 @@ impl BiquadState {
     #[inline]
     fn process(&mut self, c: &BiquadCoeffs, x: f32) -> f32 {
         let y = c.b0 * x + self.z1;
-        self.z1 = c.b1 * x - c.a1 * y + self.z2;
-        self.z2 = c.b2 * x - c.a2 * y;
-        y
+        let z1 = c.b1 * x - c.a1 * y + self.z2;
+        let z2 = c.b2 * x - c.a2 * y;
+        // Flush subnormal/denormal values to zero to prevent x86/ARM CPU spikes on silence.
+        self.z1 = if z1.abs() < 1e-18 { 0.0 } else { z1 };
+        self.z2 = if z2.abs() < 1e-18 { 0.0 } else { z2 };
+        if y.abs() < 1e-18 { 0.0 } else { y }
     }
 }
+
+const SMOOTH_SUBBLOCK_FRAMES: usize = 128;
+const SMOOTH_ALPHA: f32 = 0.08;
 
 /// Stereo/multi-channel 10-band parametric EQ processor (zero heap allocations in audio loop).
 #[derive(Debug, Clone)]
 pub struct TenBandEq {
     pub enabled: bool,
+    pub auto_headroom: bool,
     sample_rate: f32,
     channels: usize,
     gains_db: [f32; 10],
+    target_gains_db: [f32; 10],
     coeffs: [BiquadCoeffs; 10],
     // Per-channel, per-band DF2T state (up to 2 channels inline; Vec for >2)
     states: Vec<[BiquadState; 10]>,
@@ -136,9 +144,11 @@ impl TenBandEq {
         let coeffs = [BiquadCoeffs::passthrough(); 10];
         Self {
             enabled: false,
+            auto_headroom: true,
             sample_rate: sr,
             channels: ch,
             gains_db: [0.0; 10],
+            target_gains_db: [0.0; 10],
             coeffs,
             states: vec![[BiquadState::default(); 10]; ch],
         }
@@ -148,8 +158,16 @@ impl TenBandEq {
         for (i, &g) in gains_db.iter().enumerate() {
             let clamped = g.clamp(MIN_BAND_DB, MAX_BAND_DB);
             self.gains_db[i] = clamped;
+            self.target_gains_db[i] = clamped;
             self.coeffs[i] =
                 BiquadCoeffs::peaking_eq(self.sample_rate, EQ_BAND_FREQS_HZ[i], DEFAULT_Q, clamped);
+        }
+    }
+
+    /// Sets target gains for smooth click-free coefficient ramping over ~15 ms sub-blocks.
+    pub fn set_target_gains_db(&mut self, gains_db: [f32; 10]) {
+        for (i, &g) in gains_db.iter().enumerate() {
+            self.target_gains_db[i] = g.clamp(MIN_BAND_DB, MAX_BAND_DB);
         }
     }
 
@@ -159,6 +177,7 @@ impl TenBandEq {
         }
         let clamped = gain_db.clamp(MIN_BAND_DB, MAX_BAND_DB);
         self.gains_db[band_index] = clamped;
+        self.target_gains_db[band_index] = clamped;
         self.coeffs[band_index] = BiquadCoeffs::peaking_eq(
             self.sample_rate,
             EQ_BAND_FREQS_HZ[band_index],
@@ -176,9 +195,45 @@ impl TenBandEq {
         self.gains_db
     }
 
+    /// Returns linear pre-amp headroom attenuation (`<= 1.0`) compensating for positive EQ boost.
+    pub fn preamp_linear(&self) -> f32 {
+        if !self.enabled || !self.auto_headroom {
+            return 1.0;
+        }
+        let max_pos = self.gains_db.iter().copied().fold(0.0_f32, f32::max);
+        if max_pos <= 0.05 {
+            1.0
+        } else {
+            10.0_f32.powf(-max_pos / 20.0)
+        }
+    }
+
     pub fn reset_state(&mut self) {
         for ch in &mut self.states {
             *ch = [BiquadState::default(); 10];
+        }
+    }
+
+    fn step_smoothing(&mut self) {
+        for i in 0..10 {
+            let diff = self.target_gains_db[i] - self.gains_db[i];
+            if diff.abs() > 0.01 {
+                self.gains_db[i] += diff * SMOOTH_ALPHA;
+                self.coeffs[i] = BiquadCoeffs::peaking_eq(
+                    self.sample_rate,
+                    EQ_BAND_FREQS_HZ[i],
+                    DEFAULT_Q,
+                    self.gains_db[i],
+                );
+            } else if diff != 0.0 {
+                self.gains_db[i] = self.target_gains_db[i];
+                self.coeffs[i] = BiquadCoeffs::peaking_eq(
+                    self.sample_rate,
+                    EQ_BAND_FREQS_HZ[i],
+                    DEFAULT_Q,
+                    self.gains_db[i],
+                );
+            }
         }
     }
 
@@ -188,16 +243,20 @@ impl TenBandEq {
             return;
         }
         let ch_count = self.channels;
-        for frame in interleaved.chunks_exact_mut(ch_count) {
-            for (ch_idx, sample) in frame.iter_mut().enumerate() {
-                let mut x = *sample;
-                let st = &mut self.states[ch_idx];
-                for band in 0..10 {
-                    if self.gains_db[band].abs() >= 0.01 {
-                        x = st[band].process(&self.coeffs[band], x);
+        let subblock_samples = SMOOTH_SUBBLOCK_FRAMES * ch_count;
+        for subblock in interleaved.chunks_mut(subblock_samples) {
+            self.step_smoothing();
+            for frame in subblock.chunks_exact_mut(ch_count) {
+                for (ch_idx, sample) in frame.iter_mut().enumerate() {
+                    let mut x = *sample;
+                    let st = &mut self.states[ch_idx];
+                    for band in 0..10 {
+                        if self.gains_db[band].abs() >= 0.01 {
+                            x = st[band].process(&self.coeffs[band], x);
+                        }
                     }
+                    *sample = x;
                 }
-                *sample = x;
             }
         }
     }

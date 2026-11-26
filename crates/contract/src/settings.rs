@@ -27,6 +27,15 @@ pub enum PersistedEqPreset {
     Custom,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OfflineQualityPreference {
+    DataSaver64,
+    #[default]
+    Standard160,
+    High256,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SettingsV1 {
@@ -40,11 +49,18 @@ pub struct SettingsV1 {
     pub eq_preset: PersistedEqPreset,
     pub eq_gains_db: [f32; 10],
     pub crossfade_ms: u32,
+    pub playback_speed: f32,
+    pub preserve_pitch: bool,
     pub offline_mode: bool,
-    pub volume: f32,                   // clamped 0.0..=1.0
-    pub offline_quota_bytes: u64,      // default 5 GiB; 0 = Unlimited (consumed by H2.2)
-    pub update_channel: String,        // "stable" | "beta" (consumed by LT-2)
-    pub local_music_dirs: Vec<String>, // persisted folder roots (consumed by H3.2)
+    pub wifi_only_downloads: bool,
+    pub offline_quality: OfflineQualityPreference,
+    pub keep_liked_songs_offline: bool,
+    pub offline_quota_bytes: u64,
+    pub volume: f32, // 0.0..=1.6
+    pub autoplay_radio: bool,
+    pub atr_watchtime_sync: bool,
+    pub update_channel: String,        // "stable" | "beta"
+    pub local_music_dirs: Vec<String>, // persisted folder roots (consumed by W2C)
 }
 
 impl Default for SettingsV1 {
@@ -65,9 +81,16 @@ impl Default for SettingsV1 {
             eq_preset: PersistedEqPreset::Flat,
             eq_gains_db: [0.0; 10],
             crossfade_ms: 0,
+            playback_speed: 1.0,
+            preserve_pitch: true,
             offline_mode: false,
-            volume: 0.85,
+            wifi_only_downloads: true,
+            offline_quality: OfflineQualityPreference::Standard160,
+            keep_liked_songs_offline: false,
             offline_quota_bytes: 5 * 1024 * 1024 * 1024,
+            volume: 0.85,
+            autoplay_radio: true,
+            atr_watchtime_sync: true,
             update_channel: "stable".into(),
             local_music_dirs: Vec::new(),
         }

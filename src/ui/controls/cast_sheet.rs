@@ -225,3 +225,36 @@ pub fn cast_picker_sheet(
 
     modal_panel_container("Cast to Device", status_subtitle, body)
 }
+
+/// Active Cast Banner rendered above the Mini-Player / Desktop Player Bar while casting.
+pub fn active_cast_banner(
+    device_name: &str,
+    on_open_picker: impl Fn() + 'static,
+    on_disconnect: impl Fn() + 'static,
+) -> impl IntoElement {
+    let label: SharedString = format!("Casting to {device_name}").into();
+    view()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .px_3()
+        .py_1()
+        .rounded(radius_card)
+        .bg(pill_glass_surface)
+        .child(
+            button()
+                .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .on_press(on_open_picker)
+                .child(icon(IconKind::Radio, 16.0, move || theme().primary))
+                .child(
+                    text(label)
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(move || theme().foreground),
+                ),
+        )
+        .child(secondary_button("Disconnect", on_disconnect))
+}

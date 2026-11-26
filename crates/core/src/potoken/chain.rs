@@ -7,6 +7,7 @@
 //!    `InnerTubeClient` shifts cleanly to lower PO-enforcement clients in `client_matrix.json`
 //!    and Settings displays a non-blocking diagnostics badge).
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
@@ -15,11 +16,16 @@ use resonance_contract::{
     PoTokenRequest, PoTokenScope,
 };
 
+use crate::innertube::clients::AuthMode;
 use crate::unix_secs;
 
-/// Layered chain of [`PoTokenProvider`]s with automatic failover and health tracking.
+const TIER_COOLDOWN_SECS: u64 = 600;
+
+/// Layered chain of [`PoTokenProvider`]s with automatic failover, per-tier cooldowns,
+/// and health tracking.
 pub struct ChainedPoTokenProvider {
     providers: Vec<Arc<dyn PoTokenProvider>>,
+    tier_cooldown_until: Vec<AtomicU64>,
     diagnostics: RwLock<PoTokenDiagnostics>,
 }
 
@@ -44,8 +50,10 @@ impl ChainedPoTokenProvider {
                 last_checked_unix_secs: unix_secs(),
             }
         };
+        let tier_cooldown_until = providers.iter().map(|_| AtomicU64::new(0)).collect();
         Self {
             providers,
+            tier_cooldown_until,
             diagnostics: RwLock::new(initial),
         }
     }
@@ -53,15 +61,46 @@ impl ChainedPoTokenProvider {
     pub fn is_degraded(&self) -> bool {
         self.diagnostics.read().unwrap().degraded_fallback_active
     }
+
+    /// Resolves a PO token for a specific InnerTube client, strictly enforcing
+    /// `AuthMode::AnonymousOnly` isolation (`ANDROID_VR` and `IOS` NEVER receive Web GVS PO tokens).
+    pub async fn resolve_for_client(
+        &self,
+        client_name: &str,
+        auth_mode: AuthMode,
+        req: &PoTokenRequest,
+    ) -> Result<Option<PoToken>, PoTokenError> {
+        if auth_mode == AuthMode::AnonymousOnly
+            || matches!(
+                client_name.to_ascii_uppercase().as_str(),
+                "ANDROID_VR" | "IOS"
+            )
+        {
+            return Ok(None);
+        }
+        self.mint_token(req).await.map(Some)
+    }
 }
 
 #[async_trait]
 impl PoTokenProvider for ChainedPoTokenProvider {
     async fn mint_token(&self, req: &PoTokenRequest) -> Result<PoToken, PoTokenError> {
         let mut last_err = None;
-        for provider in &self.providers {
+        let now = unix_secs();
+        for (idx, provider) in self.providers.iter().enumerate() {
+            let until = self
+                .tier_cooldown_until
+                .get(idx)
+                .map(|a| a.load(Ordering::Acquire))
+                .unwrap_or(0);
+            if until > now {
+                continue;
+            }
             match provider.mint_token(req).await {
                 Ok(token) => {
+                    if let Some(cd) = self.tier_cooldown_until.get(idx) {
+                        cd.store(0, Ordering::Release);
+                    }
                     *self.diagnostics.write().unwrap() = PoTokenDiagnostics {
                         status: PoTokenHealthStatus::Healthy,
                         active_provider: provider.provider_name().to_owned(),
@@ -72,6 +111,9 @@ impl PoTokenProvider for ChainedPoTokenProvider {
                     return Ok(token);
                 }
                 Err(e) => {
+                    if let Some(cd) = self.tier_cooldown_until.get(idx) {
+                        cd.store(now.saturating_add(TIER_COOLDOWN_SECS), Ordering::Release);
+                    }
                     let safe_err = crate::innertube::auth::redact_secrets(&e.to_string());
                     log::warn!(
                         "PO token provider '{}' failed ({safe_err}); trying next provider in chain",

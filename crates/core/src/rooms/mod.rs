@@ -7,6 +7,7 @@
 
 pub mod clock_sync;
 pub mod controller;
+pub mod drift;
 pub mod long_poll;
 pub mod protocol;
 pub mod ws_client;
@@ -15,10 +16,16 @@ pub use clock_sync::{
     ClockSyncFilter, DRIFT_DEADBAND_MS, DriftAction, DriftGuard, SEEK_COOLDOWN_MS,
 };
 pub use controller::{RoomController, RoomStateSnapshot, RoomTransportKind, wire_h2_room_events};
+pub use drift::{
+    DEADBAND_ENTER_MS, DEADBAND_EXIT_MS, HARD_SEEK_NO_SLEW_MS, SLEW_CONSECUTIVE_TICKS,
+    SLEW_MAX_DRIFT_MS, THREE_ZONE_SEEK_COOLDOWN_MS, ThreeZoneDriftAction, ThreeZoneDriftController,
+    ZERO_HOUR_LEAD_MS,
+};
 pub use long_poll::LongPollClient;
 pub use protocol::{
-    CreateRoomRequest, CreateRoomResponse, JoinRoomRequest, JoinRoomResponse, RoomCommandRequest,
-    generate_host_secret, generate_room_code, is_local_track, redact_room_secrets,
-    validate_relay_url,
+    CreateRoomRequest, CreateRoomResponse, JoinRoomRequest, JoinRoomResponse,
+    KickParticipantRequest, MAX_FRAME_BYTES, ReactionRequest, RoomCommandRequest, VoteSkipRequest,
+    VoteSkipResponse, generate_host_secret, generate_room_code, is_local_track,
+    redact_room_secrets, validate_relay_url,
 };
 pub use ws_client::{WsRoomConnection, WsTransportError};

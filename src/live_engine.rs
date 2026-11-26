@@ -1010,7 +1010,7 @@ pub fn load_persisted_settings(cache: &dyn CacheStore) -> SettingsV1 {
     match cache.get_metadata(SETTINGS_METADATA_KEY, now) {
         Ok(Some((json, _))) => match serde_json::from_str::<SettingsV1>(&json) {
             Ok(mut s) => {
-                s.volume = s.volume.clamp(0.0, 1.0);
+                s.volume = s.volume.clamp(0.0, 1.6);
                 s
             }
             Err(e) => {

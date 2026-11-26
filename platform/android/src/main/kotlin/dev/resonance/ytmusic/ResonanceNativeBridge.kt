@@ -15,6 +15,25 @@ import java.lang.ref.WeakReference
  */
 @Keep
 object ResonanceNativeBridge {
+    const val CMD_PLAY = 1
+    const val CMD_PAUSE = 2
+    const val CMD_TOGGLE_PLAY_PAUSE = 3
+    const val CMD_NEXT = 4
+    const val CMD_PREVIOUS = 5
+    const val CMD_SEEK_MS = 6
+    const val CMD_BECOMING_NOISY = 7
+    const val CMD_AUDIO_FOCUS_LOST_TRANSIENT = 8
+    const val CMD_AUDIO_FOCUS_GAINED = 9
+    const val CMD_STOP = 10
+
+    const val STATE_ERROR = -1
+    const val STATE_IDLE = 1
+    const val STATE_BUFFERING = 2
+    const val STATE_READY = 3
+    const val STATE_ENDED = 4
+    const val STATE_PLAYING = 5
+    const val STATE_PAUSED = 6
+
     private data class PendingLoadAndPlay(
         val url: String,
         val title: String,
@@ -162,6 +181,11 @@ object ResonanceNativeBridge {
     }
 
     @JvmStatic
+    fun audioSetPlaybackSpeed(speed: Float, preservePitch: Boolean) {
+        mainHandler.post { serviceRef?.get()?.setPlaybackSpeed(speed, preservePitch) }
+    }
+
+    @JvmStatic
     fun audioUpdateMetadata(
         title: String,
         artist: String,
@@ -204,7 +228,17 @@ object ResonanceNativeBridge {
 
     @JvmStatic
     fun launchSignInWebView() {
-        mainHandler.post { activityRef?.get()?.launchGoogleSignInWebView() }
+        mainHandler.post {
+            val activity = activityRef?.get()
+            if (activity != null) {
+                activity.launchGoogleSignInWebView()
+            } else {
+                val ctx = appContext ?: return@post
+                val intent = Intent(ctx, WebViewSignInActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                ctx.startActivity(intent)
+            }
+        }
     }
 
     @JvmStatic
@@ -213,6 +247,12 @@ object ResonanceNativeBridge {
         filesDir: String,
         cacheDir: String,
     )
+
+    @JvmStatic
+    external fun nativeInitPaths(filesDir: String, cacheDir: String)
+
+    @JvmStatic
+    external fun nativeOnBackPressed(): Boolean
 
     @JvmStatic
     external fun nativeOnMediaCommand(opcode: Int, argMs: Long)
@@ -225,6 +265,9 @@ object ResonanceNativeBridge {
 
     @JvmStatic
     external fun nativeOnAuthCookiesCaptured(cookieHeader: String)
+
+    @JvmStatic
+    external fun nativeOnWebViewCancelled()
 
     init {
         runCatching { System.loadLibrary("resonance") }

@@ -36,7 +36,7 @@ pub const DEFAULT_MEDIA_RECEIVER_APP_ID: &str = "CC1AD845";
 pub const CASTV2_SENDER_ID: &str = "sender-0";
 pub const CASTV2_RECEIVER_ID: &str = "receiver-0";
 
-const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
+const MAX_FRAME_BYTES: usize = 64 * 1024;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 const MAX_MISSED_PONGS: u32 = 3;
 
@@ -90,12 +90,15 @@ struct LanCastCertVerifier;
 impl ServerCertVerifier for LanCastCertVerifier {
     fn verify_server_cert(
         &self,
-        _end_entity: &CertificateDer<'_>,
+        end_entity: &CertificateDer<'_>,
         _intermediates: &[CertificateDer<'_>],
         _server_name: &ServerName<'_>,
         _ocsp_response: &[u8],
         _now: UnixTime,
     ) -> Result<ServerCertVerified, TlsError> {
+        use sha2::{Digest, Sha256};
+        let fp = hex::encode(Sha256::digest(end_entity.as_ref()));
+        log::debug!("CastV2 TOFU device cert sha256={fp}");
         Ok(ServerCertVerified::assertion())
     }
 

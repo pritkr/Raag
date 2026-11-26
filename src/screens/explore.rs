@@ -126,29 +126,41 @@ fn curated_discovery_mixes() -> Vec<ReleaseCardKind> {
 
 fn build_new_releases() -> Vec<ReleaseCardKind> {
     let mut items = Vec::new();
-    let sections = {
-        let exp = store::explore_sections();
-        if exp.is_empty() {
-            store::home_sections()
-        } else {
-            exp
+    if let Some(page) = store::explore_page() {
+        for alb in page.new_releases {
+            items.push(ReleaseCardKind::Collection {
+                browse_id: alb.id,
+                title: alb.title,
+                subtitle: alb.subtitle.unwrap_or_default(),
+                artwork_url: alb.artwork_url,
+            });
         }
-    };
-    for section in sections {
-        for item in section.items {
-            match item {
-                HomeItem::Collection {
-                    browse_id,
-                    title,
-                    subtitle,
-                    artwork_url,
-                } => items.push(ReleaseCardKind::Collection {
-                    browse_id,
-                    title,
-                    subtitle,
-                    artwork_url,
-                }),
-                HomeItem::Track(track) => items.push(ReleaseCardKind::Track(track)),
+    }
+    if items.is_empty() {
+        let sections = {
+            let exp = store::explore_sections();
+            if exp.is_empty() {
+                store::home_sections()
+            } else {
+                exp
+            }
+        };
+        for section in sections {
+            for item in section.items {
+                match item {
+                    HomeItem::Collection {
+                        browse_id,
+                        title,
+                        subtitle,
+                        artwork_url,
+                    } => items.push(ReleaseCardKind::Collection {
+                        browse_id,
+                        title,
+                        subtitle,
+                        artwork_url,
+                    }),
+                    HomeItem::Track(track) => items.push(ReleaseCardKind::Track(track)),
+                }
             }
         }
     }
@@ -381,67 +393,153 @@ fn charts_section(desktop: bool) -> impl IntoElement {
 
 fn moods_and_genres_section(desktop: bool) -> impl IntoElement {
     let cols_count = if desktop { 4 } else { 2 };
+    let explore_memo = computed(store::explore_page);
+    let mood_playlists_memo = computed(store::mood_playlists);
 
-    view()
-        .gap_3()
-        .child(
-            text("Moods & genres")
-                .when(desktop, |t| t.text_xl())
-                .when(!desktop, |t| t.text_lg())
-                .font_weight(FontWeight::BOLD)
-                .text_color(move || theme().foreground),
-        )
-        .child(
-            view()
-                .gap_3()
-                .children(MOODS_AND_GENRES.chunks(cols_count).enumerate().map(
-                    move |(row_idx, row_genres)| {
-                        let mut cells = Vec::with_capacity(cols_count);
-                        for (col_idx, &genre) in row_genres.iter().enumerate() {
-                            let idx = row_idx * cols_count + col_idx;
-                            let (stripe_color, _) = cover_gradient_pair(genre);
-                            cells.push(
-                                button()
-                                    .accessibility_label(genre)
-                                    .flex_1()
-                                    .min_w(px(0.0))
-                                    .min_h(px(56.0))
-                                    .flex_row()
-                                    .items_center()
-                                    .gap_3()
-                                    .pr_3()
-                                    .overflow_hidden()
-                                    .rounded(radius_card)
-                                    .bg(move || genre_card_tint(idx))
-                                    .border_1()
-                                    .border_color(glass_hairline)
-                                    .hover(|s| s.opacity(0.9))
-                                    .active(|s| s.opacity(0.76))
-                                    .focus_visible(|s| {
-                                        s.outline(px(2.0)).outline_color(move || theme().ring)
-                                    })
-                                    .on_press(move || {
-                                        store::select_mood(genre);
-                                    })
-                                    .child(view().w(px(6.0)).h_full().bg(move || stripe_color))
-                                    .child(
-                                        text(genre)
-                                            .flex_1()
-                                            .number_of_lines(1)
-                                            .text_sm()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(move || theme().foreground),
-                                    )
-                                    .into_element(),
-                            );
-                        }
-                        while cells.len() < cols_count {
-                            cells.push(view().flex_1().min_w(px(0.0)).into_element());
-                        }
-                        view().flex_row().gap_3().children(cells)
-                    },
-                )),
-        )
+    view().gap_3().child(dynamic(move || {
+        let page = explore_memo.get();
+        let live_moods: Vec<(String, Option<String>)> = page
+            .as_ref()
+            .map(|p| {
+                p.moods_and_genres
+                    .iter()
+                    .map(|m| (m.title.clone(), Some(m.params.clone())))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let cards: Vec<(String, Option<String>)> = if !live_moods.is_empty() {
+            live_moods
+        } else {
+            MOODS_AND_GENRES
+                .iter()
+                .map(|g| ((*g).to_owned(), None))
+                .collect()
+        };
+
+        let playlists = mood_playlists_memo.get();
+        let active_mood = store::selected_mood();
+
+        let mut root = view()
+            .gap_3()
+            .child(
+                text("Moods & genres")
+                    .when(desktop, |t| t.text_xl())
+                    .when(!desktop, |t| t.text_lg())
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(move || theme().foreground),
+            )
+            .child(
+                view()
+                    .gap_3()
+                    .children(cards.chunks(cols_count).enumerate().map(
+                        move |(row_idx, row_genres)| {
+                            let mut cells = Vec::with_capacity(cols_count);
+                            for (col_idx, (genre, params)) in row_genres.iter().enumerate() {
+                                let idx = row_idx * cols_count + col_idx;
+                                let (stripe_color, _) = cover_gradient_pair(genre);
+                                let genre_label = genre.clone();
+                                let genre_click = genre.clone();
+                                let params_click = params.clone();
+                                cells.push(
+                                    button()
+                                        .accessibility_label(genre_label.clone())
+                                        .flex_1()
+                                        .min_w(px(0.0))
+                                        .min_h(px(56.0))
+                                        .flex_row()
+                                        .items_center()
+                                        .gap_3()
+                                        .pr_3()
+                                        .overflow_hidden()
+                                        .rounded(radius_card)
+                                        .bg(move || genre_card_tint(idx))
+                                        .border_1()
+                                        .border_color(glass_hairline)
+                                        .hover(|s| s.opacity(0.9))
+                                        .active(|s| s.opacity(0.76))
+                                        .focus_visible(|s| {
+                                            s.outline(px(2.0)).outline_color(move || theme().ring)
+                                        })
+                                        .on_press(move || {
+                                            if let Some(ref p) = params_click {
+                                                store::load_mood_playlists(&genre_click, p);
+                                            } else {
+                                                store::select_mood(&genre_click);
+                                            }
+                                        })
+                                        .child(view().w(px(6.0)).h_full().bg(move || stripe_color))
+                                        .child(
+                                            text(genre_label)
+                                                .flex_1()
+                                                .number_of_lines(1)
+                                                .text_sm()
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_color(move || theme().foreground),
+                                        )
+                                        .into_element(),
+                                );
+                            }
+                            while cells.len() < cols_count {
+                                cells.push(view().flex_1().min_w(px(0.0)).into_element());
+                            }
+                            view().flex_row().gap_3().children(cells)
+                        },
+                    )),
+            );
+
+        if !playlists.is_empty() {
+            let heading = active_mood
+                .map(|m| format!("{m} playlists"))
+                .unwrap_or_else(|| "Mood playlists".to_owned());
+            root = root.child(
+                view()
+                    .gap_2()
+                    .pt_2()
+                    .child(
+                        text(heading)
+                            .text_base()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(move || theme().foreground),
+                    )
+                    .child(scroll().horizontal().w_full().child(
+                        view().flex_row().items_start().gap_4().py_1().children(
+                            playlists.into_iter().map(|pl| {
+                                let mono = pl
+                                    .title
+                                    .chars()
+                                    .find(|c| c.is_alphanumeric())
+                                    .map(|c| c.to_uppercase().to_string())
+                                    .unwrap_or_else(|| "♫".into());
+                                let id = pl.browse_id.clone();
+                                let title = pl.title.clone();
+                                let sub = pl.subtitle.clone();
+                                let art = pl.artwork_url.clone();
+                                media_square_card(
+                                    pl.artwork_url,
+                                    mono,
+                                    pl.title,
+                                    pl.subtitle,
+                                    168.0,
+                                    false,
+                                    move || {
+                                        store::open_collection(
+                                            id.clone(),
+                                            title.clone(),
+                                            sub.clone(),
+                                            art.clone(),
+                                        );
+                                    },
+                                    None,
+                                )
+                            }),
+                        ),
+                    )),
+            );
+        }
+
+        root.into_element()
+    }))
 }
 
 pub fn explore_screen() -> impl IntoElement {

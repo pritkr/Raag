@@ -91,7 +91,7 @@ pub fn album_screen_with_detail(
     cb: AlbumScreenCallbacks,
 ) -> impl IntoElement {
     let desktop = is_desktop_layout();
-    let art_size = if desktop { 220.0 } else { 176.0 };
+    let art_size = if desktop { 220.0 } else { 184.0 };
     let palette = palette_for_track(&album.browse_id, &album.title);
     let hero_bg = move || ambient_backdrop_color(palette);
     let mono = monogram_for(&album.title);
@@ -135,7 +135,7 @@ pub fn album_screen_with_detail(
         view()
             .test_id("album-entity-screen")
             .p_4()
-            .when(desktop, |v| v.px_8().py_6())
+            .style_when(is_desktop_layout, |s| s.px_8().py_6())
             .gap_6()
             .child(
                 view()
@@ -152,7 +152,7 @@ pub fn album_screen_with_detail(
                     .bg(hero_bg)
                     .border_1()
                     .border_color(glass_hairline)
-                    .when(desktop, |v| v.flex_row().items_end().gap_6())
+                    .style_when(is_desktop_layout, |s| s.flex_row().items_end().gap_6())
                     .child(artwork_box(album.artwork_url.clone(), mono, art_size, 12.0))
                     .child(
                         view()
@@ -285,7 +285,7 @@ pub fn album_screen_with_detail(
                                     .items_center()
                                     .gap_2()
                                     .child(
-                                        text(format!("{}", idx + 1))
+                                        text(format!("{:02}", idx + 1))
                                             .w(px(28.0))
                                             .text_xs()
                                             .tabular_nums()

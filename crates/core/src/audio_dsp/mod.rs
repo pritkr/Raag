@@ -12,12 +12,14 @@ pub mod loudness;
 pub mod ring_buffer;
 pub mod silence;
 pub mod splice;
+pub mod time_stretch;
 
 pub use eq::{EQ_BAND_FREQS_HZ, EqPreset, TenBandEq};
 pub use loudness::{DEFAULT_TARGET_OFFSET_DB, LoudnessNormalizer, db_to_linear};
 pub use ring_buffer::{SpscConsumer, SpscProducer, SpscRingBuffer};
 pub use silence::SilenceSkipper;
 pub use splice::GaplessSplicer;
+pub use time_stretch::WsolaTimeStretcher;
 
 /// Serializable user-facing DSP settings controlled from Settings and synced to `platform/nsh_audio.rs`.
 #[derive(Debug, Clone, PartialEq)]
@@ -98,12 +100,18 @@ impl DspPipeline {
     /// Processes an interleaved PCM block in-place.
     /// Returns `true` if the block should be played, or `false` if skipped by `SilenceSkipper`.
     pub fn process_interleaved(&mut self, interleaved: &mut [f32]) -> bool {
-        if self.silence.should_skip_block(interleaved) {
+        if !self.silence.process_interleaved(interleaved) {
             return false;
         }
         self.loudness.process_in_place(interleaved);
+        let preamp = self.eq.preamp_linear();
+        if preamp < 0.999 {
+            for s in interleaved.iter_mut() {
+                *s *= preamp;
+            }
+        }
         self.eq.process_interleaved(interleaved);
-        if self.volume_boost > 1.0 + 1e-6 {
+        if self.volume_boost > 1.0 + 1e-6 || self.eq.enabled {
             let boost = self.volume_boost;
             for s in interleaved.iter_mut() {
                 *s = loudness::soft_limit(*s * boost);

@@ -124,7 +124,7 @@ pub fn secondary_button(
         )
 }
 
-/// Mood / category filter chip.
+/// Mood / category filter chip (>= 48dp touch height on mobile, 36dp on desktop, zero truncation).
 pub fn mood_chip(
     label: &'static str,
     selected: impl Fn() -> bool + Copy + 'static,
@@ -132,8 +132,13 @@ pub fn mood_chip(
 ) -> impl IntoElement {
     button()
         .on_press(on_press)
-        .min_h(px(34.0))
-        .px_3p5()
+        .min_h(px(36.0))
+        .style_when(
+            || !crate::ui::tokens::is_desktop_layout(),
+            |s| s.min_h(px(MOBILE_MIN_TOUCH_TARGET)),
+        )
+        .px_4()
+        .flex_shrink_0()
         .items_center()
         .justify_center()
         .rounded(move || theme().radius)

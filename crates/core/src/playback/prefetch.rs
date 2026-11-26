@@ -6,8 +6,8 @@ use resonance_contract::{MusicProvider, OfflineStore};
 
 use crate::proxy::LoopbackProxy;
 
-/// Number of initial 256 KB chunks pre-warmed into the Proxy v2 `next_track` slot at >= 75%.
-pub const NEXT_TRACK_PREWARM_CHUNKS: u64 = 2;
+/// Number of initial 256 KB chunks (4 × 256 KB = 1 MB) pre-warmed into the Proxy v2 `next_track` slot at >= 75%.
+pub const NEXT_TRACK_PREWARM_CHUNKS: u64 = 4;
 
 /// Pure prefetch decision returned by [`PrefetchThresholds::evaluate`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

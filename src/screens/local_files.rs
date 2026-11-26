@@ -59,6 +59,7 @@ pub struct LocalFilesProps {
 pub fn local_files_screen(props: LocalFilesProps) -> impl IntoElement {
     let active_tab = signal(LocalFilesTab::Tracks);
     let manual_path = signal(String::new());
+    let filter_query = signal(String::new());
     let picker_status = signal(Option::<String>::None);
 
     let on_add_for_picker = props.on_add_folder.clone();
@@ -244,48 +245,108 @@ pub fn local_files_screen(props: LocalFilesProps) -> impl IntoElement {
                 ),
         )
         .child(
-            // Sub-tabs: Tracks | Albums | Artists
-            dynamic(move || {
-                let current = active_tab.get();
+            // Sub-tabs: Tracks | Albums | Artists + inline filter & Play All
+            {
+                let on_play_track_summary = props.on_play_track.clone();
+                dynamic(move || {
+                    let current = active_tab.get();
+                    let track_count = props.tracks.with(Vec::len);
+                    let root_count = props.roots.with(Vec::len);
+                    let on_play_all = on_play_track_summary.clone();
+                let all_for_play = props.tracks.get();
                 view()
-                    .flex_row()
-                    .items_center()
+                    .flex_col()
                     .gap_2()
-                    .children(LocalFilesTab::all().iter().map(|&tab| {
-                        let is_active = tab == current;
-                        button()
-                            .min_h(px(MOBILE_MIN_TOUCH_TARGET))
-                            .px_4()
-                            .rounded_full()
-                            .bg(move || {
-                                if is_active {
-                                    theme().primary
-                                } else {
-                                    pill_glass_surface()
-                                }
-                            })
-                            .on_press(move || active_tab.set(tab))
+                    .child(
+                        view()
+                            .flex_row()
+                            .items_center()
+                            .justify_between()
+                            .flex_wrap()
+                            .gap_2()
                             .child(
-                                text(tab.label())
-                                    .text_sm()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(move || {
-                                        if is_active {
-                                            theme().primary_foreground
-                                        } else {
-                                            theme().foreground
-                                        }
-                                    }),
+                                view()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap_2()
+                                    .children(LocalFilesTab::all().iter().map(|&tab| {
+                                        let is_active = tab == current;
+                                        button()
+                                            .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                                            .px_4()
+                                            .rounded_full()
+                                            .bg(move || {
+                                                if is_active {
+                                                    theme().primary
+                                                } else {
+                                                    pill_glass_surface()
+                                                }
+                                            })
+                                            .on_press(move || active_tab.set(tab))
+                                            .child(
+                                                text(tab.label())
+                                                    .text_sm()
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .text_color(move || {
+                                                        if is_active {
+                                                            theme().primary_foreground
+                                                        } else {
+                                                            theme().foreground
+                                                        }
+                                                    }),
+                                            )
+                                    })),
                             )
-                    }))
+                            .child(
+                                view()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        text(format!("{track_count} tracks · {root_count} folders"))
+                                            .text_xs()
+                                            .text_color(move || theme().muted_foreground),
+                                    )
+                                    .when(!all_for_play.is_empty(), |v| {
+                                        let tracks_vec: Vec<Track> =
+                                            all_for_play.iter().map(|r| r.track.clone()).collect();
+                                        v.child(secondary_button("Play All", move || {
+                                            if let Some(first) = tracks_vec.first().cloned() {
+                                                on_play_all(first, tracks_vec.clone());
+                                            }
+                                        }))
+                                    }),
+                            ),
+                    )
+                    .child(
+                        input()
+                            .test_id("local-files-filter-input")
+                            .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                            .placeholder("Filter local tracks...")
+                            .value(move || filter_query.get())
+                            .on_change(move |val: &str| filter_query.set(val.to_owned())),
+                    )
                     .into_element()
-            }),
+                })
+            }
         )
         .child(
             // Content list (zero blur inside virtual/list cells)
             dynamic(move || {
                 let records = props.tracks.get();
-                let all_tracks: Vec<Track> = records.iter().map(|r| r.track.clone()).collect();
+                let q = filter_query.get().trim().to_lowercase();
+                let all_tracks: Vec<Track> = records
+                    .iter()
+                    .map(|r| r.track.clone())
+                    .filter(|t| {
+                        q.is_empty()
+                            || t.title.to_lowercase().contains(&q)
+                            || t.artist_display().to_lowercase().contains(&q)
+                            || t.album
+                                .as_ref()
+                                .is_some_and(|a| a.title.to_lowercase().contains(&q))
+                    })
+                    .collect();
                 if all_tracks.is_empty() {
                     return view()
                         .flex_1()

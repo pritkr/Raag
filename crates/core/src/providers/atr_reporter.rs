@@ -32,6 +32,7 @@ pub fn generate_cpn() -> String {
 #[derive(Debug, Clone)]
 pub struct AtrTracker {
     signed_in: bool,
+    atr_enabled: bool,
     active_video_id: Option<String>,
     active_cpn: String,
     active_duration_secs: u64,
@@ -46,6 +47,7 @@ impl AtrTracker {
     pub fn new(signed_in: bool) -> Self {
         Self {
             signed_in,
+            atr_enabled: true,
             active_video_id: None,
             active_cpn: generate_cpn(),
             active_duration_secs: 0,
@@ -55,6 +57,22 @@ impl AtrTracker {
             was_playing: false,
             final_sent_for_active: false,
         }
+    }
+
+    pub fn with_enabled(mut self, enabled: bool) -> Self {
+        self.atr_enabled = enabled;
+        self
+    }
+
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.atr_enabled = enabled;
+        if !enabled {
+            self.reset_session();
+        }
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.atr_enabled
     }
 
     pub fn is_signed_in(&self) -> bool {
@@ -73,12 +91,15 @@ impl AtrTracker {
     }
 
     fn flush_final_if_needed(&mut self, out: &mut Vec<WatchtimeReport>) {
-        if !self.signed_in || self.final_sent_for_active {
+        if !self.signed_in || !self.atr_enabled || self.final_sent_for_active {
             return;
         }
         let Some(video_id) = self.active_video_id.clone() else {
             return;
         };
+        if video_id.starts_with("local:") {
+            return;
+        }
         if self.max_seen_secs > 0 || self.was_playing || self.milestone_30s_sent {
             let end_secs = self.max_seen_secs.max(self.last_reported_secs);
             out.push(WatchtimeReport {
@@ -113,12 +134,16 @@ impl AtrTracker {
     }
 
     fn process_player_snapshot(&mut self, snap: &PlayerSnapshot, out: &mut Vec<WatchtimeReport>) {
-        if !self.signed_in {
+        if !self.signed_in || !self.atr_enabled {
             self.reset_session();
             return;
         }
 
-        let next_id = snap.current_track.as_ref().map(|t| t.id.as_str());
+        let next_id = snap
+            .current_track
+            .as_ref()
+            .filter(|t| !t.id.starts_with("local:"))
+            .map(|t| t.id.as_str());
         if self.active_video_id.as_deref() != next_id {
             self.flush_final_if_needed(out);
             self.reset_session();

@@ -172,7 +172,14 @@ pub fn auth_sign_in_sheet(
                                             .child(
                                                 view()
                                                     .flex_row()
+                                                    .flex_wrap()
                                                     .gap_2()
+                                                    .child(primary_button("Open Sign-In Page", {
+                                                        let url = url.clone();
+                                                        move || {
+                                                            let _ = open_url(&url);
+                                                        }
+                                                    }))
                                                     .child(secondary_button(
                                                         "Generate New Code",
                                                         move || cb_gen_inner(),
