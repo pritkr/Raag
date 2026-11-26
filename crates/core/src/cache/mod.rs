@@ -9,4 +9,7 @@ pub mod db;
 
 pub use artwork::{ArtworkCache, DEFAULT_ARTWORK_DISK_CAP};
 pub use chunks::{CHUNK_SIZE, ChunkCache, DEFAULT_MAX_AUDIO_CACHE_BYTES};
-pub use db::{AppStateRepo, OfflineVaultRepo, SqliteCacheStore, TransientCacheRepo};
+pub use db::{
+    AppStateRepo, OfflineVaultRepo, SqliteCacheStore, TransientCacheRepo,
+    load_cached_library_snapshot, load_persisted_settings, save_persisted_settings,
+};

@@ -1,11 +1,11 @@
 //! SQLite WAL (`rusqlite` bundled) storage decomposed by lifecycle domain:
 //! - [`migrations`] — versioned schema migrations (`v1`..`v3`)
 //! - [`transient`] — `TransientCacheRepo` (SWR metadata, KV, chunk LRU, EJS memo)
-//! - [`state`] — `AppStateRepo` (persistent queue + listening history)
+//! - [`state`] — `AppStateRepo` (persistent queue, listening history, settings, library snapshot)
 //! - [`offline`] — `OfflineVaultRepo` (durable downloads + pinned collections)
 //!
 //! [`SqliteCacheStore`] owns the shared WAL connection and exposes focused domain
-//! repositories alongside backwards-compatible `CacheStore` and `OfflineStore` impls.
+//! repositories alongside `CacheStore` and `OfflineStore` trait implementations.
 
 pub mod migrations;
 pub mod offline;
@@ -17,14 +17,16 @@ use std::sync::{Arc, Mutex};
 
 use resonance_contract::{
     CacheError, CacheStats, CacheStore, CoreError, CoreResult, DownloadRecord, DownloadStatus,
-    HistoryEntry, OfflineStats, OfflineStorageError, OfflineStore, QueueState, Track,
+    HistoryEntry, OfflineStats, OfflineStorageError, OfflineStore, QueueState,
 };
 use rusqlite::Connection;
 
 use crate::cache::chunks::DEFAULT_MAX_AUDIO_CACHE_BYTES;
 
 pub use offline::{OfflineVaultRepo, PinnedCollectionRow};
-pub use state::AppStateRepo;
+pub use state::{
+    AppStateRepo, load_cached_library_snapshot, load_persisted_settings, save_persisted_settings,
+};
 pub use transient::TransientCacheRepo;
 
 pub struct SqliteCacheStore {
@@ -82,125 +84,6 @@ impl SqliteCacheStore {
 
     pub fn offline_vault(&self) -> &OfflineVaultRepo {
         &self.offline
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn record_chunk_meta(
-        &self,
-        video_id: &str,
-        itag: u32,
-        chunk_index: u64,
-        byte_len: u64,
-        total_len: u64,
-        sha256_hex: &str,
-        now_unix_secs: u64,
-    ) -> CoreResult<()> {
-        self.transient.record_chunk_meta(
-            video_id,
-            itag,
-            chunk_index,
-            byte_len,
-            total_len,
-            sha256_hex,
-            now_unix_secs,
-        )
-    }
-
-    pub fn get_chunk_meta(
-        &self,
-        video_id: &str,
-        itag: u32,
-        chunk_index: u64,
-        now_unix_secs: u64,
-    ) -> CoreResult<Option<(u64, u64, String)>> {
-        self.transient
-            .get_chunk_meta(video_id, itag, chunk_index, now_unix_secs)
-    }
-
-    pub fn known_total_len(&self, video_id: &str, itag: u32) -> CoreResult<Option<u64>> {
-        self.transient.known_total_len(video_id, itag)
-    }
-
-    pub fn delete_chunk_meta(&self, video_id: &str, itag: u32, chunk_index: u64) -> CoreResult<()> {
-        self.transient
-            .delete_chunk_meta(video_id, itag, chunk_index)
-    }
-
-    pub fn lru_chunks_over_limit(&self, max_bytes: u64) -> CoreResult<Vec<(String, u32, u64)>> {
-        self.transient.lru_chunks_over_limit(max_bytes)
-    }
-
-    pub fn clear_audio_chunk_rows(&self) -> CoreResult<()> {
-        self.transient.clear_audio_chunk_rows()
-    }
-
-    pub fn set_kv(&self, key: &str, value: &str) -> CoreResult<()> {
-        self.transient.set_kv(key, value)
-    }
-
-    pub fn get_kv(&self, key: &str) -> CoreResult<Option<String>> {
-        self.transient.get_kv(key)
-    }
-
-    pub fn recover_interrupted_downloads(
-        &self,
-        now_unix_secs: u64,
-    ) -> CoreResult<Vec<DownloadRecord>> {
-        self.offline.recover_interrupted_downloads(now_unix_secs)
-    }
-
-    pub fn get_ejs_memo(&self, player_hash: &str, raw_n: &str) -> CoreResult<Option<String>> {
-        self.transient.get_ejs_memo(player_hash, raw_n)
-    }
-
-    pub fn put_ejs_memo(
-        &self,
-        player_hash: &str,
-        raw_n: &str,
-        solved_n: &str,
-        ast_meta_json: Option<&str>,
-        now_unix_secs: u64,
-    ) -> CoreResult<()> {
-        self.transient
-            .put_ejs_memo(player_hash, raw_n, solved_n, ast_meta_json, now_unix_secs)
-    }
-
-    pub fn clear_ejs_memo(&self) -> CoreResult<()> {
-        self.transient.clear_ejs_memo()
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn upsert_pinned_collection(
-        &self,
-        collection_id: &str,
-        kind: &str,
-        title: &str,
-        subtitle: Option<&str>,
-        artwork_url: Option<&str>,
-        tracks: &[Track],
-        pinned_at_unix_secs: u64,
-    ) -> CoreResult<()> {
-        self.offline.upsert_pinned_collection(
-            collection_id,
-            kind,
-            title,
-            subtitle,
-            artwork_url,
-            tracks,
-            pinned_at_unix_secs,
-        )
-    }
-
-    pub fn list_pinned_collection_rows(&self) -> CoreResult<Vec<PinnedCollectionRow>> {
-        self.offline.list_pinned_collection_rows()
-    }
-
-    pub fn delete_pinned_collection(&self, collection_id: &str) -> CoreResult<bool> {
-        self.offline.delete_pinned_collection(collection_id)
-    }
-
-    pub fn is_track_pinned(&self, video_id: &str) -> CoreResult<bool> {
-        self.offline.is_track_pinned(video_id)
     }
 }
 

@@ -37,11 +37,10 @@ use resonance_core::auth_flows::{
     validate_cookie_jar,
 };
 use resonance_core::cache::SqliteCacheStore;
-use resonance_core::downloads::{
-    CollectionOfflineProgress, OfflineVault, PinnedCollectionKind, QuotaEvaluator,
+use resonance_core::offline::{
+    CollectionOfflineProgress, DownloadManager, OfflineVault, PinnedCollectionKind, QuotaEvaluator,
     compute_collection_progress,
 };
-use resonance_core::offline::DownloadManager;
 use resonance_core::rooms::{
     ClockSyncFilter, DriftAction, DriftGuard, RoomController, RoomTransportKind,
 };
@@ -181,26 +180,28 @@ async fn offline_vault_unpin_preserves_tracks_shared_by_other_pinned_collections
     }
 
     // Pin Album A [t1, t2] and Playlist B [t2, t3]
-    db.upsert_pinned_collection(
-        "alb_a",
-        "album",
-        "Album A",
-        None,
-        None,
-        &[t1.clone(), t2.clone()],
-        1,
-    )
-    .unwrap();
-    db.upsert_pinned_collection(
-        "pl_b",
-        "playlist",
-        "Playlist B",
-        None,
-        None,
-        &[t2.clone(), t3.clone()],
-        2,
-    )
-    .unwrap();
+    db.offline_vault()
+        .upsert_pinned_collection(
+            "alb_a",
+            "album",
+            "Album A",
+            None,
+            None,
+            &[t1.clone(), t2.clone()],
+            1,
+        )
+        .unwrap();
+    db.offline_vault()
+        .upsert_pinned_collection(
+            "pl_b",
+            "playlist",
+            "Playlist B",
+            None,
+            None,
+            &[t2.clone(), t3.clone()],
+            2,
+        )
+        .unwrap();
 
     // Unpin Album A -> t1 deleted, t2 & t3 preserved!
     let report = QuotaEvaluator::unpin_collection_orphan_safe(&vault, "alb_a")

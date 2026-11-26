@@ -3,11 +3,10 @@
 //! - Persistent `X-Goog-Visitor-Id` (`visitorData`) in SQLite
 //! - Strict per-client auth isolation (`WEB_REMIX` / `VISIONOS` vs `ANDROID_VR` AnonymousOnly)
 //! - Playback resolution waterfall: `VISIONOS -> ANDROID_VR -> WEB_REMIX + rquickjs`
-//! - Stale-While-Revalidate (SWR) SQLite caching with self-healing on corrupt JSON
+//! - Stream metadata SQLite caching with self-healing on corrupt JSON (catalog SWR lives in `HybridMusicProvider`)
 //! - Graceful `401` cookie-rotation / session revocation recovery & `429` handling
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -37,9 +36,6 @@ use crate::potoken::attach_pot_param;
 use crate::solver::SharedSolver;
 use crate::unix_secs;
 
-const TTL_HOME_SECS: u64 = 15 * 60;
-const TTL_SEARCH_SECS: u64 = 5 * 60;
-const TTL_COLLECTION_SECS: u64 = 60 * 60;
 const TTL_STREAM_SECS: u64 = 4 * 3600;
 const ANON_CONSENT_COOKIE: &str = "SOCS=CAISAiAD";
 
@@ -62,14 +58,10 @@ pub struct InnerTubeClient {
     circuit_breaker: Arc<ClientCircuitBreaker>,
     /// Native decoder target platform governing audio format preference.
     target_platform: TargetPlatform,
-    /// Optional GVS PO token for free/anonymous web playback (bypassed for Premium subscribers).
-    gvs_po_token: RwLock<Option<String>>,
     /// Dependency-injected PO token provider (e.g. `CachingPoTokenProvider<ChainedPoTokenProvider>`).
     po_token_provider: RwLock<Option<Arc<dyn PoTokenProvider>>>,
     /// Whether the active signed-in session has YouTube Music Premium (bypasses GVS PO token & unlocks 256 kbps).
     is_premium_account: RwLock<bool>,
-    /// Controls catalog SWR caching (disabled when wrapped by `HybridMusicProvider` to avoid double caching).
-    swr_cache_enabled: AtomicBool,
 }
 
 impl InnerTubeClient {
@@ -102,17 +94,9 @@ impl InnerTubeClient {
             client_matrix: RwLock::new(matrix),
             circuit_breaker: Arc::new(ClientCircuitBreaker::new(CircuitBreakerConfig::default())),
             target_platform: TargetPlatform::current(),
-            gvs_po_token: RwLock::new(None),
             po_token_provider: RwLock::new(None),
             is_premium_account: RwLock::new(false),
-            swr_cache_enabled: AtomicBool::new(true),
         })
-    }
-
-    /// Enables or disables catalog SWR metadata caching on this client.
-    /// Called with `false` by `HybridMusicProvider` so there is a single SWR layer.
-    pub fn set_swr_cache_enabled(&self, enabled: bool) {
-        self.swr_cache_enabled.store(enabled, Ordering::Relaxed);
     }
 
     pub fn with_circuit_breaker(mut self, breaker: Arc<ClientCircuitBreaker>) -> Self {
@@ -134,14 +118,6 @@ impl InnerTubeClient {
     pub fn po_token_diagnostics(&self) -> PoTokenDiagnostics {
         if let Some(provider) = self.po_token_provider.read().unwrap().as_ref() {
             provider.diagnostics()
-        } else if self.gvs_po_token.read().unwrap().is_some() {
-            PoTokenDiagnostics {
-                status: PoTokenHealthStatus::Healthy,
-                active_provider: "static-gvs".to_owned(),
-                detail: "Static GVS PO token configured".to_owned(),
-                degraded_fallback_active: false,
-                last_checked_unix_secs: unix_secs(),
-            }
         } else {
             PoTokenDiagnostics {
                 status: PoTokenHealthStatus::Unconfigured,
@@ -156,10 +132,6 @@ impl InnerTubeClient {
 
     pub fn update_client_matrix(&self, matrix: ClientMatrix) {
         *self.client_matrix.write().unwrap() = matrix;
-    }
-
-    pub fn set_gvs_po_token(&self, token: Option<String>) {
-        *self.gvs_po_token.write().unwrap() = token;
     }
 
     pub fn with_po_token_provider(self, provider: Arc<dyn PoTokenProvider>) -> Self {
@@ -408,8 +380,6 @@ impl InnerTubeClient {
                     signed_in: self.current_session().is_some(),
                 };
                 Some(provider.mint_token(&req).await?.value)
-            } else if let Some(legacy) = self.gvs_po_token.read().unwrap().clone() {
-                Some(legacy)
             } else {
                 return Err(CoreError::PoToken(PoTokenError::Unavailable(
                     "no po token provider configured".to_owned(),
@@ -492,21 +462,6 @@ impl InnerTubeClient {
         ))
     }
 
-    /// Reads an SWR cache entry, self-healing (evicting) on corrupt JSON.
-    fn read_swr<T: serde::de::DeserializeOwned>(&self, key: &str) -> Option<(T, bool)> {
-        if !self.swr_cache_enabled.load(Ordering::Relaxed) {
-            return None;
-        }
-        self.read_cache_entry(key)
-    }
-
-    fn write_swr<T: serde::Serialize>(&self, key: &str, value: &T, ttl_secs: u64) {
-        if !self.swr_cache_enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        self.write_cache_entry(key, value, ttl_secs);
-    }
-
     fn read_cache_entry<T: serde::de::DeserializeOwned>(&self, key: &str) -> Option<(T, bool)> {
         let now = unix_secs();
         match self.cache.get_metadata(key, now) {
@@ -551,17 +506,6 @@ impl InnerTubeClient {
         params: Option<&str>,
     ) -> CoreResult<(SearchResults, HashMap<String, String>)> {
         let trimmed = query.trim();
-        let filter_tag = params.unwrap_or("all");
-        let cache_key = format!("search:{filter_tag}:{}", trimmed.to_lowercase());
-        let plays_key = format!("search_plays:{filter_tag}:{}", trimmed.to_lowercase());
-        if let Some((cached, false)) = self.read_swr::<SearchResults>(&cache_key) {
-            let cached_plays = self
-                .read_swr::<HashMap<String, String>>(&plays_key)
-                .map(|(p, _)| p)
-                .unwrap_or_default();
-            return Ok((cached, cached_plays));
-        }
-
         let mut payload = json!({ "query": trimmed });
         if let Some(p) = params
             && let Some(obj) = payload.as_object_mut()
@@ -569,55 +513,17 @@ impl InnerTubeClient {
             obj.insert("params".into(), json!(p));
         }
 
-        match self.post_innertube(&WEB_REMIX, "search", payload).await {
-            Ok(resp) => {
-                let parsed = parse_search_response(trimmed, &resp)?;
-                let plays = extract_search_plays(&resp);
-                if !parsed.tracks.is_empty() || !parsed.albums.is_empty() {
-                    self.write_swr(&cache_key, &parsed, TTL_SEARCH_SECS);
-                    if !plays.is_empty() {
-                        self.write_swr(&plays_key, &plays, TTL_SEARCH_SECS);
-                    }
-                }
-                Ok((parsed, plays))
-            }
-            Err(err) => {
-                if let Some((stale, _)) = self.read_swr::<SearchResults>(&cache_key) {
-                    let cached_plays = self
-                        .read_swr::<HashMap<String, String>>(&plays_key)
-                        .map(|(p, _)| p)
-                        .unwrap_or_default();
-                    Ok((stale, cached_plays))
-                } else {
-                    Err(err)
-                }
-            }
-        }
+        let resp = self.post_innertube(&WEB_REMIX, "search", payload).await?;
+        let parsed = parse_search_response(trimmed, &resp)?;
+        let plays = extract_search_plays(&resp);
+        Ok((parsed, plays))
     }
 
     /// Fetches `FEmusic_explore` (New albums & singles, Trending, Moods & genres, New music videos).
     pub async fn explore(&self) -> CoreResult<Vec<HomeSection>> {
-        const KEY: &str = "explore:default";
-        if let Some((cached, false)) = self.read_swr::<Vec<HomeSection>>(KEY) {
-            return Ok(cached);
-        }
         let payload = json!({ "browseId": "FEmusic_explore" });
-        match self.post_innertube(&WEB_REMIX, "browse", payload).await {
-            Ok(resp) => {
-                let sections = parse_home_response(&resp)?;
-                if !sections.is_empty() {
-                    self.write_swr(KEY, &sections, TTL_HOME_SECS);
-                }
-                Ok(sections)
-            }
-            Err(err) => {
-                if let Some((stale, _)) = self.read_swr::<Vec<HomeSection>>(KEY) {
-                    Ok(stale)
-                } else {
-                    Err(err)
-                }
-            }
-        }
+        let resp = self.post_innertube(&WEB_REMIX, "browse", payload).await?;
+        parse_home_response(&resp)
     }
 }
 
@@ -628,70 +534,37 @@ impl MusicProvider for InnerTubeClient {
     }
 
     async fn home(&self) -> CoreResult<Vec<HomeSection>> {
-        const KEY: &str = "home:default";
-        if let Some((cached, false)) = self.read_swr::<Vec<HomeSection>>(KEY) {
-            return Ok(cached);
-        }
         let payload = json!({ "browseId": "FEmusic_home" });
-        match self.post_innertube(&WEB_REMIX, "browse", payload).await {
-            Ok(resp) => {
-                let mut sections = parse_home_response(&resp)?;
-                let mut cont = extract_home_continuation(&resp);
-                let mut page = 0usize;
-                while sections.len() < 5
-                    && page < 2
-                    && let Some(token) = cont.take()
-                {
-                    page += 1;
-                    let Ok(next_resp) = self
-                        .post_innertube(&WEB_REMIX, "browse", json!({ "continuation": token }))
-                        .await
-                    else {
-                        break;
-                    };
-                    if let Ok(mut more) = parse_home_response(&next_resp) {
-                        for (i, sec) in more.iter_mut().enumerate() {
-                            sec.id = format!("home-c{page}-{i}");
-                        }
-                        sections.extend(more);
-                    }
-                    cont = extract_home_continuation(&next_resp);
+        let resp = self.post_innertube(&WEB_REMIX, "browse", payload).await?;
+        let mut sections = parse_home_response(&resp)?;
+        let mut cont = extract_home_continuation(&resp);
+        let mut page = 0usize;
+        while sections.len() < 5
+            && page < 2
+            && let Some(token) = cont.take()
+        {
+            page += 1;
+            let Ok(next_resp) = self
+                .post_innertube(&WEB_REMIX, "browse", json!({ "continuation": token }))
+                .await
+            else {
+                break;
+            };
+            if let Ok(mut more) = parse_home_response(&next_resp) {
+                for (i, sec) in more.iter_mut().enumerate() {
+                    sec.id = format!("home-c{page}-{i}");
                 }
-                if !sections.is_empty() {
-                    self.write_swr(KEY, &sections, TTL_HOME_SECS);
-                }
-                Ok(sections)
+                sections.extend(more);
             }
-            Err(err) => {
-                if let Some((stale, _)) = self.read_swr::<Vec<HomeSection>>(KEY) {
-                    Ok(stale)
-                } else {
-                    Err(err)
-                }
-            }
+            cont = extract_home_continuation(&next_resp);
         }
+        Ok(sections)
     }
 
     async fn browse_collection(&self, browse_id: &str) -> CoreResult<Playlist> {
-        let key = format!("collection:{browse_id}");
-        if let Some((cached, false)) = self.read_swr::<Playlist>(&key) {
-            return Ok(cached);
-        }
         let payload = json!({ "browseId": browse_id });
-        match self.post_innertube(&WEB_REMIX, "browse", payload).await {
-            Ok(resp) => {
-                let playlist = parse_collection_response(browse_id, &resp)?;
-                self.write_swr(&key, &playlist, TTL_COLLECTION_SECS);
-                Ok(playlist)
-            }
-            Err(err) => {
-                if let Some((stale, _)) = self.read_swr::<Playlist>(&key) {
-                    Ok(stale)
-                } else {
-                    Err(err)
-                }
-            }
-        }
+        let resp = self.post_innertube(&WEB_REMIX, "browse", payload).await?;
+        parse_collection_response(browse_id, &resp)
     }
 
     async fn liked_songs(&self) -> CoreResult<Vec<Track>> {
@@ -731,8 +604,7 @@ impl MusicProvider for InnerTubeClient {
         }
 
         let tier = self.account_tier();
-        let has_gvs_po = self.po_token_provider.read().unwrap().is_some()
-            || self.gvs_po_token.read().unwrap().is_some();
+        let has_gvs_po = self.po_token_provider.read().unwrap().is_some();
         let chain = self
             .client_matrix
             .read()

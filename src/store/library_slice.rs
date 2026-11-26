@@ -1,12 +1,60 @@
 //! Library, History, Offline Downloads, and Cache telemetry slice (`LibrarySlice`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use resonance_contract::{
-    AudioCodec, CacheStats, DownloadRecord, DownloadStatus, HistoryEntry, LibraryCollectionRef,
-    LibrarySnapshot, Track, TrackId,
+    AudioCodec, CacheStats, DownloadRecord, DownloadStatus, HistoryEntry, HomeItem, HomeSection,
+    LibraryCollectionRef, LibrarySnapshot, Track, TrackId,
 };
-use resonance_core::downloads::PinnedCollection;
+use resonance_core::offline::PinnedCollection;
+
+/// Case-insensitive substring matcher used across library search views.
+pub fn matches_query(haystack: &str, query_lower: &str) -> bool {
+    query_lower.is_empty() || haystack.to_lowercase().contains(query_lower)
+}
+
+/// Filters a list of tracks by title/artist/album substring and optionally sorts A–Z by title.
+pub fn filter_and_sort_tracks(mut tracks: Vec<Track>, query: &str, sort_asc: bool) -> Vec<Track> {
+    let ql = query.trim().to_lowercase();
+    if !ql.is_empty() {
+        tracks.retain(|t| {
+            matches_query(&t.title, &ql)
+                || matches_query(&t.artist_display(), &ql)
+                || t.album
+                    .as_ref()
+                    .is_some_and(|a| matches_query(&a.title, &ql))
+        });
+    }
+    if sort_asc {
+        tracks.sort_by_key(|a| a.title.to_lowercase());
+    }
+    tracks
+}
+
+/// Deduplicates tracks across queue, liked songs, and home shelves preserving encounter order.
+pub fn collect_unique_songs(
+    queue_items: &[Track],
+    liked_tracks: &[Track],
+    home_sections: &[HomeSection],
+) -> Vec<Track> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for track in queue_items
+        .iter()
+        .chain(liked_tracks.iter())
+        .chain(home_sections.iter().flat_map(|s| {
+            s.items.iter().filter_map(|item| match item {
+                HomeItem::Track(t) => Some(t),
+                HomeItem::Collection { .. } => None,
+            })
+        }))
+    {
+        if seen.insert(track.id.clone()) {
+            out.push(track.clone());
+        }
+    }
+    out
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LibraryFilter {
@@ -198,6 +246,34 @@ impl LibrarySlice {
             .into_iter()
             .map(|r| (r.video_id.clone(), r))
             .collect();
+    }
+
+    pub fn tracks_for_filter(
+        &self,
+        filter: LibraryFilter,
+        all_songs: Vec<Track>,
+        query: &str,
+        sort_asc: bool,
+    ) -> Vec<Track> {
+        let raw = match filter {
+            LibraryFilter::LikedSongs => self.liked_tracks.clone(),
+            LibraryFilter::History => self.history.iter().map(|e| e.track.clone()).collect(),
+            LibraryFilter::Songs => all_songs,
+            LibraryFilter::Downloads => self
+                .downloads_list()
+                .into_iter()
+                .filter(|rec| rec.status == DownloadStatus::Completed)
+                .map(|rec| rec.track)
+                .collect(),
+            LibraryFilter::Playlists
+            | LibraryFilter::Albums
+            | LibraryFilter::Artists
+            | LibraryFilter::PinnedOffline
+            | LibraryFilter::LocalFiles
+            | LibraryFilter::Podcasts
+            | LibraryFilter::Uploads => self.liked_tracks.clone(),
+        };
+        filter_and_sort_tracks(raw, query, sort_asc)
     }
 }
 

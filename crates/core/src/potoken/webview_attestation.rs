@@ -22,7 +22,6 @@ use sha2::{Digest, Sha256};
 
 use crate::innertube::auth::redact_secrets;
 use crate::innertube::clients::WEB_REMIX;
-use crate::potoken::attestation::PlatformAttestationBridge;
 use crate::unix_secs;
 
 pub const MAX_INTERPRETER_BYTES: usize = 2 * 1024 * 1024;
@@ -483,29 +482,5 @@ impl PoTokenProvider for EmbeddedWebViewAttestationProvider {
             degraded_fallback_active: false,
             last_checked_unix_secs: unix_secs(),
         }
-    }
-}
-
-#[async_trait]
-impl PlatformAttestationBridge for EmbeddedWebViewAttestationProvider {
-    async fn mint_attested_token(
-        &self,
-        binding: &str,
-        scope: PoTokenScope,
-    ) -> Result<(String, u64), PoTokenError> {
-        let it = self
-            .orchestrator
-            .obtain_integrity_token(binding, Some(binding))
-            .await?;
-        let value = AttestationOrchestrator::derive_content_bound_token(
-            &it.integrity_token,
-            binding,
-            scope,
-        );
-        Ok((value, it.expires_at_unix_secs))
-    }
-
-    fn bridge_kind(&self) -> &'static str {
-        self.runner_label
     }
 }

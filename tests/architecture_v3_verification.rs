@@ -25,7 +25,6 @@ use hyper_util::rt::TokioIo;
 use nsh_engine::{EngineConfig, Points, Root, Size};
 use nsh_testing::Headless;
 use resonance::App;
-use resonance::platform::nsh_audio::{NshAudioBackend, create_pcm_ring_buffer};
 use resonance::store;
 use resonance_contract::{
     AudioCodec, AuthError, AuthSession, AuthStore, CacheStore, DownloadRecord, DownloadStatus,
@@ -33,10 +32,10 @@ use resonance_contract::{
     StreamInfo,
 };
 use resonance_core::audio_dsp::{
-    DspConfig, DspPipeline, EqPreset, GaplessSplicer, LoudnessNormalizer, SilenceSkipper, TenBandEq,
+    DspConfig, DspControlUpdate, DspPipeline, EqPreset, GaplessSplicer, LoudnessNormalizer,
+    SilenceSkipper, TenBandEq, create_lock_free_audio_pipeline, create_pcm_ring_buffer,
 };
 use resonance_core::cache::{ArtworkCache, ChunkCache, SqliteCacheStore};
-use resonance_core::downloads::{OfflineVault, PinnedCollectionKind, VaultTrackState};
 use resonance_core::fixture::fixture_tracks;
 use resonance_core::innertube::InnerTubeClient;
 use resonance_core::innertube::clients::ClientKind;
@@ -46,12 +45,12 @@ use resonance_core::innertube::parser::{
     parse_player_response, parse_search_response,
 };
 use resonance_core::lyrics::CascadeLyricsProvider;
-use resonance_core::offline::DownloadManager;
+use resonance_core::offline::{DownloadManager, OfflineVault, PinnedCollectionKind};
 use resonance_core::playback::fsm::PlaybackFsm;
 use resonance_core::playback::prefetch::PrefetchDecision;
 use resonance_core::potoken::{
     BgutilHttpPoTokenProvider, CachingPoTokenProvider, ChainedPoTokenProvider,
-    PlatformAttestationPoTokenProvider, QuickJsVmAttestationBridge,
+    QuickJsVmAttestationBridge,
 };
 use resonance_core::proxy::{ChunkCoalescer, LoopbackProxy};
 use resonance_core::solver::{EjsBundleManifest, JsRuntime, QuickJsRuntime, QuickJsSolver};
@@ -260,11 +259,9 @@ async fn arch2_layered_potoken_chain_with_subs_scope_and_degraded_fallback() {
 
     let chain = ChainedPoTokenProvider::new(vec![
         Arc::new(bgutil),
-        Arc::new(PlatformAttestationPoTokenProvider::new(Arc::new(
-            QuickJsVmAttestationBridge::new(
-                "function mintPoToken(binding, scope) { return 'qjs_' + scope + '_' + binding; }",
-            ),
-        ))),
+        Arc::new(QuickJsVmAttestationBridge::new(
+            "function mintPoToken(binding, scope) { return 'qjs_' + scope + '_' + binding; }",
+        )),
     ]);
     let cached = CachingPoTokenProvider::new(chain);
 
@@ -611,31 +608,21 @@ fn arch3_lock_free_spsc_and_modular_pcm_dsp_pipeline() {
     let blended = splicer.splice_interleaved(&[1.0f32; 200], &[0.5f32; 200]);
     assert!(!blended.is_empty());
 
-    // NshAudioBackend integrates DspConfig + DspPipeline cleanly
-    let backend = NshAudioBackend::new();
+    // Composed DspPipeline integrates DspConfig + ReplayGain + EQ cleanly
     let mut cfg = DspConfig::default();
     cfg.eq_preset = EqPreset::Vocal;
     cfg.eq_gains_db = EqPreset::Vocal.gains_db();
     cfg.crossfade_ms = 2_000;
-    backend.set_dsp_config(cfg.clone());
-    assert_eq!(backend.dsp_config(), cfg);
-    backend.set_track_loudness_db(Some(3.0));
-    let mut pcm = [0.5f32; 128];
-    assert!(backend.process_dsp_block(&mut pcm));
-
     let mut pipe = DspPipeline::new(48_000, 2, &cfg);
+    pipe.set_track_loudness_db(Some(3.0));
+    let mut pcm = [0.5f32; 128];
     assert!(pipe.process_interleaved(&mut pcm));
 
     // Lock-free SPSC consumer callback processes frames + control updates with zero mutexes
-    let (mut lf_prod, mut lf_cons, lf_tx) =
-        resonance::platform::nsh_audio::create_lock_free_audio_pipeline(256, 48_000, 2);
+    let (mut lf_prod, mut lf_cons, lf_tx) = create_lock_free_audio_pipeline(256, 48_000, 2);
+    lf_tx.send(DspControlUpdate::SetConfig(cfg)).unwrap();
     lf_tx
-        .send(resonance::platform::nsh_audio::DspControlUpdate::SetConfig(
-            cfg,
-        ))
-        .unwrap();
-    lf_tx
-        .send(resonance::platform::nsh_audio::DspControlUpdate::SetTrackLoudnessDb(Some(6.0)))
+        .send(DspControlUpdate::SetTrackLoudnessDb(Some(6.0)))
         .unwrap();
     let pushed = lf_prod.push_slice(&[0.6f32; 64]);
     assert_eq!(pushed, 64);
@@ -648,11 +635,11 @@ fn arch3_lock_free_spsc_and_modular_pcm_dsp_pipeline() {
 
 #[tokio::test]
 async fn arch3_offline_vault_isolates_pinned_collections_from_lru_cache_eviction() {
-    // VaultTrackState FSM: Queued -> Downloading -> Verified -> Available
-    assert!(VaultTrackState::Queued.can_transition_to(VaultTrackState::Downloading));
-    assert!(VaultTrackState::Downloading.can_transition_to(VaultTrackState::Verified));
-    assert!(VaultTrackState::Verified.can_transition_to(VaultTrackState::Available));
-    assert!(!VaultTrackState::Queued.can_transition_to(VaultTrackState::Available));
+    // Canonical DownloadStatus FSM: Queued -> Downloading -> Tagging -> Completed
+    assert!(DownloadStatus::Queued.can_transition_to(DownloadStatus::Downloading));
+    assert!(DownloadStatus::Downloading.can_transition_to(DownloadStatus::Tagging));
+    assert!(DownloadStatus::Tagging.can_transition_to(DownloadStatus::Completed));
+    assert!(!DownloadStatus::Queued.can_transition_to(DownloadStatus::Completed));
 
     let dir = TempDirGuard::new("vault");
     let db = Arc::new(SqliteCacheStore::open(dir.path()).unwrap());
@@ -673,16 +660,17 @@ async fn arch3_offline_vault_isolates_pinned_collections_from_lru_cache_eviction
     let pinned_track = tracks[0].clone();
 
     // Seed a completed vault track + pinned album in SQLite
-    db.upsert_pinned_collection(
-        "MPRE_album_pinned",
-        "album",
-        "Pinned Audiophile Album",
-        Some("Studio Master"),
-        None,
-        std::slice::from_ref(&pinned_track),
-        1_700_000_000,
-    )
-    .unwrap();
+    db.offline_vault()
+        .upsert_pinned_collection(
+            "MPRE_album_pinned",
+            "album",
+            "Pinned Audiophile Album",
+            Some("Studio Master"),
+            None,
+            std::slice::from_ref(&pinned_track),
+            1_700_000_000,
+        )
+        .unwrap();
     db.upsert_download(&DownloadRecord {
         video_id: pinned_track.id.clone(),
         track: pinned_track.clone(),
@@ -714,10 +702,10 @@ async fn arch3_offline_vault_isolates_pinned_collections_from_lru_cache_eviction
     assert_eq!(pinned_list.len(), 1);
     assert_eq!(pinned_list[0].id, "MPRE_album_pinned");
     assert_eq!(pinned_list[0].kind, PinnedCollectionKind::Album);
-    assert!(db.is_track_pinned(&pinned_track.id).unwrap());
+    assert!(db.offline_vault().is_track_pinned(&pinned_track.id).unwrap());
     assert_eq!(
         vault.track_state(&pinned_track.id).unwrap(),
-        Some(VaultTrackState::Available)
+        Some(DownloadStatus::Completed)
     );
 }
 

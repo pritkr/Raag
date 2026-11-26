@@ -121,6 +121,81 @@ impl DspPipeline {
     }
 }
 
+/// Creates a lock-free cache-line-aligned SPSC PCM ring buffer for decoupling audio decoding
+/// and DSP normalization from UI/network stalls.
+pub fn create_pcm_ring_buffer(capacity_samples: usize) -> (SpscProducer<f32>, SpscConsumer<f32>) {
+    SpscRingBuffer::with_capacity(capacity_samples)
+}
+
+/// Lock-free DSP parameter update sent from control/UI threads to [`LockFreeAudioConsumer`].
+#[derive(Debug, Clone)]
+pub enum DspControlUpdate {
+    SetConfig(DspConfig),
+    SetTrackLoudnessDb(Option<f32>),
+    SetVolumeBoost(f32),
+}
+
+/// Real-time audio callback consumer reading decoded PCM frames from a lock-free SPSC ring
+/// buffer and running a thread-owned [`DspPipeline`] with zero mutex locks or heap allocations.
+pub struct LockFreeAudioConsumer {
+    consumer: SpscConsumer<f32>,
+    dsp: DspPipeline,
+    updates: crossbeam_channel::Receiver<DspControlUpdate>,
+}
+
+impl LockFreeAudioConsumer {
+    pub fn new(
+        consumer: SpscConsumer<f32>,
+        dsp: DspPipeline,
+        updates: crossbeam_channel::Receiver<DspControlUpdate>,
+    ) -> Self {
+        Self {
+            consumer,
+            dsp,
+            updates,
+        }
+    }
+
+    /// Drains pending DSP updates without blocking, reads up to `out.len()` samples from the
+    /// SPSC ring buffer, zero-fills any underrun tail, and processes the DSP chain in-place.
+    /// Returns `(samples_popped, keep_block)` where `keep_block == false` indicates silence skip.
+    pub fn render_callback(&mut self, out: &mut [f32]) -> (usize, bool) {
+        while let Ok(upd) = self.updates.try_recv() {
+            match upd {
+                DspControlUpdate::SetConfig(cfg) => self.dsp.apply_config(&cfg),
+                DspControlUpdate::SetTrackLoudnessDb(db) => self.dsp.set_track_loudness_db(db),
+                DspControlUpdate::SetVolumeBoost(vol) => self.dsp.set_volume_boost(vol),
+            }
+        }
+        let popped = self.consumer.pop_slice(out);
+        if popped < out.len() {
+            out[popped..].fill(0.0);
+        }
+        let keep = self.dsp.process_interleaved(out);
+        (popped, keep)
+    }
+}
+
+/// Creates a lock-free PCM producer, real-time [`LockFreeAudioConsumer`], and non-blocking DSP sender.
+pub fn create_lock_free_audio_pipeline(
+    capacity_samples: usize,
+    sample_rate: u32,
+    channels: usize,
+) -> (
+    SpscProducer<f32>,
+    LockFreeAudioConsumer,
+    crossbeam_channel::Sender<DspControlUpdate>,
+) {
+    let (prod, cons) = SpscRingBuffer::with_capacity::<f32>(capacity_samples);
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let consumer = LockFreeAudioConsumer::new(
+        cons,
+        DspPipeline::new(sample_rate, channels, &DspConfig::default()),
+        rx,
+    );
+    (prod, consumer, tx)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

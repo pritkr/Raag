@@ -1,7 +1,9 @@
 //! Playback, Queue, Shortcuts & Native Audio actions operating on `playback_signal()`.
 
 use nsh_core::prelude::SharedString;
-use resonance_contract::{LyricsDocument, PlayerSnapshot, PlayerState, RepeatMode, Track};
+use resonance_contract::{
+    AudioTelemetry, LyricsDocument, PlayerSnapshot, RepeatMode, Track,
+};
 use resonance_core::palette::{AmbientPalette, palette_for_track};
 
 use crate::live_engine::{self, EngineCommand};
@@ -304,33 +306,33 @@ pub fn nsh_audio_available() -> bool {
     playback_signal().with(|p| p.nsh_audio_available)
 }
 
-pub fn on_native_audio_duration(duration_ms: u64) {
-    playback_signal().update(|p| p.on_native_audio_duration(duration_ms));
-}
-
-pub fn on_native_audio_state(state: PlayerState) {
-    playback_signal().update(|p| p.on_native_audio_state(state));
-}
-
-pub fn on_native_audio_buffering(buffering: bool) {
-    playback_signal().update(|p| p.on_native_audio_buffering(buffering));
-}
-
-pub fn on_native_audio_progress(position_ms: u64, duration_ms: Option<u64>) {
-    playback_signal().update(|p| p.on_native_audio_progress(position_ms, duration_ms));
-}
-
-pub fn on_native_audio_ended() {
-    let live = !is_fixture_mode();
-    let mut next_track = None;
-    playback_signal().update(|p| {
-        next_track = p.on_native_audio_ended(live, proxy_stream_url);
-    });
-    if live && let Some(t) = next_track {
-        live_engine::dispatch(EngineCommand::PlayTrack(t));
+/// Applies native `nsh/audio` telemetry directly to `PlaybackSlice` in headless fixture mode
+/// (where no background `AppEngine` Tokio runtime is running).
+pub fn apply_fixture_audio_telemetry(event: AudioTelemetry) {
+    match event {
+        AudioTelemetry::Loaded { duration_ms, .. } => {
+            playback_signal().update(|p| p.on_native_audio_duration(duration_ms));
+        }
+        AudioTelemetry::StateChanged { state, .. } => {
+            playback_signal().update(|p| p.on_native_audio_state(state));
+        }
+        AudioTelemetry::Buffering { buffering, .. } => {
+            playback_signal().update(|p| p.on_native_audio_buffering(buffering));
+        }
+        AudioTelemetry::Progress {
+            position_ms,
+            duration_ms,
+            ..
+        } => {
+            playback_signal().update(|p| p.on_native_audio_progress(position_ms, duration_ms));
+        }
+        AudioTelemetry::Ended { .. } => {
+            playback_signal().update(|p| {
+                let _ = p.on_native_audio_ended(false, proxy_stream_url);
+            });
+        }
+        AudioTelemetry::Failed { message, .. } => {
+            ui_signal().update(|u| u.set_status_banner(message));
+        }
     }
-}
-
-pub fn on_native_audio_error(message: String) {
-    ui_signal().update(|u| u.set_status_banner(message));
 }

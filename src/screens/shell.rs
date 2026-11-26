@@ -6,17 +6,25 @@
 //!   stacked ABOVE the bottom navigation bar + `.pb_safe_area_plus(px(4.0))` (>= 48dp targets).
 
 use std::rc::Rc;
+use std::sync::Arc;
 
 use nsh_base::{avatar, button, input, tab, tabs, theme};
 use nsh_core::element::ImageSrc;
 use nsh_core::prelude::*;
+use resonance_core::offline::PinnedCollectionKind;
 
 use crate::screens::{
+    album::{AlbumScreenCallbacks, album_screen_with_detail},
+    artist::{ArtistScreenCallbacks, artist_screen_with_detail},
     auth_sign_in_sheet::{AuthSignInCallbacks, auth_sign_in_sheet},
-    explore, home, library, lyrics, now_playing, queue, search, settings,
+    explore, home, library,
+    listen_together::{ListenTogetherCallbacks, listen_together_screen},
+    lyrics, now_playing, queue, search, settings,
     settings_updater_card::updater_top_banner,
 };
-use crate::store::{self, AppTab, DesktopSidePanel, LibraryFilter, SidebarPlaylist};
+use crate::store::{
+    self, AppTab, DesktopSidePanel, EntityRoute, LibraryFilter, SidebarPlaylist,
+};
 use crate::ui::controls::{
     add_to_playlist_sheet, artwork_box, cast_picker_sheet, desktop_player_bar, mini_player_bar,
     svg_icon_button, track_action_sheet,
@@ -198,46 +206,172 @@ fn mobile_nav_item(tab_kind: AppTab, label: &'static str, icon_kind: IconKind) -
         )
 }
 
+fn has_active_entity_screen() -> bool {
+    match store::current_entity_route() {
+        Some(EntityRoute::Album { .. }) => store::active_album_detail().is_some(),
+        Some(EntityRoute::Artist { .. }) => store::active_artist_detail().is_some(),
+        None => false,
+    }
+}
+
+fn render_active_entity_screen() -> AnyElement {
+    match store::current_entity_route() {
+        Some(EntityRoute::Album { .. }) => {
+            if let Some((album, progress)) = store::active_album_detail() {
+                return album_screen_with_detail(
+                    album,
+                    progress,
+                    AlbumScreenCallbacks {
+                        on_back: Arc::new(store::go_back),
+                        on_play_album: Arc::new(|tracks| {
+                            if let Some(first) = tracks.first().cloned() {
+                                store::play_track(first);
+                                for extra in tracks.into_iter().skip(1) {
+                                    store::play_last(extra);
+                                }
+                            }
+                        }),
+                        on_shuffle_album: Arc::new(store::play_all_shuffled),
+                        on_start_radio: Arc::new(|album| {
+                            store::set_autoplay_radio(true);
+                            if let Some(first) = album.tracks.first().cloned() {
+                                store::play_track(first);
+                            }
+                        }),
+                        on_toggle_pin_offline: Arc::new(|album| {
+                            let is_pinned = store::pinned_collections()
+                                .iter()
+                                .any(|c| c.id == album.browse_id);
+                            if is_pinned {
+                                store::unpin_collection(&album.browse_id);
+                            } else {
+                                store::pin_collection(
+                                    album.browse_id,
+                                    PinnedCollectionKind::Album,
+                                    album.title,
+                                    album.release_year,
+                                    album.artwork_url,
+                                    album.tracks,
+                                );
+                            }
+                        }),
+                        on_add_album_to_playlist: Arc::new(|album| {
+                            if let Some(first) = album.tracks.first().cloned() {
+                                store::open_add_to_playlist_sheet(first);
+                            }
+                        }),
+                        on_open_artist: Arc::new(store::open_artist_entity),
+                        on_open_album: Arc::new(store::open_album_entity),
+                        on_play_track: Arc::new(store::play_track),
+                        on_play_next: Arc::new(store::play_next),
+                    },
+                )
+                .into_element();
+            }
+        }
+        Some(EntityRoute::Artist { .. }) => {
+            if let Some(artist) = store::active_artist_detail() {
+                return artist_screen_with_detail(
+                    artist,
+                    ArtistScreenCallbacks {
+                        on_back: Arc::new(store::go_back),
+                        on_play_top_songs: Arc::new(|tracks| {
+                            if let Some(first) = tracks.first().cloned() {
+                                store::play_track(first);
+                                for extra in tracks.into_iter().skip(1) {
+                                    store::play_last(extra);
+                                }
+                            }
+                        }),
+                        on_start_radio: Arc::new(|artist| {
+                            store::set_autoplay_radio(true);
+                            if let Some(first) = artist.top_songs.first().cloned() {
+                                store::play_track(first);
+                            }
+                        }),
+                        on_shuffle: Arc::new(store::play_all_shuffled),
+                        on_toggle_subscribe: Arc::new(store::toggle_subscribe_artist),
+                        on_play_track: Arc::new(store::play_track),
+                        on_play_next: Arc::new(store::play_next),
+                        on_open_album: Arc::new(store::open_album_entity),
+                        on_open_artist: Arc::new(store::open_artist_entity),
+                    },
+                )
+                .into_element();
+            }
+        }
+        None => {}
+    }
+    view().into_element()
+}
+
+fn wired_listen_together_screen() -> impl IntoElement {
+    listen_together_screen(
+        store::synced_signal(store::active_room_snapshot),
+        store::synced_signal(store::rooms_local_track_warning),
+        ListenTogetherCallbacks {
+            on_create_room: Arc::new(store::create_listen_room),
+            on_join_room: Arc::new(store::join_listen_room),
+            on_leave_room: Arc::new(store::leave_listen_room),
+            on_start_local_radio: Arc::new(store::start_local_radio_mix),
+            on_vote_skip: Arc::new(store::vote_skip_room),
+            on_send_reaction: Arc::new(store::send_room_reaction),
+            on_kick_participant: Arc::new(store::kick_room_participant),
+            on_transfer_host: Arc::new(store::transfer_room_host),
+            on_copy_invite: Arc::new(|code| {
+                store::set_status_banner(format!("Room invite code copied: {code}"));
+            }),
+        },
+    )
+}
+
 fn active_screen() -> impl IntoElement {
-    view()
-        .flex_1()
-        .min_h(px(0.0))
-        .child(when(
-            move || store::active_tab() == AppTab::Home,
-            home::home_screen,
-        ))
-        .child(when(
-            move || store::active_tab() == AppTab::Explore,
-            explore::explore_screen,
-        ))
-        .child(when(
-            move || store::active_tab() == AppTab::Search,
-            search::search_screen,
-        ))
-        .child(when(
-            move || store::active_tab() == AppTab::Queue,
-            queue::queue_screen,
-        ))
-        .child(when(
-            move || store::active_tab() == AppTab::NowPlaying,
-            now_playing::now_playing_screen,
-        ))
-        .child(when(
-            move || store::active_tab() == AppTab::Lyrics,
-            lyrics::lyrics_screen,
-        ))
-        .child(when(
-            move || store::active_tab() == AppTab::Library,
-            library::library_screen,
-        ))
-        .child(when(
-            move || store::active_tab() == AppTab::ListenTogether,
-            settings::listen_together_screen,
-        ))
-        .child(when(
-            move || store::active_tab() == AppTab::Settings,
-            settings::settings_screen,
-        ))
+    view().flex_1().min_h(px(0.0)).child(
+        when(has_active_entity_screen, || {
+            dynamic(render_active_entity_screen)
+        })
+        .otherwise(|| {
+            view()
+                .flex_1()
+                .min_h(px(0.0))
+                .child(when(
+                    move || store::active_tab() == AppTab::Home,
+                    home::home_screen,
+                ))
+                .child(when(
+                    move || store::active_tab() == AppTab::Explore,
+                    explore::explore_screen,
+                ))
+                .child(when(
+                    move || store::active_tab() == AppTab::Search,
+                    search::search_screen,
+                ))
+                .child(when(
+                    move || store::active_tab() == AppTab::Queue,
+                    queue::queue_screen,
+                ))
+                .child(when(
+                    move || store::active_tab() == AppTab::NowPlaying,
+                    now_playing::now_playing_screen,
+                ))
+                .child(when(
+                    move || store::active_tab() == AppTab::Lyrics,
+                    lyrics::lyrics_screen,
+                ))
+                .child(when(
+                    move || store::active_tab() == AppTab::Library,
+                    library::library_screen,
+                ))
+                .child(when(
+                    move || store::active_tab() == AppTab::ListenTogether,
+                    wired_listen_together_screen,
+                ))
+                .child(when(
+                    move || store::active_tab() == AppTab::Settings,
+                    settings::settings_screen,
+                ))
+        }),
+    )
 }
 
 fn status_toast() -> impl IntoElement {
@@ -1124,11 +1258,14 @@ pub fn app_shell() -> impl IntoElement {
                                         },
                                     ))
                                     .child(desktop_top_header())
-                                    .child(updater_top_banner(
-                                        store::updater_available(),
-                                        Rc::new(|| store::set_tab(AppTab::Settings)),
-                                        Rc::new(store::dismiss_updater_banner),
-                                    ))
+                                    .child(dynamic(move || {
+                                        updater_top_banner(
+                                            store::updater_available(),
+                                            Rc::new(|| store::set_tab(AppTab::Settings)),
+                                            Rc::new(store::dismiss_updater_banner),
+                                        )
+                                        .into_element()
+                                    }))
                                     .child(active_screen())
                                     .child(status_toast()),
                             )
@@ -1150,23 +1287,31 @@ pub fn app_shell() -> impl IntoElement {
         .child(track_action_sheet())
         .child(add_to_playlist_sheet())
         .child(auth_sign_in_sheet(
-            signal(store::auth_sheet_open()),
-            signal(store::settings_snapshot().tv_oauth_user_code),
-            signal(store::settings_snapshot().tv_oauth_verification_url),
-            signal(store::settings_snapshot().tv_oauth_expires_in_secs),
+            store::synced_signal(store::auth_sheet_open),
+            store::synced_signal(|| store::settings_snapshot().tv_oauth_user_code),
+            store::synced_signal(|| store::settings_snapshot().tv_oauth_verification_url),
+            store::synced_signal(|| store::settings_snapshot().tv_oauth_expires_in_secs),
             AuthSignInCallbacks {
-                on_close: std::sync::Arc::new(store::close_auth_sheet),
-                ..AuthSignInCallbacks::default()
+                on_close: Arc::new(store::close_auth_sheet),
+                on_start_tv_oauth: Arc::new(store::start_tv_oauth),
+                on_cancel_tv_oauth: Arc::new(store::cancel_tv_oauth),
+                on_submit_cookies: Arc::new(|raw| {
+                    store::sign_in_with_cookies(&raw);
+                    store::close_auth_sheet();
+                }),
             },
         ))
         .child(when(store::cast_sheet_open, || {
-            cast_picker_sheet(
-                store::cast_devices(),
-                store::cast_session(),
-                |_| {},
-                || {},
-                |_| {},
-                || store::set_cast_sheet_open(false),
-            )
+            dynamic(|| {
+                cast_picker_sheet(
+                    store::cast_devices(),
+                    store::cast_session(),
+                    store::select_cast_device,
+                    store::disconnect_cast,
+                    store::set_cast_volume,
+                    || store::set_cast_sheet_open(false),
+                )
+                .into_element()
+            })
         }))
 }

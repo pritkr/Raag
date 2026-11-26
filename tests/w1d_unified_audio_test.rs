@@ -439,15 +439,11 @@ fn settings_dsp_capability_maps_truthfully_to_contract() {
     let settings = SettingsSlice::new(true);
     let cap = settings.dsp_capability();
     assert_eq!(cap, AudioDspCapability::ExternalUrlStreamOnly);
-    assert!(!cap.is_active());
     assert_eq!(
-        cap.to_contract(),
+        cap,
         resonance_contract::AudioDspCapability::ExternalUrlStreamOnly
     );
-    assert_eq!(
-        AudioDspCapability::from_contract(
-            resonance_contract::AudioDspCapability::NativePcmPipeline
-        ),
-        AudioDspCapability::ActivePcmPipeline
-    );
+    assert!(!cap.is_active());
+    assert!(AudioDspCapability::NativePcmPipeline.is_active());
+    assert!(AudioDspCapability::AndroidAudioProcessorJni.is_active());
 }

@@ -1,5 +1,5 @@
 //! Offline Vault quota evaluator, collection progress state machine, and
-//! ref-counted orphan-safe unpin cleanup (`H2.2`).
+//! ref-counted orphan-safe unpin cleanup.
 
 use std::collections::HashMap;
 
@@ -8,7 +8,7 @@ use resonance_contract::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::downloads::vault::{OfflineVault, PinnedCollection, PinnedCollectionKind};
+use crate::offline::vault::{OfflineVault, PinnedCollection, PinnedCollectionKind};
 
 /// Default estimated size per 160 kbps Opus track (4.5 MB).
 pub const DEFAULT_ESTIMATED_OPUS_BYTES: u64 = 4_500_000;
@@ -224,9 +224,11 @@ pub fn compute_collection_progress(
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UnpinCleanupReport {
+    pub unpinned_id: String,
     pub unpinned: bool,
     pub deleted_orphans: usize,
     pub preserved_shared: usize,
+    pub reclaimed_bytes: u64,
 }
 
 /// Pre-flight storage quota evaluator and ref-counted orphan-safe unpin coordinator.
@@ -315,35 +317,7 @@ impl QuotaEvaluator {
         vault: &OfflineVault,
         collection_id: &str,
     ) -> CoreResult<UnpinCleanupReport> {
-        let collections = vault.list_pinned_collections()?;
-        let target_tracks: Vec<String> = collections
-            .into_iter()
-            .find(|c| c.id == collection_id)
-            .map(|c| c.tracks.into_iter().map(|t| t.id).collect())
-            .unwrap_or_default();
-
-        let unpinned = vault.unpin_collection(collection_id)?;
-        let mut deleted_orphans = 0usize;
-        let mut preserved_shared = 0usize;
-
-        for video_id in target_tracks {
-            if vault.is_track_pinned(&video_id)? {
-                preserved_shared += 1;
-            } else {
-                // Ignore NotFound if track was never downloaded yet.
-                match vault.delete_track(&video_id).await {
-                    Ok(()) => deleted_orphans += 1,
-                    Err(CoreError::OfflineStorage(OfflineStorageError::NotFound { .. })) => {}
-                    Err(e) => return Err(e),
-                }
-            }
-        }
-
-        Ok(UnpinCleanupReport {
-            unpinned,
-            deleted_orphans,
-            preserved_shared,
-        })
+        vault.unpin_collection_with_cleanup(collection_id).await
     }
 
     /// Enqueues only delta tracks in a pinned collection that are not yet completed or active.

@@ -7,7 +7,7 @@ use resonance_contract::{
     AlbumDetail, ArtistDetail, ExplorePage, HomeItem, HomeSection, LibraryCollectionRef,
     MoodCategory, Playlist, SearchCategory, SearchResults, Track,
 };
-use resonance_core::downloads::CollectionOfflineProgress;
+use resonance_core::offline::CollectionOfflineProgress;
 use resonance_core::fixture::{fixture_home_sections, fixture_tracks};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

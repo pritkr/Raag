@@ -45,7 +45,7 @@ impl ChunkCache {
     }
 
     pub fn known_total_len(&self, video_id: &str, itag: u32) -> CoreResult<Option<u64>> {
-        self.db.known_total_len(video_id, itag)
+        self.db.transient().known_total_len(video_id, itag)
     }
 
     /// Reads a cached 256 KB chunk if present and intact.
@@ -59,14 +59,14 @@ impl ChunkCache {
     ) -> CoreResult<Option<(Vec<u8>, u64)>> {
         let now = unix_secs();
         let Some((expected_len, total_len, expected_sha)) =
-            self.db.get_chunk_meta(video_id, itag, chunk_index, now)?
+            self.db.transient().get_chunk_meta(video_id, itag, chunk_index, now)?
         else {
             return Ok(None);
         };
 
         let path = self.chunk_path(video_id, itag, chunk_index);
         let Ok(bytes) = fs::read(&path) else {
-            let _ = self.db.delete_chunk_meta(video_id, itag, chunk_index);
+            let _ = self.db.transient().delete_chunk_meta(video_id, itag, chunk_index);
             return Ok(None);
         };
 
@@ -76,7 +76,7 @@ impl ChunkCache {
                 "corrupt chunk detected ({video_id} itag={itag} idx={chunk_index}); self-healing"
             );
             let _ = fs::remove_file(&path);
-            let _ = self.db.delete_chunk_meta(video_id, itag, chunk_index);
+            let _ = self.db.transient().delete_chunk_meta(video_id, itag, chunk_index);
             return Ok(None);
         }
 
@@ -108,7 +108,7 @@ impl ChunkCache {
         fs::rename(&tmp, &path).map_err(|e| CoreError::Cache(CacheError::Io(e.to_string())))?;
 
         let sha_hex = hex::encode(Sha256::digest(data));
-        self.db.record_chunk_meta(
+        self.db.transient().record_chunk_meta(
             video_id,
             itag,
             chunk_index,
@@ -123,12 +123,12 @@ impl ChunkCache {
     }
 
     pub fn evict_if_needed(&self) -> CoreResult<usize> {
-        let victims = self.db.lru_chunks_over_limit(self.max_bytes)?;
+        let victims = self.db.transient().lru_chunks_over_limit(self.max_bytes)?;
         let count = victims.len();
         for (vid, itag, idx) in victims {
             let path = self.chunk_path(&vid, itag, idx);
             let _ = fs::remove_file(&path);
-            let _ = self.db.delete_chunk_meta(&vid, itag, idx);
+            let _ = self.db.transient().delete_chunk_meta(&vid, itag, idx);
         }
         Ok(count)
     }
@@ -139,6 +139,6 @@ impl ChunkCache {
             fs::create_dir_all(&self.root)
                 .map_err(|e| CoreError::Cache(CacheError::Io(e.to_string())))?;
         }
-        self.db.clear_audio_chunk_rows()
+        self.db.transient().clear_audio_chunk_rows()
     }
 }

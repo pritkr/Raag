@@ -17,15 +17,53 @@ pub enum PersistedTheme {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum PersistedEqPreset {
+pub enum EqPreset {
     #[default]
     Flat,
     BassBoost,
-    VocalBoost,
-    TrebleBoost,
+    #[serde(alias = "vocal_boost")]
+    Vocal,
+    #[serde(alias = "treble_boost")]
+    Acoustic,
     LateNight,
     Custom,
 }
+
+impl EqPreset {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Flat => "Flat",
+            Self::BassBoost => "Bass Boost",
+            Self::Vocal => "Vocal",
+            Self::Acoustic => "Acoustic",
+            Self::LateNight => "Late Night",
+            Self::Custom => "Custom",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Flat => Self::BassBoost,
+            Self::BassBoost => Self::Vocal,
+            Self::Vocal => Self::Acoustic,
+            Self::Acoustic => Self::LateNight,
+            Self::LateNight | Self::Custom => Self::Flat,
+        }
+    }
+
+    pub fn gains_db(self) -> [f32; 10] {
+        match self {
+            Self::Flat | Self::Custom => [0.0; 10],
+            Self::BassBoost => [4.5, 4.0, 3.0, 1.5, 0.0, 0.0, 0.5, 1.0, 1.0, 0.5],
+            Self::Vocal => [-1.5, -1.0, 0.0, 1.5, 3.0, 3.5, 2.5, 1.0, 0.0, -0.5],
+            Self::Acoustic => [1.5, 1.0, 0.5, 0.0, 1.0, 1.5, 2.0, 2.5, 2.0, 1.0],
+            Self::LateNight => [2.0, 1.5, 0.5, 0.0, -0.5, 0.5, 1.0, -1.0, -2.5, -3.5],
+        }
+    }
+}
+
+/// Alias preserving `PersistedEqPreset` naming in persisted settings code.
+pub type PersistedEqPreset = EqPreset;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

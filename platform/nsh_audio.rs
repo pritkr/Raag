@@ -23,9 +23,6 @@ use nsh_core::prelude::{AudioPlayer, audio_available, audio_player, cleanup, eff
 use resonance_contract::{
     AudioBackend, AudioTelemetry, CoreResult, MediaCommand, NowPlayingMetadata, PlayerState,
 };
-use resonance_core::audio_dsp::{
-    DspConfig, DspPipeline, SpscConsumer, SpscProducer, SpscRingBuffer,
-};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::platform::desktop::SystemMediaControlsBridge;
@@ -166,136 +163,103 @@ pub fn mount_nsh_audio_driver() {
                 continue;
             }
 
-            if fixture_mode {
-                match event {
-                    AudioEvent::Load {
-                        duration: Some(dur),
-                    } => {
-                        store::on_native_audio_duration(dur.as_millis() as u64);
-                    }
-                    AudioEvent::Load { duration: None } => {}
-                    AudioEvent::Playing => {
-                        if let Some(entry) = driver_for_pump.borrow_mut().active.as_mut()
-                            && entry.generation == generation
-                        {
-                            entry.is_playing = true;
-                        }
-                        store::on_native_audio_state(PlayerState::Playing);
-                    }
-                    AudioEvent::Paused => {
-                        if let Some(entry) = driver_for_pump.borrow_mut().active.as_mut()
-                            && entry.generation == generation
-                        {
-                            entry.is_playing = false;
-                        }
-                        store::on_native_audio_state(PlayerState::Paused);
-                    }
-                    AudioEvent::Buffer { buffering } => {
-                        store::on_native_audio_buffering(buffering);
-                    }
-                    AudioEvent::Progress { position, duration } => {
-                        store::on_native_audio_progress(
-                            position.as_millis() as u64,
-                            duration.map(|d| d.as_millis() as u64),
-                        );
-                    }
-                    AudioEvent::Ended => {
-                        store::on_native_audio_ended();
-                    }
-                    AudioEvent::Failed { error, message }
-                        // Headless test harnesses without an audio backend emit Unavailable;
-                        // keep fixture UI state clean unless a real audio backend failed.
-                        if error != AudioError::Unavailable =>
+            let telemetry = match event {
+                AudioEvent::Load {
+                    duration: Some(dur),
+                } => {
+                    last_progress_emit = None;
+                    Some(AudioTelemetry::Loaded {
+                        generation,
+                        duration_ms: dur.as_millis() as u64,
+                    })
+                }
+                AudioEvent::Load { duration: None } => {
+                    last_progress_emit = None;
+                    None
+                }
+                AudioEvent::Playing => {
+                    if let Some(entry) = driver_for_pump.borrow_mut().active.as_mut()
+                        && entry.generation == generation
                     {
-                        store::on_native_audio_error(format!(
+                        entry.is_playing = true;
+                    }
+                    Some(AudioTelemetry::StateChanged {
+                        generation,
+                        state: PlayerState::Playing,
+                    })
+                }
+                AudioEvent::Paused => {
+                    if let Some(entry) = driver_for_pump.borrow_mut().active.as_mut()
+                        && entry.generation == generation
+                    {
+                        entry.is_playing = false;
+                    }
+                    Some(AudioTelemetry::StateChanged {
+                        generation,
+                        state: PlayerState::Paused,
+                    })
+                }
+                AudioEvent::Buffer { buffering } => Some(AudioTelemetry::Buffering {
+                    generation,
+                    buffering,
+                }),
+                AudioEvent::Progress { position, duration } => {
+                    let pos_ms = position.as_millis() as u64;
+                    let should_emit = if fixture_mode {
+                        true
+                    } else {
+                        let now = Instant::now();
+                        match last_progress_emit {
+                            None => {
+                                last_progress_emit = Some((pos_ms, now));
+                                true
+                            }
+                            Some((prev_ms, prev_at))
+                                if pos_ms.abs_diff(prev_ms) >= 250
+                                    || now.duration_since(prev_at) >= Duration::from_millis(250) =>
+                            {
+                                last_progress_emit = Some((pos_ms, now));
+                                true
+                            }
+                            _ => false,
+                        }
+                    };
+                    should_emit.then(|| AudioTelemetry::Progress {
+                        generation,
+                        position_ms: pos_ms,
+                        duration_ms: duration.map(|d| d.as_millis() as u64),
+                    })
+                }
+                AudioEvent::Ended => {
+                    if let Some(entry) = driver_for_pump.borrow_mut().active.as_mut()
+                        && entry.generation == generation
+                    {
+                        entry.is_playing = false;
+                    }
+                    Some(AudioTelemetry::Ended { generation })
+                }
+                AudioEvent::Failed { error, message }
+                    // Headless test harnesses without an audio backend emit Unavailable;
+                    // keep UI state clean unless a real audio backend failed.
+                    if error != AudioError::Unavailable =>
+                {
+                    Some(AudioTelemetry::Failed {
+                        generation,
+                        message: format!(
                             "Native audio error ({}): {}",
                             error.as_str(),
                             message
-                        ));
-                    }
-                    _ => {}
+                        ),
+                    })
                 }
-            } else {
-                let bus = nsh_audio_bus();
-                match event {
-                    AudioEvent::Load {
-                        duration: Some(dur),
-                    } => {
-                        last_progress_emit = None;
-                        bus.send_telemetry(AudioTelemetry::Loaded {
-                            generation,
-                            duration_ms: dur.as_millis() as u64,
-                        });
-                    }
-                    AudioEvent::Load { duration: None } => {
-                        last_progress_emit = None;
-                    }
-                    AudioEvent::Playing => {
-                        if let Some(entry) = driver_for_pump.borrow_mut().active.as_mut()
-                            && entry.generation == generation
-                        {
-                            entry.is_playing = true;
-                        }
-                        bus.send_telemetry(AudioTelemetry::StateChanged {
-                            generation,
-                            state: PlayerState::Playing,
-                        });
-                    }
-                    AudioEvent::Paused => {
-                        if let Some(entry) = driver_for_pump.borrow_mut().active.as_mut()
-                            && entry.generation == generation
-                        {
-                            entry.is_playing = false;
-                        }
-                        bus.send_telemetry(AudioTelemetry::StateChanged {
-                            generation,
-                            state: PlayerState::Paused,
-                        });
-                    }
-                    AudioEvent::Buffer { buffering } => {
-                        bus.send_telemetry(AudioTelemetry::Buffering {
-                            generation,
-                            buffering,
-                        });
-                    }
-                    AudioEvent::Progress { position, duration } => {
-                        let pos_ms = position.as_millis() as u64;
-                        let now = Instant::now();
-                        let should_emit = match last_progress_emit {
-                            None => true,
-                            Some((prev_ms, prev_at)) => {
-                                pos_ms.abs_diff(prev_ms) >= 250
-                                    || now.duration_since(prev_at) >= Duration::from_millis(250)
-                            }
-                        };
-                        if should_emit {
-                            last_progress_emit = Some((pos_ms, now));
-                            bus.send_telemetry(AudioTelemetry::Progress {
-                                generation,
-                                position_ms: pos_ms,
-                                duration_ms: duration.map(|d| d.as_millis() as u64),
-                            });
-                        }
-                    }
-                    AudioEvent::Ended => {
-                        if let Some(entry) = driver_for_pump.borrow_mut().active.as_mut()
-                            && entry.generation == generation
-                        {
-                            entry.is_playing = false;
-                        }
-                        bus.send_telemetry(AudioTelemetry::Ended { generation });
-                    }
-                    AudioEvent::Failed { error, message } if error != AudioError::Unavailable => {
-                        bus.send_telemetry(AudioTelemetry::Failed {
-                            generation,
-                            message: format!(
-                                "Native audio error ({}): {}",
-                                error.as_str(),
-                                message
-                            ),
-                        });
-                    }
-                    _ => {}
+                _ => None,
+            };
+
+            if let Some(tel) = telemetry {
+                if fixture_mode {
+                    store::apply_fixture_audio_telemetry(tel);
+                } else {
+                    nsh_audio_bus().send_telemetry(tel);
                 }
             }
         }
@@ -553,12 +517,6 @@ pub enum NshAudioControl {
     SetPlaybackSpeed(f32),
 }
 
-/// Creates a lock-free cache-line-aligned SPSC PCM ring buffer for decoupling audio decoding
-/// and DSP normalization from UI/network stalls.
-pub fn create_pcm_ring_buffer(capacity_samples: usize) -> (SpscProducer<f32>, SpscConsumer<f32>) {
-    SpscRingBuffer::with_capacity(capacity_samples)
-}
-
 /// `Send + Sync` `resonance_contract::AudioBackend` implementation that routes
 /// `PlaybackController` operations to NSH's native `nsh/audio` player and listens
 /// for Desktop system media keys (`souvlaki` MPRIS/SMTC when enabled via [`SystemMediaControlsBridge`]).
@@ -568,8 +526,6 @@ pub struct NshAudioBackend {
     volume_bits: AtomicU64,
     active_url: Mutex<Option<String>>,
     last_meta: Mutex<Option<NowPlayingMetadata>>,
-    dsp_config: Mutex<DspConfig>,
-    dsp_pipeline: Mutex<DspPipeline>,
     control_tx: UnboundedSender<NshAudioControl>,
     control_rx: Mutex<Option<UnboundedReceiver<NshAudioControl>>>,
     telemetry_rx: Mutex<Option<UnboundedReceiver<AudioTelemetry>>>,
@@ -585,16 +541,12 @@ impl NshAudioBackend {
         let (control_tx, control_rx) = unbounded_channel();
         let (tel_tx, tel_rx) = unbounded_channel();
         nsh_audio_bus().attach_telemetry_sender(tel_tx);
-        let default_dsp = DspConfig::default();
-        let dsp_pipeline = DspPipeline::new(48_000, 2, &default_dsp);
         Self {
             playing: AtomicBool::new(false),
             position_ms: AtomicU64::new(0),
             volume_bits: AtomicU64::new(1.0_f32.to_bits() as u64),
             active_url: Mutex::new(None),
             last_meta: Mutex::new(None),
-            dsp_config: Mutex::new(default_dsp),
-            dsp_pipeline: Mutex::new(dsp_pipeline),
             control_tx,
             control_rx: Mutex::new(Some(control_rx)),
             telemetry_rx: Mutex::new(Some(tel_rx)),
@@ -636,103 +588,6 @@ impl NshAudioBackend {
         let _ = self.control_tx.send(cmd.clone());
         nsh_audio_bus().send_control(cmd);
     }
-
-    /// Updates user DSP configuration for the local PCM DSP pipeline without emitting
-    /// no-op commands onto the URL-based `nsh/audio` control bus.
-    pub fn set_dsp_config(&self, config: DspConfig) {
-        *self.dsp_config.lock().unwrap() = config.clone();
-        self.dsp_pipeline.lock().unwrap().apply_config(&config);
-    }
-
-    pub fn dsp_config(&self) -> DspConfig {
-        self.dsp_config.lock().unwrap().clone()
-    }
-
-    /// Applies YouTube's `loudnessDb` metadata for the active track to ReplayGain / EBU R128 normalization.
-    pub fn set_track_loudness_db(&self, loudness_db: Option<f32>) {
-        self.dsp_pipeline
-            .lock()
-            .unwrap()
-            .set_track_loudness_db(loudness_db);
-    }
-
-    /// Runs the configured modular PCM DSP pipeline on an interleaved stereo audio frame block.
-    /// Returns `false` if the block is silence-skipped.
-    pub fn process_dsp_block(&self, interleaved: &mut [f32]) -> bool {
-        self.dsp_pipeline
-            .lock()
-            .unwrap()
-            .process_interleaved(interleaved)
-    }
-}
-
-/// Lock-free DSP parameter update sent from control/UI threads to [`LockFreeAudioConsumer`].
-#[derive(Debug, Clone)]
-pub enum DspControlUpdate {
-    SetConfig(DspConfig),
-    SetTrackLoudnessDb(Option<f32>),
-    SetVolumeBoost(f32),
-}
-
-/// Real-time audio callback consumer reading decoded PCM frames from a lock-free SPSC ring
-/// buffer and running a thread-owned [`DspPipeline`] with zero mutex locks or heap allocations.
-pub struct LockFreeAudioConsumer {
-    consumer: SpscConsumer<f32>,
-    dsp: DspPipeline,
-    updates: crossbeam_channel::Receiver<DspControlUpdate>,
-}
-
-impl LockFreeAudioConsumer {
-    pub fn new(
-        consumer: SpscConsumer<f32>,
-        dsp: DspPipeline,
-        updates: crossbeam_channel::Receiver<DspControlUpdate>,
-    ) -> Self {
-        Self {
-            consumer,
-            dsp,
-            updates,
-        }
-    }
-
-    /// Drains pending DSP updates without blocking, reads up to `out.len()` samples from the
-    /// SPSC ring buffer, zero-fills any underrun tail, and processes the DSP chain in-place.
-    /// Returns `(samples_popped, keep_block)` where `keep_block == false` indicates silence skip.
-    pub fn render_callback(&mut self, out: &mut [f32]) -> (usize, bool) {
-        while let Ok(upd) = self.updates.try_recv() {
-            match upd {
-                DspControlUpdate::SetConfig(cfg) => self.dsp.apply_config(&cfg),
-                DspControlUpdate::SetTrackLoudnessDb(db) => self.dsp.set_track_loudness_db(db),
-                DspControlUpdate::SetVolumeBoost(vol) => self.dsp.set_volume_boost(vol),
-            }
-        }
-        let popped = self.consumer.pop_slice(out);
-        if popped < out.len() {
-            out[popped..].fill(0.0);
-        }
-        let keep = self.dsp.process_interleaved(out);
-        (popped, keep)
-    }
-}
-
-/// Creates a lock-free PCM producer, real-time [`LockFreeAudioConsumer`], and non-blocking DSP sender.
-pub fn create_lock_free_audio_pipeline(
-    capacity_samples: usize,
-    sample_rate: u32,
-    channels: usize,
-) -> (
-    SpscProducer<f32>,
-    LockFreeAudioConsumer,
-    crossbeam_channel::Sender<DspControlUpdate>,
-) {
-    let (prod, cons) = SpscRingBuffer::with_capacity::<f32>(capacity_samples);
-    let (tx, rx) = crossbeam_channel::unbounded();
-    let consumer = LockFreeAudioConsumer::new(
-        cons,
-        DspPipeline::new(sample_rate, channels, &DspConfig::default()),
-        rx,
-    );
-    (prod, consumer, tx)
 }
 
 impl Default for NshAudioBackend {

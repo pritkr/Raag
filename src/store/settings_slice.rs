@@ -1,76 +1,15 @@
 //! Settings, Theme, Auth credentials status, Audio DSP config, and PO Token diagnostics slice.
 
+pub use resonance_contract::AudioDspCapability;
 use resonance_contract::{
     AccountProfile, AuthBackendStatus, CredentialBackendKind, OfflineQualityPreference,
-    PersistedEqPreset, PersistedTheme, PoTokenDiagnostics, PoTokenHealthStatus, RemoteConfigStatus,
-    SettingsV1,
+    PersistedTheme, PoTokenDiagnostics, PoTokenHealthStatus, RemoteConfigStatus, SettingsV1,
 };
-use resonance_core::audio_dsp::{DspConfig, EqPreset};
+use resonance_core::audio_dsp::DspConfig;
 
 use super::playback_slice::PlaybackSlice;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ThemeChoice {
-    #[default]
-    System,
-    Light,
-    Dark,
-}
-
-/// Truthful capability reporting for the audio DSP pipeline.
-///
-/// While playback routes HTTP URLs directly to `nsh/audio`'s OS decoder, DSP features
-/// (ReplayGain, 10-band EQ, silence skip, crossfade) are gated behind `ExternalUrlStreamOnly`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AudioDspCapability {
-    ActivePcmPipeline,
-    ExternalUrlStreamOnly,
-}
-
-impl AudioDspCapability {
-    pub fn is_active(self) -> bool {
-        matches!(self, Self::ActivePcmPipeline)
-    }
-
-    pub fn badge_label(self) -> &'static str {
-        match self {
-            Self::ActivePcmPipeline => "Active • Rust PCM DSP",
-            Self::ExternalUrlStreamOnly => "Planned • Native PCM Engine",
-        }
-    }
-
-    pub fn detail_text(self) -> &'static str {
-        match self {
-            Self::ActivePcmPipeline => {
-                "32-bit float PCM pipeline active for ReplayGain, 10-band EQ, silence skip, and crossfade."
-            }
-            Self::ExternalUrlStreamOnly => {
-                "nsh/audio streams directly to the OS decoder. Full PCM DSP (EQ, ReplayGain, silence skip, crossfade) is gated until the custom Rust PCM sink lands."
-            }
-        }
-    }
-
-    pub fn to_contract(self) -> resonance_contract::AudioDspCapability {
-        match self {
-            Self::ActivePcmPipeline => resonance_contract::AudioDspCapability::NativePcmPipeline,
-            Self::ExternalUrlStreamOnly => {
-                resonance_contract::AudioDspCapability::ExternalUrlStreamOnly
-            }
-        }
-    }
-
-    pub fn from_contract(cap: resonance_contract::AudioDspCapability) -> Self {
-        match cap {
-            resonance_contract::AudioDspCapability::NativePcmPipeline
-            | resonance_contract::AudioDspCapability::AndroidAudioProcessorJni => {
-                Self::ActivePcmPipeline
-            }
-            resonance_contract::AudioDspCapability::ExternalUrlStreamOnly => {
-                Self::ExternalUrlStreamOnly
-            }
-        }
-    }
-}
+pub type ThemeChoice = PersistedTheme;
 
 #[derive(Clone)]
 pub struct SettingsSlice {
@@ -185,22 +124,11 @@ impl SettingsSlice {
         persisted: &SettingsV1,
         playback: &mut PlaybackSlice,
     ) {
-        self.theme_choice = match persisted.theme {
-            PersistedTheme::System => ThemeChoice::System,
-            PersistedTheme::Light => ThemeChoice::Light,
-            PersistedTheme::Dark => ThemeChoice::Dark,
-        };
+        self.theme_choice = persisted.theme;
         self.reduced_motion = persisted.reduced_motion;
         self.dsp_config.loudness_normalization = persisted.loudness_normalization;
         self.dsp_config.silence_skip_enabled = persisted.silence_skip_enabled;
-        self.dsp_config.eq_preset = match persisted.eq_preset {
-            PersistedEqPreset::Flat => EqPreset::Flat,
-            PersistedEqPreset::BassBoost => EqPreset::BassBoost,
-            PersistedEqPreset::VocalBoost => EqPreset::Vocal,
-            PersistedEqPreset::TrebleBoost => EqPreset::Acoustic,
-            PersistedEqPreset::LateNight => EqPreset::LateNight,
-            PersistedEqPreset::Custom => EqPreset::Flat,
-        };
+        self.dsp_config.eq_preset = persisted.eq_preset;
         self.dsp_config.eq_gains_db = persisted.eq_gains_db;
         self.dsp_config.crossfade_ms = persisted.crossfade_ms;
         self.offline_quota_bytes = persisted.offline_quota_bytes;
@@ -221,22 +149,12 @@ impl SettingsSlice {
 
     pub fn to_persisted_settings(&self, playback: &PlaybackSlice) -> SettingsV1 {
         let mut settings = SettingsV1::default();
-        settings.theme = match self.theme_choice {
-            ThemeChoice::System => PersistedTheme::System,
-            ThemeChoice::Light => PersistedTheme::Light,
-            ThemeChoice::Dark => PersistedTheme::Dark,
-        };
+        settings.theme = self.theme_choice;
         settings.reduced_motion = self.reduced_motion;
         settings.sponsorblock_enabled = playback.player.sponsorblock_enabled;
         settings.loudness_normalization = self.dsp_config.loudness_normalization;
         settings.silence_skip_enabled = self.dsp_config.silence_skip_enabled;
-        settings.eq_preset = match self.dsp_config.eq_preset {
-            EqPreset::Flat => PersistedEqPreset::Flat,
-            EqPreset::BassBoost => PersistedEqPreset::BassBoost,
-            EqPreset::Vocal => PersistedEqPreset::VocalBoost,
-            EqPreset::Acoustic => PersistedEqPreset::TrebleBoost,
-            EqPreset::LateNight => PersistedEqPreset::LateNight,
-        };
+        settings.eq_preset = self.dsp_config.eq_preset;
         settings.eq_gains_db = self.dsp_config.eq_gains_db;
         settings.crossfade_ms = self.dsp_config.crossfade_ms;
         settings.playback_speed = self.playback_speed.clamp(0.5, 2.0);

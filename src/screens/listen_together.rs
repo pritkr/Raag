@@ -13,12 +13,7 @@ use nsh_core::prelude::*;
 use resonance_contract::RoomRole;
 use resonance_core::rooms::RoomStateSnapshot;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ListenTogetherSubMode {
-    #[default]
-    RadioMix,
-    Rooms,
-}
+use crate::store::ListenTogetherSubMode;
 use crate::ui::controls::{
     glass_pill_button, hero_pill_button, primary_button, secondary_button, status_card,
 };

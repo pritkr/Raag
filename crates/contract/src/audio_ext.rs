@@ -2,8 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::domain::{AudioCodec, TrackId};
-use crate::state::PlayerState;
+use crate::domain::AudioCodec;
 
 /// Truthful capability reporting for the audio DSP & PCM pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -15,37 +14,29 @@ pub enum AudioDspCapability {
     AndroidAudioProcessorJni,
 }
 
-/// Commands dispatched from `PlaybackController` / UI to the native audio backend.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum AudioControlCommand {
-    LoadAndPlay {
-        video_id: TrackId,
-        proxy_url: String,
-        start_ms: u64,
-    },
-    Pause,
-    Resume,
-    SeekMs(u64),
-    SetVolume(f32),
-    SetSpeed {
-        speed: f32,
-        preserve_pitch: bool,
-    },
-    Stop,
-}
+impl AudioDspCapability {
+    pub fn is_active(self) -> bool {
+        matches!(self, Self::NativePcmPipeline | Self::AndroidAudioProcessorJni)
+    }
 
-/// Telemetry events emitted from the native audio backend back to `PlaybackController`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum AudioTelemetryEvent {
-    StateChanged(PlayerState),
-    Buffering(bool),
-    Progress {
-        position_ms: u64,
-        duration_ms: Option<u64>,
-    },
-    DurationDiscovered(u64),
-    Ended,
-    Error(String),
+    pub fn badge_label(self) -> &'static str {
+        match self {
+            Self::NativePcmPipeline => "Active • Rust PCM DSP",
+            Self::AndroidAudioProcessorJni => "Active • Android AudioProcessor",
+            Self::ExternalUrlStreamOnly => "Planned • Native PCM Engine",
+        }
+    }
+
+    pub fn detail_text(self) -> &'static str {
+        match self {
+            Self::NativePcmPipeline | Self::AndroidAudioProcessorJni => {
+                "32-bit float PCM pipeline active for ReplayGain, 10-band EQ, silence skip, and crossfade."
+            }
+            Self::ExternalUrlStreamOnly => {
+                "nsh/audio streams directly to the OS decoder. Full PCM DSP (EQ, ReplayGain, silence skip, crossfade) is gated until the custom Rust PCM sink lands."
+            }
+        }
+    }
 }
 
 /// Sleep timer state for end-of-track or countdown auto-pause.

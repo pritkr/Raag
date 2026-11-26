@@ -12,6 +12,7 @@ use nsh_core::file_dialog::OpenDialog;
 use nsh_core::prelude::*;
 use resonance_contract::{LocalFolderRoot, LocalScanProgress, LocalTrackRecord, Track};
 
+use crate::store::LocalLibrarySubTab;
 use crate::ui::controls::{
     artwork_box, glass_pill_button, hero_pill_button, secondary_button, track_row_view,
 };
@@ -19,28 +20,6 @@ use crate::ui::icons::{IconKind, icon};
 use crate::ui::tokens::{
     MOBILE_MIN_TOUCH_TARGET, color_status_ok, glass_hairline, pill_glass_surface, radius_card,
 };
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum LocalFilesTab {
-    #[default]
-    Tracks,
-    Albums,
-    Artists,
-}
-
-impl LocalFilesTab {
-    pub fn all() -> &'static [Self] {
-        &[Self::Tracks, Self::Albums, Self::Artists]
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Tracks => "Tracks",
-            Self::Albums => "Albums",
-            Self::Artists => "Artists",
-        }
-    }
-}
 
 /// View-model props & callbacks for `local_files_screen`.
 #[derive(Clone)]
@@ -57,7 +36,7 @@ pub struct LocalFilesProps {
 
 /// Renders the Local Library & Folder Manager view.
 pub fn local_files_screen(props: LocalFilesProps) -> impl IntoElement {
-    let active_tab = signal(LocalFilesTab::Tracks);
+    let active_tab = signal(LocalLibrarySubTab::Tracks);
     let manual_path = signal(String::new());
     let filter_query = signal(String::new());
     let picker_status = signal(Option::<String>::None);
@@ -269,7 +248,7 @@ pub fn local_files_screen(props: LocalFilesProps) -> impl IntoElement {
                                     .flex_row()
                                     .items_center()
                                     .gap_2()
-                                    .children(LocalFilesTab::all().iter().map(|&tab| {
+                                    .children(LocalLibrarySubTab::all().iter().map(|&tab| {
                                         let is_active = tab == current;
                                         button()
                                             .min_h(px(MOBILE_MIN_TOUCH_TARGET))
@@ -362,7 +341,7 @@ pub fn local_files_screen(props: LocalFilesProps) -> impl IntoElement {
                 }
 
                 match active_tab.get() {
-                    LocalFilesTab::Tracks => {
+                    LocalLibrarySubTab::Tracks => {
                         let on_play = props.on_play_track.clone();
                         view()
                             .flex_1()
@@ -381,7 +360,7 @@ pub fn local_files_screen(props: LocalFilesProps) -> impl IntoElement {
                             }))
                             .into_element()
                     }
-                    LocalFilesTab::Albums => {
+                    LocalLibrarySubTab::Albums => {
                         let mut albums: BTreeMap<String, Vec<Track>> = BTreeMap::new();
                         for t in &all_tracks {
                             let key = t
@@ -443,7 +422,7 @@ pub fn local_files_screen(props: LocalFilesProps) -> impl IntoElement {
                             }))
                             .into_element()
                     }
-                    LocalFilesTab::Artists => {
+                    LocalLibrarySubTab::Artists => {
                         let mut artists: BTreeMap<String, Vec<Track>> = BTreeMap::new();
                         for t in &all_tracks {
                             artists

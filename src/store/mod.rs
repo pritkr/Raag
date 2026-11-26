@@ -31,7 +31,7 @@ use std::sync::{OnceLock, RwLock};
 use std::time::Duration;
 
 use nsh_core::prelude::*;
-use resonance_contract::{CastDevice, CastSessionState};
+use resonance_contract::{CastDevice, CastSessionState, LocalFolderRoot, UpdateChannel};
 
 use crate::live_engine::{self, EngineCommand, LiveUpdate};
 
@@ -56,6 +56,18 @@ pub struct CastSlice {
     pub sheet_open: bool,
     pub devices: Vec<CastDevice>,
     pub session: CastSessionState,
+}
+
+/// Creates a component-scoped `Signal<T>` that stays reactively synced to a store projection.
+pub fn synced_signal<T: Clone + PartialEq + 'static>(read: impl Fn() -> T + 'static) -> Signal<T> {
+    let sig = signal(read());
+    effect(move || {
+        let next = read();
+        if sig.get_untracked() != next {
+            sig.set(next);
+        }
+    });
+    sig
 }
 
 static FIXTURE_MODE_FLAG: AtomicBool = AtomicBool::new(false);
@@ -292,29 +304,6 @@ fn apply_live_update(update: LiveUpdate) {
                 p.player = snapshot;
             });
         }
-        LiveUpdate::AutoplayQueueLoaded {
-            seed_video_id,
-            tracks,
-        } => {
-            playback_signal().update(|p| {
-                if !p.player.queue.autoplay_radio {
-                    return;
-                }
-                let still_same_seed = p
-                    .player
-                    .current_track
-                    .as_ref()
-                    .is_some_and(|t| t.id == seed_video_id);
-                if !still_same_seed {
-                    return;
-                }
-                for t in tracks {
-                    if !p.player.queue.items.iter().any(|existing| existing.id == t.id) {
-                        p.player.queue.items.push(t);
-                    }
-                }
-            });
-        }
         LiveUpdate::LyricsLoaded(doc) => {
             playback_signal().update(|p| p.lyrics = doc);
         }
@@ -382,6 +371,26 @@ fn apply_live_update(update: LiveUpdate) {
                 });
                 loaded_theme = s.theme_choice;
             });
+            let channel = if settings.update_channel.eq_ignore_ascii_case("beta") {
+                UpdateChannel::Beta
+            } else {
+                UpdateChannel::Stable
+            };
+            updater_signal().update(|u| u.set_channel(channel));
+            if !settings.local_music_dirs.is_empty() {
+                local_media_signal().update(|m| {
+                    for dir in &settings.local_music_dirs {
+                        if !dir.trim().is_empty() && !m.roots.iter().any(|r| &r.path == dir) {
+                            m.roots.push(LocalFolderRoot {
+                                path: dir.clone(),
+                                added_at_unix_secs: 0,
+                                last_scanned_unix_secs: None,
+                                track_count: 0,
+                            });
+                        }
+                    }
+                });
+            }
             apply_nsh_appearance(loaded_theme);
             if !is_fixture_mode() {
                 live_engine::dispatch(EngineCommand::SetVolume(loaded_volume));

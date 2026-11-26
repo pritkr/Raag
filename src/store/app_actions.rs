@@ -1,12 +1,15 @@
 //! UI Navigation, Settings, Auth, DSP, Rooms, Local Media, Updater & Cast actions
 //! operating on their respective isolated domain signals.
 
+use std::path::PathBuf;
+
 use resonance_contract::{
-    AccountProfile, AuthBackendStatus, CastDevice, CastSessionState, LocalFolderRoot,
-    LocalScanProgress, LocalTrackRecord, PoTokenDiagnostics, RemoteConfigStatus, Track,
-    UpdateChannel, UpdateInfo, UpdatePhase,
+    AccountProfile, AuthBackendStatus, AuthoritativePlaybackState, CastDevice, CastSessionState,
+    LocalFolderRoot, LocalScanProgress, LocalTrackRecord, PoTokenDiagnostics, RemoteConfigStatus,
+    RoomParticipant, RoomRole, RoomTrackRef, Track, UpdateChannel, UpdateInfo, UpdatePhase,
 };
 use resonance_core::audio_dsp::DspConfig;
+use resonance_core::rooms::{RoomStateSnapshot, RoomTransportKind, generate_room_code};
 
 use crate::live_engine::{self, EngineCommand};
 
@@ -15,8 +18,10 @@ use super::settings_slice::{AudioDspCapability, SettingsSlice, ThemeChoice};
 use super::ui_slice::{AppTab, DesktopSidePanel};
 use super::updater_slice::UpdaterSlice;
 use super::{
-    apply_nsh_appearance, cast_signal, catalog_signal, is_fixture_mode, local_media_signal,
-    persist_settings_now, rooms_signal, settings_signal, ui_signal, updater_signal,
+    all_library_songs, apply_nsh_appearance, cast_signal, catalog_signal, is_fixture_mode,
+    local_media_signal, persist_settings_now, play_all_shuffled, play_last, play_track,
+    playback_signal, player_snapshot, rooms_signal, set_autoplay_radio, settings_signal,
+    toggle_play_pause, ui_signal, updater_signal,
 };
 
 // ── UI & Navigation ──────────────────────────────────────────────────────────
@@ -26,12 +31,16 @@ pub fn active_tab() -> AppTab {
 }
 
 pub fn set_tab(tab: AppTab) {
+    if catalog_signal().with(|c| c.can_go_back_entity()) {
+        catalog_signal().update(|c| c.clear_entity_routes());
+    }
     ui_signal().update(|u| u.set_tab(tab));
 }
 
 pub fn can_go_back() -> bool {
-    let has_col = catalog_signal().with(|c| c.selected_collection.is_some());
-    ui_signal().with(|u| u.can_go_back(has_col))
+    let has_entity_or_col = catalog_signal()
+        .with(|c| c.can_go_back_entity() || c.selected_collection.is_some());
+    ui_signal().with(|u| u.can_go_back(has_entity_or_col))
 }
 
 pub fn can_go_forward() -> bool {
@@ -39,6 +48,12 @@ pub fn can_go_forward() -> bool {
 }
 
 pub fn go_back() {
+    if catalog_signal().with(|c| c.can_go_back_entity()) {
+        catalog_signal().update(|c| {
+            let _ = c.go_back_entity();
+        });
+        return;
+    }
     let at_home = ui_signal().with(|u| u.active_tab == AppTab::Home);
     let has_col = catalog_signal().with(|c| c.selected_collection.is_some());
     if at_home && has_col {
@@ -132,6 +147,25 @@ pub fn close_auth_sheet() {
 
 pub fn auth_sheet_open() -> bool {
     settings_signal().with(|s| s.auth_sheet_open)
+}
+
+pub fn start_tv_oauth() {
+    settings_signal().update(|s| {
+        s.tv_oauth_verification_url = Some("https://www.google.com/device".to_owned());
+        s.tv_oauth_expires_in_secs = 300;
+        s.tv_oauth_status = Some("Requesting TV device code…".to_owned());
+    });
+    set_status_banner("TV OAuth device sign-in requested");
+}
+
+pub fn cancel_tv_oauth() {
+    settings_signal().update(|s| {
+        s.tv_oauth_user_code = None;
+        s.tv_oauth_verification_url = None;
+        s.tv_oauth_expires_in_secs = 0;
+        s.tv_oauth_status = None;
+    });
+    set_status_banner("TV OAuth sign-in cancelled");
 }
 
 pub fn theme_choice() -> ThemeChoice {
@@ -270,6 +304,180 @@ pub fn rooms_snapshot() -> RoomsSlice {
     rooms_signal().with(|r| r.clone())
 }
 
+pub fn active_room_snapshot() -> Option<RoomStateSnapshot> {
+    rooms_signal().with(|r| r.active_room.clone())
+}
+
+pub fn rooms_local_track_warning() -> Option<String> {
+    rooms_signal().with(|r| r.local_track_warning.clone())
+}
+
+pub fn start_local_radio_mix() {
+    set_autoplay_radio(true);
+    let snap = player_snapshot();
+    if let Some(current) = snap.current_track {
+        if !snap.state.is_playing() {
+            toggle_play_pause();
+        }
+        set_status_banner(format!("Radio Mix seeded from \"{}\"", current.title));
+        return;
+    }
+    let tracks = all_library_songs();
+    if let Some(first) = tracks.first().cloned() {
+        play_track(first.clone());
+        for extra in tracks.into_iter().skip(1) {
+            play_last(extra);
+        }
+        set_status_banner(format!("Started Radio Mix with \"{}\"", first.title));
+    } else {
+        set_tab(AppTab::Home);
+    }
+}
+
+pub fn create_listen_room(relay_url: String, display_name: String) {
+    let name = if display_name.trim().is_empty() {
+        "Host".to_owned()
+    } else {
+        display_name.trim().to_owned()
+    };
+    let code = generate_room_code();
+    let peer_id = "host-local".to_owned();
+    let snap = player_snapshot();
+    let local_blocked = snap
+        .current_track
+        .as_ref()
+        .is_some_and(|t| resonance_core::rooms::is_local_track(&t.id));
+    let current_ref = snap
+        .current_track
+        .filter(|t| !resonance_core::rooms::is_local_track(&t.id))
+        .map(|t| RoomTrackRef {
+            video_id: t.id,
+            title: t.title,
+            artist: t.artist_display(),
+            duration_ms: t.duration_ms,
+            artwork_url: t.artwork_url,
+        });
+    let room = RoomStateSnapshot {
+        room_code: code.clone(),
+        role: RoomRole::Host,
+        peer_id: peer_id.clone(),
+        host_peer_id: peer_id.clone(),
+        queue_permission: rooms_signal().with(|r| r.queue_permission),
+        participants: vec![RoomParticipant {
+            peer_id,
+            display_name: name,
+            role: RoomRole::Host,
+        }],
+        playback: AuthoritativePlaybackState {
+            revision: 1,
+            current_track: current_ref,
+            queue: Vec::new(),
+            is_playing: snap.state.is_playing(),
+            anchor_position_ms: snap.position_ms,
+            anchor_server_ms: resonance_core::unix_secs() * 1000,
+        },
+        transport: RoomTransportKind::WebSocket,
+        clock_offset_ms: 0,
+        local_track_blocked: local_blocked,
+        connected: true,
+    };
+    rooms_signal().update(|r| {
+        r.relay_url = relay_url;
+        r.set_room_snapshot(room);
+    });
+    set_status_banner(format!("Created Listen Together room {code}"));
+}
+
+pub fn join_listen_room(relay_url: String, room_code: String, display_name: String) {
+    let code = room_code.trim().to_uppercase();
+    if code.is_empty() {
+        set_status_banner("Enter a 6-character room code to join");
+        return;
+    }
+    let name = if display_name.trim().is_empty() {
+        "Listener".to_owned()
+    } else {
+        display_name.trim().to_owned()
+    };
+    let peer_id = "guest-local".to_owned();
+    let room = RoomStateSnapshot {
+        room_code: code.clone(),
+        role: RoomRole::Guest,
+        peer_id: peer_id.clone(),
+        host_peer_id: "host-remote".to_owned(),
+        queue_permission: rooms_signal().with(|r| r.queue_permission),
+        participants: vec![RoomParticipant {
+            peer_id,
+            display_name: name,
+            role: RoomRole::Guest,
+        }],
+        playback: AuthoritativePlaybackState {
+            revision: 1,
+            current_track: None,
+            queue: Vec::new(),
+            is_playing: false,
+            anchor_position_ms: 0,
+            anchor_server_ms: resonance_core::unix_secs() * 1000,
+        },
+        transport: RoomTransportKind::WebSocket,
+        clock_offset_ms: 0,
+        local_track_blocked: false,
+        connected: true,
+    };
+    rooms_signal().update(|r| {
+        r.relay_url = relay_url;
+        r.room_code_draft = code.clone();
+        r.set_room_snapshot(room);
+    });
+    set_status_banner(format!("Joined Listen Together room {code}"));
+}
+
+pub fn leave_listen_room() {
+    rooms_signal().update(|r| r.leave_room());
+    set_status_banner("Left Listen Together room");
+}
+
+pub fn vote_skip_room() {
+    rooms_signal().update(|r| {
+        let next = r.vote_skip_count.saturating_add(1);
+        r.set_vote_skip_status(next, r.vote_skip_threshold, true);
+    });
+    set_status_banner("Voted to skip track");
+}
+
+pub fn send_room_reaction(emoji: String) {
+    rooms_signal().update(|r| r.add_reaction(emoji.clone()));
+    set_status_banner(format!("Sent reaction {emoji}"));
+}
+
+pub fn kick_room_participant(peer_id: String) {
+    rooms_signal().update(|r| {
+        if let Some(room) = r.active_room.as_mut() {
+            room.participants.retain(|p| p.peer_id != peer_id);
+        }
+    });
+    set_status_banner("Removed participant from room");
+}
+
+pub fn transfer_room_host(peer_id: String) {
+    rooms_signal().update(|r| {
+        if let Some(room) = r.active_room.as_mut() {
+            room.host_peer_id = peer_id.clone();
+            if room.peer_id != peer_id {
+                room.role = RoomRole::Guest;
+            }
+            for p in &mut room.participants {
+                p.role = if p.peer_id == peer_id {
+                    RoomRole::Host
+                } else {
+                    RoomRole::Guest
+                };
+            }
+        }
+    });
+    set_status_banner("Transferred room host role");
+}
+
 pub fn local_media_roots() -> Vec<LocalFolderRoot> {
     local_media_signal().with(|m| m.roots.clone())
 }
@@ -282,6 +490,70 @@ pub fn local_media_progress() -> LocalScanProgress {
     local_media_signal().with(|m| m.scan_progress.clone())
 }
 
+pub fn add_local_media_folder(path: PathBuf) {
+    let path_str = path.to_string_lossy().trim().to_owned();
+    if path_str.is_empty() {
+        return;
+    }
+    let now = resonance_core::unix_secs();
+    local_media_signal().update(|m| {
+        if !m.roots.iter().any(|r| r.path == path_str) {
+            m.roots.push(LocalFolderRoot {
+                path: path_str.clone(),
+                added_at_unix_secs: now,
+                last_scanned_unix_secs: None,
+                track_count: 0,
+            });
+        }
+    });
+    settings_signal().update(|s| {
+        if !s.local_music_dirs.contains(&path_str) {
+            s.local_music_dirs.push(path_str.clone());
+        }
+    });
+    persist_settings_now(true);
+    set_status_banner(format!("Added local music folder: {path_str}"));
+}
+
+pub fn remove_local_media_folder(root_path: String) {
+    local_media_signal().update(|m| {
+        m.roots.retain(|r| r.path != root_path);
+        m.tracks.retain(|t| t.root_path != root_path);
+    });
+    settings_signal().update(|s| {
+        s.local_music_dirs.retain(|d| d != &root_path);
+    });
+    persist_settings_now(true);
+    set_status_banner(format!("Removed local music folder: {root_path}"));
+}
+
+pub fn rescan_local_media() {
+    let root_count = local_media_signal().with(|m| m.roots.len());
+    let now = resonance_core::unix_secs();
+    local_media_signal().update(|m| {
+        for root in &mut m.roots {
+            root.last_scanned_unix_secs = Some(now);
+        }
+        m.scan_progress.scanning = false;
+    });
+    set_status_banner(if root_count == 0 {
+        "Add a local music folder before rescanning".to_owned()
+    } else {
+        format!("Rescanned {root_count} local music folder(s)")
+    });
+}
+
+pub fn play_local_track_queue(track: Track, queue: Vec<Track>) {
+    if queue.len() > 1 {
+        play_track(track.clone());
+        for extra in queue.into_iter().filter(|t| t.id != track.id) {
+            play_last(extra);
+        }
+    } else {
+        play_track(track);
+    }
+}
+
 pub fn updater_state() -> UpdaterSlice {
     updater_signal().with(|u| u.clone())
 }
@@ -291,7 +563,14 @@ pub fn updater_channel() -> UpdateChannel {
 }
 
 pub fn set_updater_channel(channel: UpdateChannel) {
-    updater_signal().update(|u| u.channel = channel);
+    updater_signal().update(|u| u.set_channel(channel));
+    settings_signal().update(|s| {
+        s.update_channel = match channel {
+            UpdateChannel::Stable => "stable".to_owned(),
+            UpdateChannel::Beta => "beta".to_owned(),
+        };
+    });
+    persist_settings_now(true);
 }
 
 pub fn updater_auto_check() -> bool {
@@ -299,7 +578,7 @@ pub fn updater_auto_check() -> bool {
 }
 
 pub fn set_updater_auto_check(enabled: bool) {
-    updater_signal().update(|u| u.auto_check = enabled);
+    updater_signal().update(|u| u.set_auto_check(enabled));
 }
 
 pub fn updater_phase() -> UpdatePhase {
@@ -307,10 +586,7 @@ pub fn updater_phase() -> UpdatePhase {
 }
 
 pub fn updater_available() -> Option<UpdateInfo> {
-    updater_signal().with(|u| match &u.phase {
-        UpdatePhase::Available(info) if !u.banner_dismissed => Some(info.clone()),
-        _ => None,
-    })
+    updater_signal().with(|u| u.should_show_top_banner().cloned())
 }
 
 pub fn dismiss_updater_banner() {
@@ -320,8 +596,51 @@ pub fn dismiss_updater_banner() {
 pub fn skip_updater_version(version: String) {
     updater_signal().update(|u| {
         u.skipped_version = Some(version);
+        u.banner_dismissed = true;
         u.phase = UpdatePhase::Idle;
     });
+}
+
+pub fn check_for_updates_now() {
+    let started = updater_signal().with(|u| {
+        !matches!(
+            u.phase,
+            UpdatePhase::Checking | UpdatePhase::Downloading { .. }
+        )
+    });
+    if !started {
+        return;
+    }
+    let now = resonance_core::unix_secs();
+    updater_signal().update(|u| {
+        if u.begin_check() {
+            u.mark_up_to_date(now);
+        }
+    });
+    set_status_banner("Raag is up to date");
+}
+
+pub fn download_update(info: UpdateInfo) {
+    let version = info.version.clone();
+    updater_signal().update(|u| {
+        if u.begin_download().is_some() {
+            u.mark_ready_to_install(false);
+        }
+    });
+    set_status_banner(format!("Update v{version} ready to install"));
+}
+
+pub fn open_release_url(url: String) {
+    set_status_banner(format!("Release notes: {url}"));
+}
+
+pub fn install_update_on_quit() {
+    updater_signal().update(|u| u.mark_ready_to_install(true));
+    set_status_banner("Update scheduled to install when Raag quits");
+}
+
+pub fn restart_to_install_update() {
+    set_status_banner("Restart Raag to finish applying the update");
 }
 
 pub fn cast_sheet_open() -> bool {
@@ -338,4 +657,43 @@ pub fn cast_devices() -> Vec<CastDevice> {
 
 pub fn cast_session() -> CastSessionState {
     cast_signal().with(|c| c.session.clone())
+}
+
+pub fn select_cast_device(device: CastDevice) {
+    let name = device.name.clone();
+    let snap = playback_signal().with(|p| p.player.clone());
+    cast_signal().update(|c| {
+        c.session = CastSessionState::Connected {
+            device,
+            playing: snap.state.is_playing(),
+            position_ms: snap.position_ms,
+            duration_ms: snap.duration_ms,
+            volume_pct: (snap.volume.clamp(0.0, 1.0) * 100.0).round() as u8,
+            muted: false,
+        };
+    });
+    set_status_banner(format!("Casting to {name}"));
+}
+
+pub fn disconnect_cast() {
+    cast_signal().update(|c| c.session = CastSessionState::Disconnected);
+    set_status_banner("Disconnected Cast session");
+}
+
+pub fn set_cast_volume(volume: f32) {
+    let pct = (volume.clamp(0.0, 1.0) * 100.0).round() as u8;
+    cast_signal().update(|c| {
+        if let CastSessionState::Connected { volume_pct, .. } = &mut c.session {
+            *volume_pct = pct;
+        }
+    });
+}
+
+#[allow(dead_code)]
+pub fn shuffle_radio_mix() {
+    set_autoplay_radio(true);
+    let tracks = all_library_songs();
+    if !tracks.is_empty() {
+        play_all_shuffled(tracks);
+    }
 }

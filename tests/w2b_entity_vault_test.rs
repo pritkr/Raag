@@ -14,10 +14,10 @@ use resonance_contract::{
     AlbumDetail, ArtistDetail, ArtistRef, DownloadStatus, LibraryCollectionRef, OfflineStore, Track,
 };
 use resonance_core::cache::SqliteCacheStore;
-use resonance_core::downloads::CollectionOfflineProgress;
-use resonance_core::downloads::quota::{QuotaAdmission, VaultQuotaGuard};
-use resonance_core::downloads::vault::{OfflineVault, PinnedCollectionKind};
-use resonance_core::offline::DownloadManager;
+use resonance_core::offline::quota::{QuotaAdmission, VaultQuotaGuard};
+use resonance_core::offline::{
+    CollectionOfflineProgress, DownloadManager, OfflineVault, PinnedCollectionKind,
+};
 use tempfile::TempDir;
 
 fn sample_track(id: &str, title: &str) -> Track {
@@ -110,8 +110,8 @@ async fn ref_counted_unpin_retains_shared_tracks_and_deletes_orphans() {
 
     let report = vault.unpin_collection_with_cleanup("ALB_A").await.unwrap();
     assert_eq!(report.unpinned_id, "ALB_A");
-    assert_eq!(report.deleted_tracks, 2);
-    assert_eq!(report.retained_shared_tracks, 1);
+    assert_eq!(report.deleted_orphans, 2);
+    assert_eq!(report.preserved_shared, 1);
 
     assert!(db.get_download("t1").unwrap().is_none());
     assert!(db.get_download("t3").unwrap().is_none());

@@ -258,15 +258,53 @@ pub fn format_duration_ms(ms: u64) -> String {
     format!("{mins}:{secs:02}")
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DownloadStatus {
     Queued,
     Downloading,
     Paused,
+    /// Download finished on disk; SHA-256 integrity verification and metadata tagging in progress.
     Tagging,
+    /// Atomically committed and immediately playable offline with zero network I/O.
     Completed,
     Failed,
     Cancelled,
+}
+
+impl DownloadStatus {
+    /// Strict transition rules enforcing `Queued -> Downloading -> Tagging -> Completed`.
+    pub fn can_transition_to(self, next: Self) -> bool {
+        if self == next {
+            return true;
+        }
+        matches!(
+            (self, next),
+            (
+                Self::Queued,
+                Self::Downloading | Self::Paused | Self::Cancelled | Self::Failed
+            ) | (
+                Self::Downloading,
+                Self::Tagging | Self::Paused | Self::Failed | Self::Cancelled
+            ) | (
+                Self::Paused,
+                Self::Queued | Self::Downloading | Self::Cancelled
+            ) | (Self::Tagging, Self::Completed | Self::Failed)
+                | (Self::Failed, Self::Queued | Self::Cancelled)
+                | (Self::Cancelled, Self::Queued)
+        )
+    }
+
+    pub fn transition(self, next: Self) -> Result<Self, String> {
+        if self.can_transition_to(next) {
+            Ok(next)
+        } else {
+            Err(format!("invalid download transition: {self:?} -> {next:?}"))
+        }
+    }
+
+    pub fn is_available(self) -> bool {
+        self == Self::Completed
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -40,7 +40,7 @@ impl EjsMemoCache {
             return Some(hit);
         }
         if let Some(db) = &self.sqlite
-            && let Ok(Some(hit)) = db.get_ejs_memo(player_hash, raw_n)
+            && let Ok(Some(hit)) = db.transient().get_ejs_memo(player_hash, raw_n)
         {
             self.mem.lock().unwrap().insert(key, hit.clone());
             return Some(hit);
@@ -61,14 +61,16 @@ impl EjsMemoCache {
             solved_n.to_owned(),
         );
         if let Some(db) = &self.sqlite {
-            let _ = db.put_ejs_memo(player_hash, raw_n, solved_n, ast_meta_json, unix_secs());
+            let _ = db
+                .transient()
+                .put_ejs_memo(player_hash, raw_n, solved_n, ast_meta_json, unix_secs());
         }
     }
 
     pub fn clear(&self) {
         self.mem.lock().unwrap().clear();
         if let Some(db) = &self.sqlite {
-            let _ = db.clear_ejs_memo();
+            let _ = db.transient().clear_ejs_memo();
         }
     }
 }

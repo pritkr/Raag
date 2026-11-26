@@ -4,20 +4,22 @@
 //! 3. Single Stale-While-Revalidate (SWR) metadata cache layer (disables inner client catalog SWR)
 //! 4. Account, PO-Token, and `InnerTubeMutations` delegation
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use resonance_contract::{
-    AlbumDetail, ArtistDetail, AuthSession, CacheStore, CatalogExtProvider, CoreError, CoreResult,
-    ExplorePage, HomeSection, InnerTubeMutations, LibraryCollectionRef, LibrarySnapshot,
-    LikeAction, LyricsDocument, MusicProvider, MutationError, MutationReceipt, Playlist,
-    PlaylistEditOp, PoTokenDiagnostics, PoTokenHealthStatus, PoTokenProvider, ProviderError,
-    SearchCategory, SearchResults, StreamInfo, Track, WatchtimeReport,
+    AccountProfile, AlbumDetail, ArtistDetail, AuthSession, CacheStore, CatalogExtProvider,
+    CoreError, CoreResult, ExplorePage, HomeSection, InnerTubeMutations,
+    LIBRARY_SNAPSHOT_METADATA_KEY, LibraryCollectionRef, LibrarySnapshot, LikeAction,
+    LyricsDocument, MusicProvider, MutationError, MutationReceipt, Playlist, PlaylistEditOp,
+    PoTokenDiagnostics, PoTokenHealthStatus, PoTokenProvider, ProviderError, SearchCategory,
+    SearchResults, StreamInfo, Track, WatchtimeReport,
 };
 use serde::{Deserialize, Serialize};
 
+use crate::innertube::account_probe::AccountProfileProbe;
 use crate::innertube::client::InnerTubeClient;
 use crate::innertube::matrix::ClientMatrix;
 use crate::innertube::provider_adapter::{BrowseDelegate, PlaybackResolver};
@@ -93,9 +95,6 @@ pub struct HybridMusicProvider {
 
 impl HybridMusicProvider {
     pub fn new(inner: Arc<InnerTubeClient>, cache: Arc<dyn CacheStore>) -> Self {
-        // HybridMusicProvider owns the single catalog SWR layer; prevent double caching in InnerTubeClient.
-        inner.set_swr_cache_enabled(false);
-
         #[cfg(feature = "provider-ytmapi")]
         let ytmapi = Some(Arc::new(YtmapiBrowseAdapter::new(Arc::clone(&cache))));
 
@@ -179,7 +178,6 @@ impl HybridMusicProvider {
         primary_playback: Option<Arc<dyn PlaybackResolver>>,
         secondary_playback: Option<Arc<dyn PlaybackResolver>>,
     ) -> Self {
-        inner.set_swr_cache_enabled(false);
         Self {
             inner: Some(inner),
             cache: Some(cache),
@@ -195,9 +193,31 @@ impl HybridMusicProvider {
         }
     }
 
-    /// Returns the underlying `InnerTubeClient` when concrete protocol access is required.
-    pub fn inner_client(&self) -> Option<&Arc<InnerTubeClient>> {
-        self.inner.as_ref()
+    /// Probes `account/account_menu` via the underlying `InnerTubeClient`, updating the
+    /// persisted `AuthSession` and Premium status in place.
+    pub async fn probe_account_profile(&self) -> CoreResult<Option<AccountProfile>> {
+        let Some(inner) = &self.inner else {
+            return Ok(None);
+        };
+        AccountProfileProbe::probe_and_update(inner.as_ref())
+            .await
+            .map(Some)
+    }
+
+    /// Fetches a fresh [`LibrarySnapshot`] (using `CatalogExtProvider::fetch_library_snapshot`
+    /// with local listening history merged) and persists it in SQLite metadata.
+    pub async fn refresh_and_cache_library_snapshot(&self) -> LibrarySnapshot {
+        let mut snap = match self.fetch_library_snapshot().await {
+            Ok(s) => s,
+            Err(_) => LibrarySnapshot {
+                fetched_at_unix_secs: unix_secs(),
+                ..Default::default()
+            },
+        };
+        if let Some(cache) = &self.cache {
+            merge_local_history_and_cache(&mut snap, cache.as_ref());
+        }
+        snap
     }
 
     pub fn current_session(&self) -> Option<AuthSession> {
@@ -639,15 +659,12 @@ impl CatalogExtProvider for HybridMusicProvider {
 
     async fn fetch_library_snapshot(&self) -> CoreResult<LibrarySnapshot> {
         #[cfg(feature = "provider-ytmapi")]
-        if let Some(ytmapi) = &self.ytmapi {
-            return ytmapi.fetch_library_snapshot().await;
+        if let Some(ytmapi) = &self.ytmapi
+            && let Ok(snap) = ytmapi.fetch_library_snapshot().await
+        {
+            return Ok(snap);
         }
-        let liked = self.liked_songs().await.unwrap_or_default();
-        Ok(LibrarySnapshot {
-            liked_songs: liked,
-            fetched_at_unix_secs: unix_secs(),
-            ..Default::default()
-        })
+        Ok(fetch_basic_library_snapshot(self).await)
     }
 
     async fn fetch_artist(&self, channel_id: &str) -> CoreResult<ArtistDetail> {
@@ -743,4 +760,76 @@ impl InnerTubeMutations for HybridMusicProvider {
             .ok_or_else(|| MutationError::InvalidInput("no InnerTubeClient configured".into()))?;
         inner.edit_playlist(playlist_id, op).await
     }
+}
+
+async fn fetch_basic_library_snapshot(provider: &dyn MusicProvider) -> LibrarySnapshot {
+    let (liked_res, playlists_res) = tokio::join!(
+        provider.liked_songs(),
+        provider.browse_collection("FEmusic_liked_playlists"),
+    );
+
+    let liked_songs = liked_res.unwrap_or_default();
+    let playlists = match playlists_res {
+        Ok(pl) => pl
+            .tracks
+            .into_iter()
+            .map(|t| {
+                let subtitle = t.artist_display();
+                LibraryCollectionRef {
+                    browse_id: t.id.clone(),
+                    playlist_id: Some(t.id),
+                    title: t.title,
+                    subtitle,
+                    artwork_url: t.artwork_url,
+                    track_count: None,
+                }
+            })
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+
+    LibrarySnapshot {
+        liked_songs,
+        playlists,
+        albums: Vec::new(),
+        artists: Vec::new(),
+        history: Vec::new(),
+        podcasts: Vec::new(),
+        uploads: Vec::new(),
+        fetched_at_unix_secs: unix_secs(),
+    }
+}
+
+fn merge_local_history_and_cache(snap: &mut LibrarySnapshot, cache: &dyn CacheStore) {
+    let now = unix_secs();
+    if snap.fetched_at_unix_secs == 0 {
+        snap.fetched_at_unix_secs = now;
+    }
+    let mut seen: HashSet<(String, u64)> = snap
+        .history
+        .iter()
+        .map(|t| (t.id.clone(), snap.fetched_at_unix_secs / 60))
+        .collect();
+    if let Ok(local_history) = cache.load_history(200) {
+        for entry in local_history {
+            let bucket = entry.played_at_unix_secs / 60;
+            if seen.insert((entry.track.id.clone(), bucket)) {
+                snap.history.push(entry.track);
+            }
+        }
+    }
+    if let Ok(json) = serde_json::to_string(snap) {
+        let _ = cache.put_metadata(LIBRARY_SNAPSHOT_METADATA_KEY, &json, 300, now);
+    }
+}
+
+/// Refreshes a [`LibrarySnapshot`] from any [`MusicProvider`], merges local listening history,
+/// and caches it under `LIBRARY_SNAPSHOT_METADATA_KEY`.
+pub async fn refresh_library_snapshot(
+    provider: &dyn MusicProvider,
+    cache: &dyn CacheStore,
+) -> LibrarySnapshot {
+    let mut snap = fetch_basic_library_snapshot(provider).await;
+    merge_local_history_and_cache(&mut snap, cache);
+    snap
 }

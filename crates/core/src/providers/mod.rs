@@ -12,7 +12,7 @@ pub mod rustypipe_adapter;
 pub mod ytmapi_adapter;
 
 pub use atr_reporter::{AtrReporter, AtrTracker, generate_cpn};
-pub use hybrid::HybridMusicProvider;
+pub use hybrid::{HybridMusicProvider, refresh_library_snapshot};
 
 #[cfg(feature = "provider-rustypipe")]
 pub use rustypipe_adapter::{

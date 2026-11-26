@@ -199,7 +199,7 @@ fn settings_v1_persists_across_restart_and_survives_clear_all_caches() {
         sponsorblock_categories: vec!["sponsor".into()],
         loudness_normalization: false,
         silence_skip_enabled: true,
-        eq_preset: PersistedEqPreset::VocalBoost,
+        eq_preset: PersistedEqPreset::Vocal,
         eq_gains_db: [2.5; 10],
         crossfade_ms: 4000,
         playback_speed: 1.25,

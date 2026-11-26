@@ -12,47 +12,7 @@ const DEFAULT_Q: f32 = 1.414_213_5; // 1-octave peaking Q
 const MIN_BAND_DB: f32 = -12.0;
 const MAX_BAND_DB: f32 = 12.0;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum EqPreset {
-    #[default]
-    Flat,
-    BassBoost,
-    Vocal,
-    Acoustic,
-    LateNight,
-}
-
-impl EqPreset {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Flat => "Flat",
-            Self::BassBoost => "Bass Boost",
-            Self::Vocal => "Vocal",
-            Self::Acoustic => "Acoustic",
-            Self::LateNight => "Late Night",
-        }
-    }
-
-    pub fn next(self) -> Self {
-        match self {
-            Self::Flat => Self::BassBoost,
-            Self::BassBoost => Self::Vocal,
-            Self::Vocal => Self::Acoustic,
-            Self::Acoustic => Self::LateNight,
-            Self::LateNight => Self::Flat,
-        }
-    }
-
-    pub fn gains_db(self) -> [f32; 10] {
-        match self {
-            Self::Flat => [0.0; 10],
-            Self::BassBoost => [4.5, 4.0, 3.0, 1.5, 0.0, 0.0, 0.5, 1.0, 1.0, 0.5],
-            Self::Vocal => [-1.5, -1.0, 0.0, 1.5, 3.0, 3.5, 2.5, 1.0, 0.0, -0.5],
-            Self::Acoustic => [1.5, 1.0, 0.5, 0.0, 1.0, 1.5, 2.0, 2.5, 2.0, 1.0],
-            Self::LateNight => [2.0, 1.5, 0.5, 0.0, -0.5, 0.5, 1.0, -1.0, -2.5, -3.5],
-        }
-    }
-}
+pub use resonance_contract::EqPreset;
 
 #[derive(Debug, Clone, Copy)]
 struct BiquadCoeffs {

@@ -1,16 +1,27 @@
-//! Persistent Offline Downloads:
+//! Unified Offline Vault & Persistent Downloads:
 //! - Path & ID validation (`validate_video_id`, `resolve_confined_path`, `redact_url`)
 //! - Atomic `.part` resumable download worker (`DownloadManager`)
 //! - `lofty` metadata, cover art, and synced LRC lyrics tagger (`embed_metadata`)
+//! - First-class [`OfflineVault`] & [`QuotaEvaluator`] separating durable offline media from LRU cache
 
+pub mod quota;
 pub mod tagger;
+pub mod vault;
 pub mod worker;
 
 use std::path::{Component, Path, PathBuf};
 
 use resonance_contract::{AudioCodec, CoreError, CoreResult, OfflineStorageError};
 
+pub use quota::{
+    CollectionOfflineProgress, DEFAULT_ESTIMATED_OPUS_BYTES, DEFAULT_ESTIMATED_PREMIUM_BYTES,
+    EXPLICIT_SINGLES_COLLECTION_ID, LIKED_SONGS_COLLECTION_ID, QUOTA_PRESETS_BYTES, QuotaAdmission,
+    QuotaEvaluator, UnpinCleanupReport, VaultQuotaGuard, compute_collection_progress,
+};
 pub use tagger::embed_metadata;
+pub use vault::{
+    OfflineVault, PinnedCollection, PinnedCollectionKind, VaultAuditReport, VaultSummary,
+};
 pub use worker::DownloadManager;
 
 pub const DEFAULT_MAX_OFFLINE_BYTES: u64 = 5 * 1024 * 1024 * 1024; // 5 GB

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use nsh_base::{button, theme};
 use nsh_core::prelude::*;
 use resonance_contract::{AlbumDetail, Track, format_duration_ms};
-use resonance_core::downloads::CollectionOfflineProgress;
+use resonance_core::offline::CollectionOfflineProgress;
 use resonance_core::palette::palette_for_track;
 
 use crate::ui::controls::{

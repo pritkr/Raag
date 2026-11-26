@@ -157,19 +157,14 @@ impl PoTokenProvider for ChainedPoTokenProvider {
 mod tests {
     use super::*;
     use crate::potoken::NoopPoTokenProvider;
-    use crate::potoken::attestation::{
-        PlatformAttestationPoTokenProvider, QuickJsVmAttestationBridge,
-    };
+    use crate::potoken::attestation::QuickJsVmAttestationBridge;
 
     #[tokio::test]
     async fn falls_back_from_failing_primary_to_attestation_and_tracks_degraded_state() {
         let vm = Arc::new(QuickJsVmAttestationBridge::new(
             "function mintPoToken(b, s) { return 'ok_' + s + '_' + b; }",
         ));
-        let chain = ChainedPoTokenProvider::new(vec![
-            Arc::new(NoopPoTokenProvider),
-            Arc::new(PlatformAttestationPoTokenProvider::new(vm)),
-        ]);
+        let chain = ChainedPoTokenProvider::new(vec![Arc::new(NoopPoTokenProvider), vm]);
 
         let req = PoTokenRequest::new(
             "WEB_REMIX",

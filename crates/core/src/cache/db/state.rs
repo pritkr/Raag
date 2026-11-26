@@ -1,11 +1,16 @@
-//! Persistent playback state repository: saved queue + listening history.
+//! Persistent app state repository: saved queue, listening history, settings, and library snapshots.
 
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
-use resonance_contract::{CacheError, CoreError, CoreResult, HistoryEntry, QueueState, Track};
+use resonance_contract::{
+    CacheError, CacheStore, CoreError, CoreResult, HistoryEntry, LIBRARY_SNAPSHOT_METADATA_KEY,
+    LibrarySnapshot, QueueState, SETTINGS_METADATA_KEY, SETTINGS_TTL_SECS, SettingsV1, Track,
+};
 use rusqlite::{Connection, params};
 
 use super::transient::TransientCacheRepo;
+use crate::unix_secs;
 
 #[derive(Clone)]
 pub struct AppStateRepo {
@@ -74,4 +79,57 @@ impl AppStateRepo {
         }
         Ok(out)
     }
+}
+
+/// Loads persisted user settings from SQLite metadata, self-healing to defaults if corrupt.
+pub fn load_persisted_settings(cache: &dyn CacheStore) -> SettingsV1 {
+    let now = unix_secs();
+    match cache.get_metadata(SETTINGS_METADATA_KEY, now) {
+        Ok(Some((json, _))) => match serde_json::from_str::<SettingsV1>(&json) {
+            Ok(mut s) => {
+                s.volume = s.volume.clamp(0.0, 1.6);
+                s
+            }
+            Err(e) => {
+                log::warn!("corrupt persisted settings: {e}; falling back to defaults");
+                SettingsV1::default()
+            }
+        },
+        _ => SettingsV1::default(),
+    }
+}
+
+/// Persists user settings into SQLite metadata.
+pub fn save_persisted_settings(cache: &dyn CacheStore, settings: &SettingsV1) {
+    if let Ok(json) = serde_json::to_string(settings) {
+        let now = unix_secs();
+        if let Err(e) = cache.put_metadata(SETTINGS_METADATA_KEY, &json, SETTINGS_TTL_SECS, now) {
+            log::warn!("failed to persist settings: {e}");
+        }
+    }
+}
+
+/// Loads the last cached account library snapshot merged with local listening history.
+pub fn load_cached_library_snapshot(cache: &dyn CacheStore) -> Option<LibrarySnapshot> {
+    let now = unix_secs();
+    let mut snap = cache
+        .get_metadata(LIBRARY_SNAPSHOT_METADATA_KEY, now)
+        .ok()
+        .flatten()
+        .and_then(|(json, _)| serde_json::from_str::<LibrarySnapshot>(&json).ok())?;
+
+    if let Ok(local_history) = cache.load_history(200) {
+        let mut seen: HashSet<(String, u64)> = snap
+            .history
+            .iter()
+            .map(|t| (t.id.clone(), snap.fetched_at_unix_secs / 60))
+            .collect();
+        for entry in local_history {
+            let bucket = entry.played_at_unix_secs / 60;
+            if seen.insert((entry.track.id.clone(), bucket)) {
+                snap.history.push(entry.track);
+            }
+        }
+    }
+    Some(snap)
 }

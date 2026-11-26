@@ -3,7 +3,7 @@
 
 use nsh_base::{alert_dialog, button, theme};
 use nsh_core::prelude::*;
-use resonance_core::downloads::{CollectionOfflineProgress, QUOTA_PRESETS_BYTES};
+use resonance_core::offline::{CollectionOfflineProgress, QUOTA_PRESETS_BYTES};
 
 use crate::ui::controls::primitives::setting_switch;
 use crate::ui::icons::{IconKind, icon};

@@ -24,11 +24,8 @@ use resonance_contract::{
 
 use crate::unix_secs;
 
-pub use attestation::{
-    PlatformAttestationBridge, PlatformAttestationPoTokenProvider, QuickJsVmAttestationBridge,
-};
+pub use attestation::QuickJsVmAttestationBridge;
 pub use bgutil::{BgutilHttpPoTokenProvider, SidecarPoTokenProvider};
-pub type BgutilHttpProvider = BgutilHttpPoTokenProvider;
 pub use cache::CachingPoTokenProvider;
 pub use chain::ChainedPoTokenProvider;
 pub use rustypipe_bg::{RustyPipeBotguardProvider, validate_botguard_binding};
@@ -44,8 +41,8 @@ pub struct PoTokenPipelineConfig {
     pub bgutil_url: Option<String>,
     /// Optional platform hidden WebView runner for zero-setup BotGuard attestation.
     pub webview_runner: Option<Arc<dyn WebViewBotguardRunner>>,
-    /// Optional custom platform attestation bridge (e.g. Android Play Integrity).
-    pub platform_bridge: Option<Arc<dyn PlatformAttestationBridge>>,
+    /// Optional custom platform [`PoTokenProvider`] (e.g. Android Play Integrity).
+    pub custom_provider: Option<Arc<dyn PoTokenProvider>>,
     /// Optional operator-supplied QuickJS-NG attestation script fallback.
     pub quickjs_script: Option<String>,
     /// Optional explicit path to `rustypipe-botguard` binary (`None` disables unless `probe_rustypipe_botguard` is true).
@@ -70,8 +67,8 @@ pub fn build_po_token_pipeline(config: PoTokenPipelineConfig) -> Arc<dyn PoToken
         tiers.push(Arc::new(EmbeddedWebViewAttestationProvider::new(runner)));
     }
 
-    if let Some(bridge) = config.platform_bridge {
-        tiers.push(Arc::new(PlatformAttestationPoTokenProvider::new(bridge)));
+    if let Some(provider) = config.custom_provider {
+        tiers.push(provider);
     }
 
     if let Some(bin_path) = config.rustypipe_botguard_bin {
@@ -83,8 +80,7 @@ pub fn build_po_token_pipeline(config: PoTokenPipelineConfig) -> Arc<dyn PoToken
     }
 
     if let Some(script) = config.quickjs_script {
-        let vm = Arc::new(QuickJsVmAttestationBridge::new(script));
-        tiers.push(Arc::new(PlatformAttestationPoTokenProvider::new(vm)));
+        tiers.push(Arc::new(QuickJsVmAttestationBridge::new(script)));
     }
 
     if tiers.is_empty() {

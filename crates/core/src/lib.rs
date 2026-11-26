@@ -12,7 +12,6 @@ pub mod audio_dsp;
 pub mod auth_flows;
 pub mod cache;
 pub mod casting;
-pub mod downloads;
 pub mod fixture;
 pub mod innertube;
 pub mod local_media;

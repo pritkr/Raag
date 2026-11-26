@@ -16,9 +16,8 @@ use resonance_contract::{
     PersistedTheme, Playlist, PlaylistEditOp, SearchResults, SettingsV1, StreamInfo, Track,
 };
 use resonance_core::cache::{ChunkCache, DEFAULT_MAX_AUDIO_CACHE_BYTES, SqliteCacheStore};
-use resonance_core::downloads::{OfflineVault, PinnedCollectionKind};
 use resonance_core::fixture::fixture_tracks;
-use resonance_core::offline::DownloadManager;
+use resonance_core::offline::{DownloadManager, OfflineVault, PinnedCollectionKind};
 use resonance_core::storage::{migrate_legacy_temp_dir_from, resolve_app_paths};
 use tempfile::TempDir;
 

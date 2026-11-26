@@ -4,8 +4,7 @@
 //! Architectural guarantee:
 //! - Transient `ChunkCache` LRU eviction and `SqliteCacheStore::clear_all_caches()`
 //!   NEVER delete pinned albums/playlists or committed vault media files.
-//! - Resumable range downloads + embedded artwork & synced LRC lyrics are delegated
-//!   to `offline::DownloadManager` and tracked through SQLite `downloads` + `pinned_collections`.
+//! - Uses canonical [`DownloadStatus`] directly (zero duplicate state enums).
 
 use std::sync::Arc;
 
@@ -17,8 +16,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::cache::SqliteCacheStore;
-use crate::downloads::state::VaultTrackState;
-use crate::offline::{DownloadManager, resolve_confined_path};
+use crate::offline::{DEFAULT_MAX_OFFLINE_BYTES, DownloadManager, resolve_confined_path};
 use crate::unix_secs;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,14 +61,6 @@ pub struct VaultSummary {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct UnpinReport {
-    pub unpinned_id: String,
-    pub deleted_tracks: usize,
-    pub retained_shared_tracks: usize,
-    pub reclaimed_bytes: u64,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct VaultAuditReport {
     pub verified_count: usize,
     pub corrupted_video_ids: Vec<String>,
@@ -89,7 +79,7 @@ impl OfflineVault {
         Self {
             db,
             manager,
-            max_vault_bytes: crate::offline::DEFAULT_MAX_OFFLINE_BYTES,
+            max_vault_bytes: DEFAULT_MAX_OFFLINE_BYTES,
         }
     }
 
@@ -110,7 +100,7 @@ impl OfflineVault {
         tracks: &[Track],
     ) -> CoreResult<PinnedCollection> {
         let now = unix_secs();
-        self.db.upsert_pinned_collection(
+        self.db.offline_vault().upsert_pinned_collection(
             id,
             kind.as_str(),
             title,
@@ -137,12 +127,14 @@ impl OfflineVault {
 
     /// Unpins a collection from the offline vault.
     pub fn unpin_collection(&self, collection_id: &str) -> CoreResult<bool> {
-        self.db.delete_pinned_collection(collection_id)
+        self.db
+            .offline_vault()
+            .delete_pinned_collection(collection_id)
     }
 
     /// Lists all pinned albums and playlists stored in the offline vault.
     pub fn list_pinned_collections(&self) -> CoreResult<Vec<PinnedCollection>> {
-        let rows = self.db.list_pinned_collection_rows()?;
+        let rows = self.db.offline_vault().list_pinned_collection_rows()?;
         Ok(rows
             .into_iter()
             .map(
@@ -163,7 +155,7 @@ impl OfflineVault {
 
     /// Returns `true` if `video_id` belongs to at least one pinned album or playlist.
     pub fn is_track_pinned(&self, video_id: &str) -> CoreResult<bool> {
-        self.db.is_track_pinned(video_id)
+        self.db.offline_vault().is_track_pinned(video_id)
     }
 
     /// Runs crash recovery on startup, pausing any interrupted in-flight downloads.
@@ -197,27 +189,27 @@ impl OfflineVault {
         self.manager.delete(video_id).await
     }
 
-    /// Returns the explicit [`VaultTrackState`] (`Queued -> Downloading -> Verified -> Available`)
+    /// Returns the canonical [`DownloadStatus`] (`Queued -> Downloading -> Tagging -> Completed`)
     /// for a track in SQLite.
-    pub fn track_state(&self, video_id: &str) -> CoreResult<Option<VaultTrackState>> {
+    pub fn track_state(&self, video_id: &str) -> CoreResult<Option<DownloadStatus>> {
         let Some(rec) = self.db.get_download(video_id)? else {
             return Ok(None);
         };
-        Ok(Some(VaultTrackState::from_download_status(
-            rec.status,
-            rec.sha256_hex.is_some(),
-        )))
+        if rec.status == DownloadStatus::Completed && rec.sha256_hex.is_none() {
+            return Ok(Some(DownloadStatus::Tagging));
+        }
+        Ok(Some(rec.status))
     }
 
-    /// Verifies a committed vault file's SHA-256 checksum on disk (`Verified -> Available`).
-    pub fn verify_track_on_disk(&self, video_id: &str) -> CoreResult<VaultTrackState> {
+    /// Verifies a committed vault file's SHA-256 checksum on disk (`Tagging -> Completed`).
+    pub fn verify_track_on_disk(&self, video_id: &str) -> CoreResult<DownloadStatus> {
         let Some(rec) = self.db.get_download(video_id)? else {
             return Err(CoreError::OfflineStorage(OfflineStorageError::Io(format!(
                 "track {video_id} not found in offline vault"
             ))));
         };
         let Some(rel_path) = rec.relative_path.as_deref() else {
-            return Ok(VaultTrackState::from_download_status(rec.status, false));
+            return Ok(rec.status);
         };
         let path = resolve_confined_path(&self.db.downloads_root(), rel_path)?;
         let bytes = std::fs::read(&path)
@@ -236,11 +228,11 @@ impl OfflineVault {
             ));
         }
 
-        let verified = VaultTrackState::Downloading
-            .transition(VaultTrackState::Verified)
+        let tagged = DownloadStatus::Downloading
+            .transition(DownloadStatus::Tagging)
             .map_err(|e| CoreError::OfflineStorage(OfflineStorageError::Io(e)))?;
-        verified
-            .transition(VaultTrackState::Available)
+        tagged
+            .transition(DownloadStatus::Completed)
             .map_err(|e| CoreError::OfflineStorage(OfflineStorageError::Io(e)))
     }
 
@@ -263,23 +255,42 @@ impl OfflineVault {
         })
     }
 
-    /// Unpins a collection and deletes only tracks with ref-count == 0 across all remaining
-    /// pinned collections, returning an [`UnpinReport`] with reclaimed bytes.
+    /// Unpins a collection and deletes ONLY tracks with ref-count == 0 across all remaining
+    /// pinned collections (`is_track_pinned(&video_id) == false`), returning reclaimed bytes.
     pub async fn unpin_collection_with_cleanup(
         &self,
         collection_id: &str,
-    ) -> CoreResult<UnpinReport> {
+    ) -> CoreResult<crate::offline::quota::UnpinCleanupReport> {
         let before_bytes = self.stats()?.total_bytes;
-        let report = crate::downloads::quota::QuotaEvaluator::unpin_collection_orphan_safe(
-            self,
-            collection_id,
-        )
-        .await?;
+        let collections = self.list_pinned_collections()?;
+        let target_tracks: Vec<String> = collections
+            .into_iter()
+            .find(|c| c.id == collection_id)
+            .map(|c| c.tracks.into_iter().map(|t| t.id).collect())
+            .unwrap_or_default();
+
+        let unpinned = self.unpin_collection(collection_id)?;
+        let mut deleted_orphans = 0usize;
+        let mut preserved_shared = 0usize;
+
+        for video_id in target_tracks {
+            if self.is_track_pinned(&video_id)? {
+                preserved_shared += 1;
+            } else {
+                match self.delete_track(&video_id).await {
+                    Ok(()) => deleted_orphans += 1,
+                    Err(CoreError::OfflineStorage(OfflineStorageError::NotFound { .. })) => {}
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+
         let after_bytes = self.stats()?.total_bytes;
-        Ok(UnpinReport {
+        Ok(crate::offline::quota::UnpinCleanupReport {
             unpinned_id: collection_id.to_owned(),
-            deleted_tracks: report.deleted_orphans,
-            retained_shared_tracks: report.preserved_shared,
+            unpinned,
+            deleted_orphans,
+            preserved_shared,
             reclaimed_bytes: before_bytes.saturating_sub(after_bytes),
         })
     }
@@ -302,7 +313,7 @@ impl OfflineVault {
                         &rec.video_id,
                         DownloadStatus::Failed,
                         Some("File corrupted — ready to re-download"),
-                        crate::unix_secs(),
+                        unix_secs(),
                     );
                     corrupted_video_ids.push(rec.video_id);
                 }

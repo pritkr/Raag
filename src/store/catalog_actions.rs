@@ -5,15 +5,15 @@ use std::time::Duration;
 
 use nsh_core::prelude::{SharedString, spawn, timer};
 use resonance_contract::{
-    CacheStats, DownloadRecord, ExplorePage, HistoryEntry, HomeSection, LibraryCollectionRef,
-    MoodCategory, Playlist, PlaylistEditOp, Track,
+    AlbumDetail, ArtistDetail, CacheStats, DownloadRecord, ExplorePage, HistoryEntry, HomeSection,
+    LibraryCollectionRef, MoodCategory, Playlist, PlaylistEditOp, Track,
 };
-use resonance_core::downloads::{PinnedCollection, PinnedCollectionKind};
 use resonance_core::fixture::fixture_home_sections;
+use resonance_core::offline::{CollectionOfflineProgress, PinnedCollection, PinnedCollectionKind};
 
 use crate::live_engine::{self, EngineCommand};
 
-use super::catalog_slice::{SearchFilter, SidebarPlaylist};
+use super::catalog_slice::{EntityRoute, SearchFilter, SidebarPlaylist};
 use super::library_slice::LibraryFilter;
 use super::ui_slice::AppTab;
 use super::{
@@ -323,6 +323,51 @@ pub fn toggle_collection_sort() {
     catalog_signal().update(|c| c.collection_sort_asc = !c.collection_sort_asc);
 }
 
+pub fn current_entity_route() -> Option<EntityRoute> {
+    catalog_signal().with(|c| c.current_entity_route().cloned())
+}
+
+pub fn active_artist_detail() -> Option<ArtistDetail> {
+    catalog_signal().with(|c| c.active_artist.clone())
+}
+
+pub fn active_album_detail() -> Option<(AlbumDetail, CollectionOfflineProgress)> {
+    catalog_signal().with(|c| {
+        c.active_album
+            .clone()
+            .map(|album| (album, c.album_offline_progress.clone()))
+    })
+}
+
+pub fn open_artist_entity(channel_id: String) {
+    catalog_signal().update(|c| {
+        c.push_entity_route(EntityRoute::Artist { channel_id });
+    });
+}
+
+pub fn open_album_entity(browse_id: String) {
+    catalog_signal().update(|c| {
+        c.push_entity_route(EntityRoute::Album { browse_id });
+    });
+}
+
+pub fn toggle_subscribe_artist(channel_id: String, subscribe: bool) {
+    catalog_signal().update(|c| {
+        if let Some(artist) = c.active_artist.as_mut()
+            && artist.channel_id == channel_id
+        {
+            artist.is_subscribed = subscribe;
+        }
+    });
+    ui_signal().update(|u| {
+        u.set_status_banner(if subscribe {
+            "Subscribed to artist"
+        } else {
+            "Unsubscribed from artist"
+        });
+    });
+}
+
 // ── Library, Cache & Offline Vault ───────────────────────────────────────────
 
 pub fn library_playlists() -> Vec<LibraryCollectionRef> {
@@ -368,6 +413,23 @@ pub fn set_library_search_query(q: &str) {
 
 pub fn history_entries() -> Vec<HistoryEntry> {
     library_signal().with(|l| l.history.clone())
+}
+
+pub fn all_library_songs() -> Vec<Track> {
+    let queue_items = playback_signal().with(|p| p.player.queue.items.clone());
+    let home = catalog_signal().with(|c| c.home_sections.clone());
+    library_signal().with(|l| {
+        super::library_slice::collect_unique_songs(&queue_items, &l.liked_tracks, &home)
+    })
+}
+
+pub fn filtered_library_tracks(filter: LibraryFilter, query: &str, sort_asc: bool) -> Vec<Track> {
+    let all_songs = if filter == LibraryFilter::Songs {
+        all_library_songs()
+    } else {
+        Vec::new()
+    };
+    library_signal().with(|l| l.tracks_for_filter(filter, all_songs, query, sort_asc))
 }
 
 pub fn cache_stats() -> CacheStats {
