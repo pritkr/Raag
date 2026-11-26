@@ -51,7 +51,7 @@ pub fn seek_slider(
         })
 }
 
-/// Interactive `nsh_base::slider` for volume control (0.0 ..= 1.6).
+/// Interactive `nsh_base::slider` for volume control (0.0 ..= 1.0).
 pub fn volume_slider(
     volume: impl Fn() -> f64 + 'static,
     on_change: impl Fn(f32) + 'static,
@@ -59,7 +59,7 @@ pub fn volume_slider(
     slider()
         .value(move || Some(SliderValue::Single(volume())))
         .min(0.0)
-        .max(1.6)
+        .max(1.0)
         .step(0.02)
         .accessibility_label("Volume")
         .track_class("w-24 h-6 justify-center")

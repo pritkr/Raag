@@ -5,7 +5,9 @@
 use std::collections::HashSet;
 
 use rand::seq::SliceRandom;
-use resonance_contract::{CoreError, CoreResult, PlaybackError, QueueState, RepeatMode, Track};
+use resonance_contract::{
+    CoreError, CoreResult, PlaybackError, QueueState, RepeatMode, ShuffleDeck, Track,
+};
 
 /// Stateless pure operations over [`QueueState`].
 pub struct QueueManager;
@@ -159,6 +161,177 @@ impl QueueManager {
         next_idx
             .and_then(|idx| queue.items.get(idx))
             .map(|t| t.id.clone())
+    }
+
+    // ── ShuffleDeck Operations (Single Authoritative Implementation) ────────
+
+    /// Rebuilds a Fisher-Yates shuffle index deck of length `len`, optionally pinning
+    /// `keep_first` at deck position `0`.
+    pub fn shuffle_deck_rebuild(deck: &mut ShuffleDeck, len: usize, keep_first: Option<usize>) {
+        if len == 0 {
+            *deck = ShuffleDeck::default();
+            return;
+        }
+        let mut rng = rand::rng();
+        let order = match keep_first.filter(|&i| i < len) {
+            Some(first) => {
+                let mut rest: Vec<usize> = (0..len).filter(|&i| i != first).collect();
+                rest.shuffle(&mut rng);
+                let mut full = Vec::with_capacity(len);
+                full.push(first);
+                full.extend(rest);
+                full
+            }
+            None => {
+                let mut full: Vec<usize> = (0..len).collect();
+                full.shuffle(&mut rng);
+                full
+            }
+        };
+        *deck = ShuffleDeck { order, cursor: 0 };
+    }
+
+    /// Rebuilds the shuffle deck while avoiding repeating `avoid_first` as the very first track.
+    pub fn shuffle_deck_reshuffle_avoiding(
+        deck: &mut ShuffleDeck,
+        len: usize,
+        avoid_first: Option<usize>,
+    ) {
+        Self::shuffle_deck_rebuild(deck, len, None);
+        if len > 1
+            && let Some(avoid) = avoid_first
+            && deck.order.first().copied() == Some(avoid)
+            && let Some(swap_pos) = deck.order.iter().position(|&i| i != avoid)
+        {
+            deck.order.swap(0, swap_pos);
+        }
+        deck.cursor = 0;
+    }
+
+    /// Updates `deck` after inserting a new queue item at `inserted_idx`.
+    pub fn shuffle_deck_on_insert(
+        deck: &mut ShuffleDeck,
+        new_len: usize,
+        inserted_idx: usize,
+        current_idx: Option<usize>,
+    ) {
+        if deck.order.is_empty() {
+            Self::shuffle_deck_rebuild(deck, new_len, current_idx);
+            return;
+        }
+        for entry in &mut deck.order {
+            if *entry >= inserted_idx {
+                *entry += 1;
+            }
+        }
+        let insert_pos = (deck.cursor + 1).min(deck.order.len());
+        deck.order.insert(insert_pos, inserted_idx);
+    }
+
+    /// Updates `deck` after appending a new queue item at `new_len - 1`.
+    pub fn shuffle_deck_on_append(
+        deck: &mut ShuffleDeck,
+        new_len: usize,
+        current_idx: Option<usize>,
+    ) {
+        if new_len == 0 {
+            *deck = ShuffleDeck::default();
+            return;
+        }
+        if deck.order.is_empty() {
+            Self::shuffle_deck_rebuild(deck, new_len, current_idx);
+        } else {
+            deck.order.push(new_len - 1);
+        }
+    }
+
+    /// Updates `deck` index references after moving a queue item from `from` to `to`.
+    pub fn shuffle_deck_on_reorder(deck: &mut ShuffleDeck, from: usize, to: usize) {
+        for entry in &mut deck.order {
+            *entry = if *entry == from {
+                to
+            } else if from < *entry && *entry <= to {
+                *entry - 1
+            } else if to <= *entry && *entry < from {
+                *entry + 1
+            } else {
+                *entry
+            };
+        }
+    }
+
+    /// Updates `deck` index references and cursor after removing queue item `removed_idx`.
+    pub fn shuffle_deck_on_remove(deck: &mut ShuffleDeck, removed_idx: usize) {
+        if let Some(pos) = deck.order.iter().position(|&i| i == removed_idx) {
+            deck.order.remove(pos);
+            if pos < deck.cursor {
+                deck.cursor = deck.cursor.saturating_sub(1);
+            }
+        }
+        for entry in &mut deck.order {
+            if *entry > removed_idx {
+                *entry -= 1;
+            }
+        }
+        if deck.order.is_empty() {
+            deck.cursor = 0;
+        } else {
+            deck.cursor = deck.cursor.min(deck.order.len() - 1);
+        }
+    }
+
+    /// Synchronizes `deck.cursor` to point at `queue_index` if present.
+    pub fn shuffle_deck_sync_cursor(deck: &mut ShuffleDeck, queue_index: usize) -> bool {
+        if let Some(pos) = deck.order.iter().position(|&i| i == queue_index) {
+            deck.cursor = pos;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Advances `deck` according to `repeat`.
+    /// When `stop_at_end` is `true` and `repeat == RepeatMode::None`, returns `None` past the final track.
+    pub fn shuffle_deck_next(
+        deck: &mut ShuffleDeck,
+        queue_len: usize,
+        repeat: RepeatMode,
+        stop_at_end: bool,
+    ) -> Option<usize> {
+        if deck.order.is_empty() || queue_len == 0 {
+            return None;
+        }
+        match repeat {
+            RepeatMode::One => deck.order.get(deck.cursor).copied(),
+            RepeatMode::None => {
+                if deck.cursor + 1 < deck.order.len() {
+                    deck.cursor += 1;
+                    deck.order.get(deck.cursor).copied()
+                } else if stop_at_end {
+                    None
+                } else {
+                    deck.order.get(deck.cursor).copied()
+                }
+            }
+            RepeatMode::All => {
+                if deck.cursor + 1 < deck.order.len() {
+                    deck.cursor += 1;
+                } else {
+                    let last_played = deck.order.get(deck.cursor).copied();
+                    Self::shuffle_deck_reshuffle_avoiding(deck, queue_len, last_played);
+                }
+                deck.order.get(deck.cursor).copied()
+            }
+        }
+    }
+
+    /// Steps backward one position in `deck`.
+    pub fn shuffle_deck_prev(deck: &mut ShuffleDeck) -> Option<usize> {
+        if deck.order.is_empty() {
+            return None;
+        }
+        deck.cursor = deck.cursor.saturating_sub(1);
+        deck.order.get(deck.cursor).copied()
     }
 
     /// Merges autoplay radio tracks into the tail of the queue, deduplicating existing IDs
@@ -379,5 +552,26 @@ mod tests {
                 "same artist should not appear back-to-back when alternatives exist"
             );
         }
+    }
+
+    #[test]
+    fn shuffle_deck_lifecycle_preserves_invariants() {
+        let mut deck = ShuffleDeck::default();
+        QueueManager::shuffle_deck_rebuild(&mut deck, 4, Some(2));
+        assert_eq!(deck.order.len(), 4);
+        assert_eq!(deck.order[0], 2);
+        assert_eq!(deck.cursor, 0);
+
+        QueueManager::shuffle_deck_on_insert(&mut deck, 5, 1, Some(2));
+        assert_eq!(deck.order.len(), 5);
+        assert_eq!(deck.order[1], 1);
+
+        QueueManager::shuffle_deck_on_remove(&mut deck, 1);
+        assert_eq!(deck.order.len(), 4);
+
+        let next = QueueManager::shuffle_deck_next(&mut deck, 4, RepeatMode::None, true);
+        assert!(next.is_some());
+        let prev = QueueManager::shuffle_deck_prev(&mut deck);
+        assert_eq!(prev, deck.order.first().copied());
     }
 }

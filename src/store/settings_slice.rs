@@ -64,6 +64,17 @@ pub struct SettingsSlice {
     pub offline_quota_bytes: u64,
     pub update_channel: String,
     pub local_music_dirs: Vec<String>,
+    pub auth_sheet_open: bool,
+    pub tv_oauth_user_code: Option<String>,
+    pub tv_oauth_verification_url: Option<String>,
+    pub tv_oauth_expires_in_secs: u64,
+    pub tv_oauth_status: Option<String>,
+}
+
+impl Default for SettingsSlice {
+    fn default() -> Self {
+        Self::new(super::is_fixture_mode())
+    }
 }
 
 impl SettingsSlice {
@@ -127,6 +138,11 @@ impl SettingsSlice {
             offline_quota_bytes: defaults.offline_quota_bytes,
             update_channel: defaults.update_channel,
             local_music_dirs: defaults.local_music_dirs,
+            auth_sheet_open: false,
+            tv_oauth_user_code: None,
+            tv_oauth_verification_url: None,
+            tv_oauth_expires_in_secs: 0,
+            tv_oauth_status: None,
         }
     }
 

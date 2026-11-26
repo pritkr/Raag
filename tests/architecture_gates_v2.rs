@@ -2,7 +2,7 @@
 //! 1. Phase 0 Walking-Skeleton Gate (4 proofs + exact NSH pin `=0.7.0` + documented fallbacks)
 //! 2. Updatable `yt-dlp-ejs` Solver Bundle in `rquickjs >= 0.12.0` + per-`player_id` `n`-param cache
 //! 3. Data-driven `client_matrix.json` + explicit `PoTokenPolicy` + `client_probe` atomic update
-//! 4. `CompositeMusicProvider` (`BrowseDelegate` MIT `ytmapi-rs` seam + owned `PlaybackResolver`) & license check
+//! 4. `HybridMusicProvider::from_delegates` (`BrowseDelegate` MIT `ytmapi-rs` seam + owned `PlaybackResolver`) & license check
 //! 5. Measurable Performance Budgets (<1.5s warm, <3.0s cold, <100 MB RSS) + 50% Next-Track Pre-Resolution
 //! 6. Decoder-driven `TargetPlatform × AccountTier` audio format matrix (Android Opus, Desktop AAC-first, iOS AAC-only)
 
@@ -20,12 +20,12 @@ use resonance_contract::{
 use resonance_core::cache::{ChunkCache, SqliteCacheStore};
 use resonance_core::fixture::fixture_tracks;
 use resonance_core::innertube::{
-    AccountTier, BrowseDelegate, ClientKind, ClientMatrix, CompositeMusicProvider,
-    PlaybackResolver, PoTokenPolicy, TargetPlatform, parser::parse_player_response_for_platform,
-    sanitize_android_webview_ua,
+    AccountTier, BrowseDelegate, ClientKind, ClientMatrix, PlaybackResolver, PoTokenPolicy,
+    TargetPlatform, parser::parse_player_response_for_platform, sanitize_android_webview_ua,
 };
 use resonance_core::lyrics::CascadeLyricsProvider;
 use resonance_core::playback::PlaybackController;
+use resonance_core::providers::HybridMusicProvider;
 use resonance_core::proxy::LoopbackProxy;
 use resonance_core::solver::{ChallengeInput, EjsBundleManifest, QuickJsSolver};
 use resonance_core::sponsorblock::HttpSponsorBlockProvider;
@@ -479,7 +479,7 @@ async fn req4_and_req5_composite_provider_50pct_preresolve_and_perf_memory_budge
 
     let resolve_calls = Arc::new(AtomicUsize::new(0));
     let resolved_ids = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let composite = Arc::new(CompositeMusicProvider::new(
+    let composite = Arc::new(HybridMusicProvider::from_delegates(
         Arc::new(StubBrowseDelegate),
         Arc::new(CountingResolver {
             calls: resolve_calls.clone(),

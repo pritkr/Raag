@@ -2,7 +2,7 @@
 
 - **`crates/contract/` (Frozen Seam):** Trait boundaries (`MusicProvider`, `AudioBackend`, `AuthStore`, `CacheStore`, `LyricsProvider`, `SponsorBlockProvider`), domain types, `PlayerState`, `EventBus`, errors. Keep trait changes synced with mocks in `tests/`.
 - **InnerTube & `ClientMatrix` (`crates/core/src/innertube/`):**
-  - `CompositeMusicProvider` (`provider_adapter.rs`) splits `BrowseDelegate` from `PlaybackResolver`.
+  - `HybridMusicProvider` (`providers/hybrid.rs`, plus `HybridMusicProvider::from_delegates`) splits `BrowseDelegate` from `PlaybackResolver` (`provider_adapter.rs`) behind a single SWR cache layer.
   - Use `config/client_matrix.json` (`ClientMatrix`, `AuthMode`, `PoTokenPolicy`) — no hard-coded fallback chains. `ANDROID_VR` is `AnonymousOnly` and `IOS` drops browser cookies.
   - Format priority (`formats.rs`): Android Opus-first (`774/141/251/140/139`), Desktop AAC-first (`141/774/140/251/139`), iOS AAC-only (WebM Opus excluded).
   - Probe harness: `cargo run --bin client_probe`.

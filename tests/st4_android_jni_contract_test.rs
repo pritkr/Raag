@@ -3,13 +3,13 @@ use std::path::Path;
 use std::sync::Arc;
 
 use resonance::platform::android::{
-    ANDROID_KEYSTORE_KEY, AndroidKeystoreAuthStore, AndroidMediaBridge, AndroidTelemetryEvent,
-    BridgeCall, MockAndroidBridgeInvoker, handle_inbound_auth_cookies,
-    handle_inbound_media_command, handle_inbound_playback_progress, handle_inbound_playback_state,
+    ANDROID_KEYSTORE_KEY, AndroidKeystoreAuthStore, AndroidMediaBridge, BridgeCall,
+    MockAndroidBridgeInvoker, handle_inbound_auth_cookies, handle_inbound_media_command,
+    handle_inbound_playback_progress, handle_inbound_playback_state,
 };
 use resonance_contract::{
-    AudioBackend, AuthError, AuthSession, AuthStore, CredentialBackendKind, MediaCommand,
-    NowPlayingMetadata,
+    AudioBackend, AudioTelemetry, AuthError, AuthSession, AuthStore, CredentialBackendKind,
+    MediaCommand, NowPlayingMetadata,
 };
 use resonance_core::innertube::FileAuthStore;
 use tempfile::tempdir;
@@ -143,6 +143,7 @@ async fn android_inbound_jni_commands_and_telemetry_flow_into_playback_controlle
     let bridge = AndroidMediaBridge::with_invoker(invoker);
     let mut cmd_rx = bridge.take_command_receiver().unwrap();
     let mut tel_rx = bridge.take_telemetry_receiver().unwrap();
+    let mut auth_rx = bridge.take_auth_cookie_receiver().unwrap();
 
     // Exercise all 10 media command opcodes (Play..Stop).
     let expected = [
@@ -193,30 +194,23 @@ async fn android_inbound_jni_commands_and_telemetry_flow_into_playback_controlle
 
     assert_eq!(
         tel_rx.recv().await.unwrap(),
-        AndroidTelemetryEvent::Progress {
+        AudioTelemetry::Progress {
             generation: current_gen,
             position_ms: 55_000,
-            duration_ms: 245_000,
+            duration_ms: Some(245_000),
         }
     );
     assert_eq!(
         tel_rx.recv().await.unwrap(),
-        AndroidTelemetryEvent::PlaybackState {
+        AudioTelemetry::Ended {
             generation: current_gen,
-            state_code: 4,
-            error_msg: None,
         }
     );
 
-    // Cookie capture validates SAPISID / __Secure-3PAPISID presence.
+    // Cookie capture validates SAPISID / __Secure-3PAPISID presence and routes on its own channel.
     assert!(!handle_inbound_auth_cookies("PREF=1"));
     assert!(handle_inbound_auth_cookies("SAPISID=secret123"));
-    assert_eq!(
-        tel_rx.recv().await.unwrap(),
-        AndroidTelemetryEvent::AuthCookiesCaptured {
-            cookie_header: "SAPISID=secret123".to_owned(),
-        }
-    );
+    assert_eq!(auth_rx.recv().await.unwrap(), "SAPISID=secret123");
 }
 
 #[test]

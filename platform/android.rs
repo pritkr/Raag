@@ -6,12 +6,14 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
+#[cfg(target_os = "android")]
+use std::sync::OnceLock;
 
 use async_trait::async_trait;
 use resonance_contract::{
-    AudioBackend, AuthError, AuthSession, AuthStore, CoreError, CoreResult, CredentialBackendKind,
-    MediaCommand, NowPlayingMetadata, PlaybackError,
+    AudioBackend, AudioTelemetry, AuthError, AuthSession, AuthStore, CoreError, CoreResult,
+    CredentialBackendKind, MediaCommand, NowPlayingMetadata, PlaybackError, PlayerState,
 };
 use resonance_core::innertube::FileAuthStore;
 use resonance_core::innertube::auth::{extract_cookie, redact_secrets};
@@ -522,12 +524,53 @@ fn default_invoker() -> Arc<dyn AndroidBridgeInvoker> {
     }
 }
 
-static ANDROID_CMD_TX: OnceLock<UnboundedSender<MediaCommand>> = OnceLock::new();
-static ANDROID_TELEMETRY_TX: OnceLock<UnboundedSender<AndroidTelemetryEvent>> = OnceLock::new();
+static ANDROID_CMD_TX: Mutex<Option<UnboundedSender<MediaCommand>>> = Mutex::new(None);
+static ANDROID_TELEMETRY_TX: Mutex<Option<UnboundedSender<AudioTelemetry>>> = Mutex::new(None);
+static ANDROID_AUTH_COOKIE_TX: Mutex<Option<UnboundedSender<String>>> = Mutex::new(None);
 static ANDROID_ACTIVE_GENERATION: AtomicU64 = AtomicU64::new(0);
 static ANDROID_REPORTED_POSITION_MS: AtomicU64 = AtomicU64::new(0);
 static ANDROID_REPORTED_DURATION_MS: AtomicU64 = AtomicU64::new(0);
 static ANDROID_REPORTED_PLAYING: AtomicBool = AtomicBool::new(false);
+
+/// Decodes an ExoPlayer state code from Kotlin `PlaybackForegroundService` into
+/// a platform-agnostic [`AudioTelemetry`] event.
+pub fn decode_android_playback_state(
+    generation: u64,
+    state_code: i32,
+    error_msg: Option<String>,
+) -> Option<AudioTelemetry> {
+    match state_code {
+        2 => Some(AudioTelemetry::Buffering {
+            generation,
+            buffering: true,
+        }),
+        3 => Some(AudioTelemetry::Buffering {
+            generation,
+            buffering: false,
+        }),
+        4 => Some(AudioTelemetry::Ended { generation }),
+        5 => Some(AudioTelemetry::StateChanged {
+            generation,
+            state: PlayerState::Playing,
+        }),
+        6 => Some(AudioTelemetry::StateChanged {
+            generation,
+            state: PlayerState::Paused,
+        }),
+        -1 => Some(AudioTelemetry::Failed {
+            generation,
+            message: error_msg.unwrap_or_else(|| "Android Media3 playback error".to_owned()),
+        }),
+        _ => None,
+    }
+}
+
+/// Registers and returns a fresh receiver for WebView-captured YouTube Music sign-in cookies.
+pub fn subscribe_android_auth_cookies() -> UnboundedReceiver<String> {
+    let (tx, rx) = unbounded_channel();
+    *ANDROID_AUTH_COOKIE_TX.lock().unwrap() = Some(tx);
+    rx
+}
 
 pub struct AndroidMediaBridge {
     invoker: Arc<dyn AndroidBridgeInvoker>,
@@ -536,7 +579,8 @@ pub struct AndroidMediaBridge {
     position_ms: AtomicU64,
     active_url: Mutex<Option<String>>,
     cmd_rx: Mutex<Option<UnboundedReceiver<MediaCommand>>>,
-    telemetry_rx: Mutex<Option<UnboundedReceiver<AndroidTelemetryEvent>>>,
+    telemetry_rx: Mutex<Option<UnboundedReceiver<AudioTelemetry>>>,
+    auth_cookie_rx: Mutex<Option<UnboundedReceiver<String>>>,
 }
 
 impl AndroidMediaBridge {
@@ -546,9 +590,10 @@ impl AndroidMediaBridge {
 
     pub fn with_invoker(invoker: Arc<dyn AndroidBridgeInvoker>) -> Self {
         let (tx, rx) = unbounded_channel();
-        let _ = ANDROID_CMD_TX.set(tx);
+        *ANDROID_CMD_TX.lock().unwrap() = Some(tx);
         let (tel_tx, tel_rx) = unbounded_channel();
-        let _ = ANDROID_TELEMETRY_TX.set(tel_tx);
+        *ANDROID_TELEMETRY_TX.lock().unwrap() = Some(tel_tx);
+        let auth_rx = subscribe_android_auth_cookies();
         Self {
             invoker,
             generation: AtomicU64::new(0),
@@ -557,6 +602,7 @@ impl AndroidMediaBridge {
             active_url: Mutex::new(None),
             cmd_rx: Mutex::new(Some(rx)),
             telemetry_rx: Mutex::new(Some(tel_rx)),
+            auth_cookie_rx: Mutex::new(Some(auth_rx)),
         }
     }
 
@@ -564,20 +610,53 @@ impl AndroidMediaBridge {
         self.generation.load(Ordering::SeqCst)
     }
 
-    pub fn take_telemetry_receiver(&self) -> Option<UnboundedReceiver<AndroidTelemetryEvent>> {
-        self.telemetry_rx.lock().unwrap().take()
+    pub fn take_auth_cookie_receiver(&self) -> Option<UnboundedReceiver<String>> {
+        self.auth_cookie_rx.lock().unwrap().take()
     }
 
     /// Invoked from Kotlin `ResonanceNativeBridge` (MediaSession / BecomingNoisy / AudioFocus).
     pub fn dispatch_from_jni(cmd: MediaCommand) {
-        if let Some(tx) = ANDROID_CMD_TX.get() {
+        if let Some(tx) = ANDROID_CMD_TX.lock().unwrap().as_ref() {
             let _ = tx.send(cmd);
         }
     }
 
-    pub fn dispatch_telemetry_from_jni(event: AndroidTelemetryEvent) {
-        if let Some(tx) = ANDROID_TELEMETRY_TX.get() {
+    pub fn dispatch_audio_telemetry_from_jni(event: AudioTelemetry) {
+        if let Some(tx) = ANDROID_TELEMETRY_TX.lock().unwrap().as_ref() {
             let _ = tx.send(event);
+        }
+    }
+
+    pub fn dispatch_auth_cookies_from_jni(cookie_header: String) {
+        if let Some(tx) = ANDROID_AUTH_COOKIE_TX.lock().unwrap().as_ref() {
+            let _ = tx.send(cookie_header);
+        }
+    }
+
+    pub fn dispatch_telemetry_from_jni(event: AndroidTelemetryEvent) {
+        match event {
+            AndroidTelemetryEvent::Progress {
+                generation,
+                position_ms,
+                duration_ms,
+            } => Self::dispatch_audio_telemetry_from_jni(AudioTelemetry::Progress {
+                generation,
+                position_ms,
+                duration_ms: (duration_ms > 0).then_some(duration_ms),
+            }),
+            AndroidTelemetryEvent::PlaybackState {
+                generation,
+                state_code,
+                error_msg,
+            } => {
+                if let Some(tel) = decode_android_playback_state(generation, state_code, error_msg)
+                {
+                    Self::dispatch_audio_telemetry_from_jni(tel);
+                }
+            }
+            AndroidTelemetryEvent::AuthCookiesCaptured { cookie_header } => {
+                Self::dispatch_auth_cookies_from_jni(cookie_header);
+            }
         }
     }
 }
@@ -673,6 +752,10 @@ impl AudioBackend for AndroidMediaBridge {
 
     fn take_command_receiver(&self) -> Option<UnboundedReceiver<MediaCommand>> {
         self.cmd_rx.lock().unwrap().take()
+    }
+
+    fn take_telemetry_receiver(&self) -> Option<UnboundedReceiver<AudioTelemetry>> {
+        self.telemetry_rx.lock().unwrap().take()
     }
 }
 

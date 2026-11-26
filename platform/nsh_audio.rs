@@ -20,7 +20,9 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use nsh_core::audio::{AudioError, AudioEvent, PlayerSettings};
 use nsh_core::prelude::{AudioPlayer, audio_available, audio_player, cleanup, effect, spawn};
-use resonance_contract::{AudioBackend, CoreResult, MediaCommand, NowPlayingMetadata, PlayerState};
+use resonance_contract::{
+    AudioBackend, AudioTelemetry, CoreResult, MediaCommand, NowPlayingMetadata, PlayerState,
+};
 use resonance_core::audio_dsp::{
     DspConfig, DspPipeline, SpscConsumer, SpscProducer, SpscRingBuffer,
 };
@@ -29,15 +31,14 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use crate::platform::desktop::SystemMediaControlsBridge;
 use crate::store;
 
-pub type NshAudioTelemetry = resonance_core::playback::AudioTelemetry;
+pub type NshAudioTelemetry = AudioTelemetry;
 
 /// Global lock-free bus connecting `NshAudioBackend` (Tokio runtime) with
 /// `mount_nsh_audio_driver()` (NSH engine thread).
 pub struct NshAudioBus {
     pub control_tx: crossbeam_channel::Sender<NshAudioControl>,
     pub control_rx: crossbeam_channel::Receiver<NshAudioControl>,
-    pub telemetry_tx: crossbeam_channel::Sender<NshAudioTelemetry>,
-    pub telemetry_rx: crossbeam_channel::Receiver<NshAudioTelemetry>,
+    telemetry_tx: Mutex<Option<UnboundedSender<AudioTelemetry>>>,
     control_waker: Mutex<Option<Waker>>,
 }
 
@@ -54,6 +55,16 @@ impl NshAudioBus {
             w.wake();
         }
     }
+
+    pub fn attach_telemetry_sender(&self, tx: UnboundedSender<AudioTelemetry>) {
+        *self.telemetry_tx.lock().unwrap() = Some(tx);
+    }
+
+    pub fn send_telemetry(&self, event: AudioTelemetry) {
+        if let Some(tx) = self.telemetry_tx.lock().unwrap().as_ref() {
+            let _ = tx.send(event);
+        }
+    }
 }
 
 static NSH_AUDIO_BUS: OnceLock<NshAudioBus> = OnceLock::new();
@@ -61,12 +72,10 @@ static NSH_AUDIO_BUS: OnceLock<NshAudioBus> = OnceLock::new();
 pub fn nsh_audio_bus() -> &'static NshAudioBus {
     NSH_AUDIO_BUS.get_or_init(|| {
         let (control_tx, control_rx) = crossbeam_channel::unbounded();
-        let (telemetry_tx, telemetry_rx) = crossbeam_channel::unbounded();
         NshAudioBus {
             control_tx,
             control_rx,
-            telemetry_tx,
-            telemetry_rx,
+            telemetry_tx: Mutex::new(None),
             control_waker: Mutex::new(None),
         }
     })
@@ -213,7 +222,7 @@ pub fn mount_nsh_audio_driver() {
                         duration: Some(dur),
                     } => {
                         last_progress_emit = None;
-                        let _ = bus.telemetry_tx.send(NshAudioTelemetry::Loaded {
+                        bus.send_telemetry(AudioTelemetry::Loaded {
                             generation,
                             duration_ms: dur.as_millis() as u64,
                         });
@@ -227,7 +236,7 @@ pub fn mount_nsh_audio_driver() {
                         {
                             entry.is_playing = true;
                         }
-                        let _ = bus.telemetry_tx.send(NshAudioTelemetry::StateChanged {
+                        bus.send_telemetry(AudioTelemetry::StateChanged {
                             generation,
                             state: PlayerState::Playing,
                         });
@@ -238,13 +247,13 @@ pub fn mount_nsh_audio_driver() {
                         {
                             entry.is_playing = false;
                         }
-                        let _ = bus.telemetry_tx.send(NshAudioTelemetry::StateChanged {
+                        bus.send_telemetry(AudioTelemetry::StateChanged {
                             generation,
                             state: PlayerState::Paused,
                         });
                     }
                     AudioEvent::Buffer { buffering } => {
-                        let _ = bus.telemetry_tx.send(NshAudioTelemetry::Buffering {
+                        bus.send_telemetry(AudioTelemetry::Buffering {
                             generation,
                             buffering,
                         });
@@ -261,7 +270,7 @@ pub fn mount_nsh_audio_driver() {
                         };
                         if should_emit {
                             last_progress_emit = Some((pos_ms, now));
-                            let _ = bus.telemetry_tx.send(NshAudioTelemetry::Progress {
+                            bus.send_telemetry(AudioTelemetry::Progress {
                                 generation,
                                 position_ms: pos_ms,
                                 duration_ms: duration.map(|d| d.as_millis() as u64),
@@ -274,12 +283,10 @@ pub fn mount_nsh_audio_driver() {
                         {
                             entry.is_playing = false;
                         }
-                        let _ = bus
-                            .telemetry_tx
-                            .send(NshAudioTelemetry::Ended { generation });
+                        bus.send_telemetry(AudioTelemetry::Ended { generation });
                     }
                     AudioEvent::Failed { error, message } if error != AudioError::Unavailable => {
-                        let _ = bus.telemetry_tx.send(NshAudioTelemetry::Failed {
+                        bus.send_telemetry(AudioTelemetry::Failed {
                             generation,
                             message: format!(
                                 "Native audio error ({}): {}",
@@ -486,7 +493,6 @@ pub fn mount_nsh_audio_driver() {
                             entry.player.set_settings(entry.last_settings);
                         }
                     }
-                    NshAudioControl::UpdateDsp(_) | NshAudioControl::SetTrackLoudnessDb(_) => {}
                 }
             }
         });
@@ -507,7 +513,7 @@ pub fn mount_nsh_audio_driver() {
             let bus = nsh_audio_bus();
             bus.wake_control();
             if generation > 0 {
-                let _ = bus.telemetry_tx.send(NshAudioTelemetry::StateChanged {
+                bus.send_telemetry(AudioTelemetry::StateChanged {
                     generation,
                     state: PlayerState::Idle,
                 });
@@ -545,8 +551,6 @@ pub enum NshAudioControl {
     SeekMs(u64),
     SetVolume(f32),
     SetPlaybackSpeed(f32),
-    UpdateDsp(DspConfig),
-    SetTrackLoudnessDb(Option<f32>),
 }
 
 /// Creates a lock-free cache-line-aligned SPSC PCM ring buffer for decoupling audio decoding
@@ -568,6 +572,7 @@ pub struct NshAudioBackend {
     dsp_pipeline: Mutex<DspPipeline>,
     control_tx: UnboundedSender<NshAudioControl>,
     control_rx: Mutex<Option<UnboundedReceiver<NshAudioControl>>>,
+    telemetry_rx: Mutex<Option<UnboundedReceiver<AudioTelemetry>>>,
     media_controls: SystemMediaControlsBridge,
 }
 
@@ -578,6 +583,8 @@ impl NshAudioBackend {
 
     pub fn with_hwnd(hwnd: Option<*mut c_void>) -> Self {
         let (control_tx, control_rx) = unbounded_channel();
+        let (tel_tx, tel_rx) = unbounded_channel();
+        nsh_audio_bus().attach_telemetry_sender(tel_tx);
         let default_dsp = DspConfig::default();
         let dsp_pipeline = DspPipeline::new(48_000, 2, &default_dsp);
         Self {
@@ -590,6 +597,7 @@ impl NshAudioBackend {
             dsp_pipeline: Mutex::new(dsp_pipeline),
             control_tx,
             control_rx: Mutex::new(Some(control_rx)),
+            telemetry_rx: Mutex::new(Some(tel_rx)),
             media_controls: SystemMediaControlsBridge::new(hwnd),
         }
     }
@@ -614,6 +622,10 @@ impl NshAudioBackend {
         self.active_url.lock().unwrap().clone()
     }
 
+    pub fn last_metadata(&self) -> Option<NowPlayingMetadata> {
+        self.last_meta.lock().unwrap().clone()
+    }
+
     pub async fn set_playback_speed(&self, speed: f32) -> CoreResult<()> {
         let clamped = speed.clamp(0.25, 3.0);
         self.emit_control(NshAudioControl::SetPlaybackSpeed(clamped));
@@ -625,12 +637,11 @@ impl NshAudioBackend {
         nsh_audio_bus().send_control(cmd);
     }
 
-    /// Updates user DSP configuration (ReplayGain, 10-band EQ, silence skip, crossfade)
-    /// without blocking the NSH engine thread.
+    /// Updates user DSP configuration for the local PCM DSP pipeline without emitting
+    /// no-op commands onto the URL-based `nsh/audio` control bus.
     pub fn set_dsp_config(&self, config: DspConfig) {
         *self.dsp_config.lock().unwrap() = config.clone();
         self.dsp_pipeline.lock().unwrap().apply_config(&config);
-        self.emit_control(NshAudioControl::UpdateDsp(config));
     }
 
     pub fn dsp_config(&self) -> DspConfig {
@@ -643,7 +654,6 @@ impl NshAudioBackend {
             .lock()
             .unwrap()
             .set_track_loudness_db(loudness_db);
-        self.emit_control(NshAudioControl::SetTrackLoudnessDb(loudness_db));
     }
 
     /// Runs the configured modular PCM DSP pipeline on an interleaved stereo audio frame block.
@@ -798,7 +808,7 @@ impl AudioBackend for NshAudioBackend {
     }
 
     async fn set_volume(&self, volume: f32) -> CoreResult<()> {
-        let clamped = volume.clamp(0.0, 1.6);
+        let clamped = volume.clamp(0.0, 1.0);
         self.volume_bits
             .store(clamped.to_bits() as u64, Ordering::SeqCst);
         self.emit_control(NshAudioControl::SetVolume(clamped));
@@ -820,5 +830,9 @@ impl AudioBackend for NshAudioBackend {
 
     fn take_command_receiver(&self) -> Option<UnboundedReceiver<MediaCommand>> {
         self.media_controls.take_command_receiver()
+    }
+
+    fn take_telemetry_receiver(&self) -> Option<UnboundedReceiver<AudioTelemetry>> {
+        self.telemetry_rx.lock().unwrap().take()
     }
 }

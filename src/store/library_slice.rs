@@ -72,6 +72,21 @@ pub struct LibrarySlice {
     pub pinned_collections: Vec<PinnedCollection>,
 }
 
+impl Default for LibrarySlice {
+    fn default() -> Self {
+        let fixture = super::is_fixture_mode();
+        let liked_tracks = if fixture {
+            resonance_core::fixture::fixture_tracks()
+                .into_iter()
+                .filter(|t| t.is_liked)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Self::new(fixture, liked_tracks)
+    }
+}
+
 impl LibrarySlice {
     pub fn new(fixture: bool, liked_tracks: Vec<Track>) -> Self {
         Self {

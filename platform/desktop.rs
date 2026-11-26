@@ -27,10 +27,9 @@ pub fn ensure_downloads_dir(data_dir: &Path) -> std::io::Result<PathBuf> {
     Ok(dir)
 }
 
-use async_trait::async_trait;
 use resonance_contract::{
-    AudioBackend, AuthBackendStatus, AuthError, AuthSession, AuthStore, CoreResult,
-    CredentialBackendKind, MediaCommand, NowPlayingMetadata,
+    AuthBackendStatus, AuthError, AuthSession, AuthStore, CredentialBackendKind, MediaCommand,
+    NowPlayingMetadata,
 };
 use resonance_core::innertube::FileAuthStore;
 use resonance_core::innertube::auth::{extract_cookie, redact_secrets};
@@ -306,8 +305,8 @@ pub fn coalesce_seek_by(
 
 /// Reusable, owned `souvlaki` MPRIS/SMTC/NowPlaying media-controls bridge.
 ///
-/// Shared by `DesktopAudioBridge` and `NshAudioBackend` so there is a single
-/// non-leaking `souvlaki::MediaControls` owner across Desktop targets.
+/// Owned by `NshAudioBackend` so there is a single non-leaking
+/// `souvlaki::MediaControls` owner across Desktop targets.
 pub struct SystemMediaControlsBridge {
     playing: AtomicBool,
     position_ms: Arc<AtomicU64>,
@@ -558,109 +557,4 @@ impl SystemMediaControlsBridge {
         any(target_os = "linux", target_os = "macos", target_os = "windows")
     )))]
     fn sync_souvlaki_playback(&self) {}
-}
-
-pub struct DesktopAudioBridge {
-    media: SystemMediaControlsBridge,
-    volume_bits: AtomicU64,
-    active_url: Mutex<Option<String>>,
-}
-
-impl DesktopAudioBridge {
-    pub fn new() -> Self {
-        Self::with_hwnd(None)
-    }
-
-    pub fn with_hwnd(hwnd: Option<*mut c_void>) -> Self {
-        Self {
-            media: SystemMediaControlsBridge::new(hwnd),
-            volume_bits: AtomicU64::new(1.0_f32.to_bits() as u64),
-            active_url: Mutex::new(None),
-        }
-    }
-
-    pub fn attach_window_hwnd(&self, hwnd: *mut c_void) {
-        self.media.attach_window_hwnd(hwnd);
-    }
-
-    pub fn inject_command(&self, cmd: MediaCommand) {
-        self.media.inject_command(cmd);
-    }
-
-    pub fn active_stream_url(&self) -> Option<String> {
-        self.active_url.lock().unwrap().clone()
-    }
-
-    pub fn last_metadata(&self) -> Option<NowPlayingMetadata> {
-        self.media.last_metadata()
-    }
-}
-
-impl Default for DesktopAudioBridge {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[async_trait]
-impl AudioBackend for DesktopAudioBridge {
-    async fn load_and_play(&self, proxy_url: &str, meta: NowPlayingMetadata) -> CoreResult<()> {
-        *self.active_url.lock().unwrap() = Some(proxy_url.to_owned());
-        self.media.sync_metadata(&meta);
-        self.media.sync_playback(true, 0, true);
-        log::info!(
-            "DesktopAudioBridge: streaming via loopback proxy {}",
-            redact_secrets(proxy_url)
-        );
-        Ok(())
-    }
-
-    async fn play(&self) -> CoreResult<()> {
-        let has_track =
-            self.active_url.lock().unwrap().is_some() || self.media.last_metadata().is_some();
-        self.media
-            .sync_playback(true, self.media.position_ms(), has_track);
-        Ok(())
-    }
-
-    async fn pause(&self) -> CoreResult<()> {
-        let has_track =
-            self.active_url.lock().unwrap().is_some() || self.media.last_metadata().is_some();
-        self.media
-            .sync_playback(false, self.media.position_ms(), has_track);
-        Ok(())
-    }
-
-    async fn stop(&self) -> CoreResult<()> {
-        *self.active_url.lock().unwrap() = None;
-        self.media.sync_playback(false, 0, false);
-        Ok(())
-    }
-
-    async fn seek_ms(&self, position_ms: u64) -> CoreResult<()> {
-        let has_track =
-            self.active_url.lock().unwrap().is_some() || self.media.last_metadata().is_some();
-        self.media
-            .sync_playback(self.media.playing(), position_ms, has_track);
-        Ok(())
-    }
-
-    async fn set_volume(&self, volume: f32) -> CoreResult<()> {
-        self.volume_bits
-            .store(volume.clamp(0.0, 1.0).to_bits() as u64, Ordering::SeqCst);
-        Ok(())
-    }
-
-    async fn position_ms(&self) -> u64 {
-        self.media.position_ms()
-    }
-
-    async fn update_now_playing(&self, meta: NowPlayingMetadata, playing: bool, position_ms: u64) {
-        self.media.sync_metadata(&meta);
-        self.media.sync_playback(playing, position_ms, true);
-    }
-
-    fn take_command_receiver(&self) -> Option<UnboundedReceiver<MediaCommand>> {
-        self.media.take_command_receiver()
-    }
 }

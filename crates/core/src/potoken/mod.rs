@@ -13,7 +13,8 @@ pub mod chain;
 pub mod rustypipe_bg;
 pub mod webview_attestation;
 
-use std::sync::RwLock;
+use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use resonance_contract::{
@@ -35,6 +36,72 @@ pub use webview_attestation::{
     AttestationOrchestrator, BotguardChallenge, BotguardExecutionOutput, CachedIntegrityToken,
     EmbeddedWebViewAttestationProvider, WebViewBotguardRunner, validate_interpreter_url,
 };
+
+/// Declarative configuration for assembling Resonance's layered PO-Token acquisition pipeline.
+#[derive(Default)]
+pub struct PoTokenPipelineConfig {
+    /// Optional explicit `bgutil-ytdlp-pot-provider` HTTP URL (defaults to `RESONANCE_BGUTIL_URL` env or `127.0.0.1:4416`).
+    pub bgutil_url: Option<String>,
+    /// Optional platform hidden WebView runner for zero-setup BotGuard attestation.
+    pub webview_runner: Option<Arc<dyn WebViewBotguardRunner>>,
+    /// Optional custom platform attestation bridge (e.g. Android Play Integrity).
+    pub platform_bridge: Option<Arc<dyn PlatformAttestationBridge>>,
+    /// Optional operator-supplied QuickJS-NG attestation script fallback.
+    pub quickjs_script: Option<String>,
+    /// Optional explicit path to `rustypipe-botguard` binary (`None` disables unless `probe_rustypipe_botguard` is true).
+    pub rustypipe_botguard_bin: Option<PathBuf>,
+    /// When `true`, probes `PATH` for `rustypipe-botguard` if no explicit path is provided.
+    pub probe_rustypipe_botguard: bool,
+}
+
+/// Builds a single cached, failover-chained [`PoTokenProvider`] from declarative configuration.
+pub fn build_po_token_pipeline(config: PoTokenPipelineConfig) -> Arc<dyn PoTokenProvider> {
+    let mut tiers: Vec<Arc<dyn PoTokenProvider>> = Vec::new();
+
+    let bgutil_url = config
+        .bgutil_url
+        .or_else(|| std::env::var("RESONANCE_BGUTIL_URL").ok())
+        .unwrap_or_else(|| "http://127.0.0.1:4416".to_owned());
+    if let Ok(sidecar) = SidecarPoTokenProvider::new(bgutil_url) {
+        tiers.push(Arc::new(sidecar));
+    }
+
+    if let Some(runner) = config.webview_runner {
+        tiers.push(Arc::new(EmbeddedWebViewAttestationProvider::new(runner)));
+    }
+
+    if let Some(bridge) = config.platform_bridge {
+        tiers.push(Arc::new(PlatformAttestationPoTokenProvider::new(bridge)));
+    }
+
+    if let Some(bin_path) = config.rustypipe_botguard_bin {
+        tiers.push(Arc::new(RustyPipeBotguardProvider::new(bin_path)));
+    } else if config.probe_rustypipe_botguard
+        && let Some(rp_bg) = RustyPipeBotguardProvider::discover()
+    {
+        tiers.push(Arc::new(rp_bg));
+    }
+
+    if let Some(script) = config.quickjs_script {
+        let vm = Arc::new(QuickJsVmAttestationBridge::new(script));
+        tiers.push(Arc::new(PlatformAttestationPoTokenProvider::new(vm)));
+    }
+
+    if tiers.is_empty() {
+        return Arc::new(NoopPoTokenProvider);
+    }
+
+    let chain = ChainedPoTokenProvider::new(tiers);
+    Arc::new(CachingPoTokenProvider::new(chain))
+}
+
+/// Assembles the standard runtime PO-Token pipeline using environment configuration and local discovery.
+pub fn build_default_po_token_pipeline() -> Arc<dyn PoTokenProvider> {
+    build_po_token_pipeline(PoTokenPipelineConfig {
+        probe_rustypipe_botguard: true,
+        ..Default::default()
+    })
+}
 
 /// Default provider when no PO token backend is configured.
 #[derive(Debug, Default)]

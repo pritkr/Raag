@@ -151,6 +151,16 @@ impl OfflineVault {
         self.db.is_track_pinned(video_id)
     }
 
+    /// Runs crash recovery on startup, pausing any interrupted in-flight downloads.
+    pub async fn startup_recovery(&self) -> CoreResult<usize> {
+        self.manager.startup_recovery().await
+    }
+
+    /// Returns the underlying `DownloadManager` worker when lower-level control is required.
+    pub fn download_manager(&self) -> &Arc<DownloadManager> {
+        &self.manager
+    }
+
     /// Enqueues an individual track download into the Offline Vault.
     pub async fn enqueue_track(&self, track: Track) -> CoreResult<()> {
         self.manager.enqueue(track).await.map(|_| ())
@@ -162,6 +172,10 @@ impl OfflineVault {
 
     pub async fn resume_track(&self, video_id: &str) -> CoreResult<()> {
         self.manager.resume(video_id).await.map(|_| ())
+    }
+
+    pub async fn cancel_track(&self, video_id: &str) -> CoreResult<()> {
+        self.manager.cancel(video_id).await
     }
 
     pub async fn delete_track(&self, video_id: &str) -> CoreResult<()> {

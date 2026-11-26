@@ -4,10 +4,17 @@ use std::collections::{HashMap, HashSet};
 
 use nsh_core::prelude::SharedString;
 use resonance_contract::{
-    ExplorePage, HomeItem, HomeSection, LibraryCollectionRef, Playlist, SearchCategory,
-    SearchResults, Track,
+    AlbumDetail, ArtistDetail, ExplorePage, HomeItem, HomeSection, LibraryCollectionRef,
+    MoodCategory, Playlist, SearchCategory, SearchResults, Track,
 };
+use resonance_core::downloads::CollectionOfflineProgress;
 use resonance_core::fixture::{fixture_home_sections, fixture_tracks};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EntityRoute {
+    Artist { channel_id: String },
+    Album { browse_id: String },
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SearchFilter {
@@ -98,6 +105,7 @@ pub struct CatalogSlice {
     pub home_sections: Vec<HomeSection>,
     pub explore_sections: Vec<HomeSection>,
     pub explore_page: Option<ExplorePage>,
+    pub home_mood_chips: Vec<MoodCategory>,
     pub mood_playlists: Vec<LibraryCollectionRef>,
     pub home_loading: bool,
     pub home_error: Option<String>,
@@ -105,6 +113,7 @@ pub struct CatalogSlice {
     pub section_pages: HashMap<String, usize>,
     pub search_query: String,
     pub search_filter: SearchFilter,
+    pub search_history: Vec<String>,
     pub search_all_tracks: Vec<Track>,
     pub search_results: Vec<Track>,
     pub search_albums: Vec<Playlist>,
@@ -117,6 +126,17 @@ pub struct CatalogSlice {
     pub selected_collection: Option<Playlist>,
     pub collection_search_query: String,
     pub collection_sort_asc: bool,
+    pub entity_history: Vec<EntityRoute>,
+    pub entity_pos: usize,
+    pub active_artist: Option<ArtistDetail>,
+    pub active_album: Option<AlbumDetail>,
+    pub album_offline_progress: CollectionOfflineProgress,
+}
+
+impl Default for CatalogSlice {
+    fn default() -> Self {
+        Self::new(super::is_fixture_mode())
+    }
 }
 
 impl CatalogSlice {
@@ -136,6 +156,7 @@ impl CatalogSlice {
             home_sections,
             explore_sections: Vec::new(),
             explore_page: None,
+            home_mood_chips: Vec::new(),
             mood_playlists: Vec::new(),
             home_loading: !fixture,
             home_error: None,
@@ -143,6 +164,7 @@ impl CatalogSlice {
             section_pages: HashMap::new(),
             search_query: String::new(),
             search_filter: SearchFilter::All,
+            search_history: Vec::new(),
             search_all_tracks: initial_search.clone(),
             search_results: initial_search,
             search_albums: Vec::new(),
@@ -155,6 +177,11 @@ impl CatalogSlice {
             selected_collection: None,
             collection_search_query: String::new(),
             collection_sort_asc: false,
+            entity_history: Vec::new(),
+            entity_pos: 0,
+            active_artist: None,
+            active_album: None,
+            album_offline_progress: CollectionOfflineProgress::Unpinned,
         }
     }
 
@@ -181,6 +208,9 @@ impl CatalogSlice {
         if let Ok(page) = res {
             if !page.charts.is_empty() {
                 self.explore_sections = page.charts.clone();
+            }
+            if !page.moods_and_genres.is_empty() {
+                self.home_mood_chips = page.moods_and_genres.clone();
             }
             self.explore_page = Some(page);
         }
@@ -379,6 +409,63 @@ impl CatalogSlice {
     pub fn close_collection(&mut self) {
         self.selected_collection = None;
         self.collection_search_query.clear();
+    }
+
+    pub fn record_search_history(&mut self, query: &str) {
+        let trimmed = query.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        self.search_history
+            .retain(|item| !item.eq_ignore_ascii_case(trimmed));
+        self.search_history.insert(0, trimmed.to_owned());
+        self.search_history.truncate(20);
+    }
+
+    pub fn remove_search_history_item(&mut self, query: &str) {
+        self.search_history.retain(|item| item != query);
+    }
+
+    pub fn clear_search_history(&mut self) {
+        self.search_history.clear();
+    }
+
+    pub fn current_entity_route(&self) -> Option<&EntityRoute> {
+        self.entity_history.get(self.entity_pos)
+    }
+
+    pub fn push_entity_route(&mut self, route: EntityRoute) {
+        if self.entity_history.is_empty() {
+            self.entity_history.push(route);
+            self.entity_pos = 0;
+            return;
+        }
+        if self.entity_history.get(self.entity_pos) == Some(&route) {
+            return;
+        }
+        self.entity_history.truncate(self.entity_pos + 1);
+        self.entity_history.push(route);
+        self.entity_pos = self.entity_history.len().saturating_sub(1);
+    }
+
+    pub fn can_go_back_entity(&self) -> bool {
+        !self.entity_history.is_empty()
+    }
+
+    pub fn go_back_entity(&mut self) -> Option<EntityRoute> {
+        if self.entity_pos > 0 {
+            self.entity_pos -= 1;
+            self.entity_history.get(self.entity_pos).cloned()
+        } else {
+            self.entity_history.clear();
+            self.entity_pos = 0;
+            None
+        }
+    }
+
+    pub fn clear_entity_routes(&mut self) {
+        self.entity_history.clear();
+        self.entity_pos = 0;
     }
 }
 

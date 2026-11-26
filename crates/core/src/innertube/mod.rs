@@ -19,5 +19,5 @@ pub use clients::{AuthMode, ClientConfig, ClientKind};
 pub use formats::TargetPlatform;
 pub use matrix::{AccountTier, ClientMatrix, ClientMatrixEntry, PoTokenPolicy};
 pub use mutations::MutationWorker;
-pub use provider_adapter::{BrowseDelegate, CompositeMusicProvider, PlaybackResolver};
+pub use provider_adapter::{BrowseDelegate, PlaybackResolver};
 pub use remote_config::RemoteConfigSyncService;

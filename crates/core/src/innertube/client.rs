@@ -7,6 +7,7 @@
 //! - Graceful `401` cookie-rotation / session revocation recovery & `429` handling
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -67,6 +68,8 @@ pub struct InnerTubeClient {
     po_token_provider: RwLock<Option<Arc<dyn PoTokenProvider>>>,
     /// Whether the active signed-in session has YouTube Music Premium (bypasses GVS PO token & unlocks 256 kbps).
     is_premium_account: RwLock<bool>,
+    /// Controls catalog SWR caching (disabled when wrapped by `HybridMusicProvider` to avoid double caching).
+    swr_cache_enabled: AtomicBool,
 }
 
 impl InnerTubeClient {
@@ -102,7 +105,14 @@ impl InnerTubeClient {
             gvs_po_token: RwLock::new(None),
             po_token_provider: RwLock::new(None),
             is_premium_account: RwLock::new(false),
+            swr_cache_enabled: AtomicBool::new(true),
         })
+    }
+
+    /// Enables or disables catalog SWR metadata caching on this client.
+    /// Called with `false` by `HybridMusicProvider` so there is a single SWR layer.
+    pub fn set_swr_cache_enabled(&self, enabled: bool) {
+        self.swr_cache_enabled.store(enabled, Ordering::Relaxed);
     }
 
     pub fn with_circuit_breaker(mut self, breaker: Arc<ClientCircuitBreaker>) -> Self {
@@ -484,6 +494,20 @@ impl InnerTubeClient {
 
     /// Reads an SWR cache entry, self-healing (evicting) on corrupt JSON.
     fn read_swr<T: serde::de::DeserializeOwned>(&self, key: &str) -> Option<(T, bool)> {
+        if !self.swr_cache_enabled.load(Ordering::Relaxed) {
+            return None;
+        }
+        self.read_cache_entry(key)
+    }
+
+    fn write_swr<T: serde::Serialize>(&self, key: &str, value: &T, ttl_secs: u64) {
+        if !self.swr_cache_enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        self.write_cache_entry(key, value, ttl_secs);
+    }
+
+    fn read_cache_entry<T: serde::de::DeserializeOwned>(&self, key: &str) -> Option<(T, bool)> {
         let now = unix_secs();
         match self.cache.get_metadata(key, now) {
             Ok(Some((raw, is_stale))) => match serde_json::from_str::<T>(&raw) {
@@ -500,7 +524,7 @@ impl InnerTubeClient {
         }
     }
 
-    fn write_swr<T: serde::Serialize>(&self, key: &str, value: &T, ttl_secs: u64) {
+    fn write_cache_entry<T: serde::Serialize>(&self, key: &str, value: &T, ttl_secs: u64) {
         if let Ok(json_str) = serde_json::to_string(value) {
             let _ = self
                 .cache
@@ -700,7 +724,7 @@ impl MusicProvider for InnerTubeClient {
     /// gated by PO-token policy (`AccountTier`) and native decoder capabilities (`TargetPlatform`).
     async fn resolve_stream(&self, video_id: &str) -> CoreResult<StreamInfo> {
         let cache_key = format!("stream:{video_id}");
-        if let Some((cached, false)) = self.read_swr::<StreamInfo>(&cache_key)
+        if let Some((cached, false)) = self.read_cache_entry::<StreamInfo>(&cache_key)
             && cached.expires_at_unix_secs > unix_secs() + 60
         {
             return Ok(cached);
@@ -729,7 +753,7 @@ impl MusicProvider for InnerTubeClient {
                 Ok(stream) => {
                     self.circuit_breaker
                         .record_success(client.kind, started.elapsed().as_millis() as u64);
-                    self.write_swr(&cache_key, &stream, TTL_STREAM_SECS);
+                    self.write_cache_entry(&cache_key, &stream, TTL_STREAM_SECS);
                     return Ok(stream);
                 }
                 Err(e) => {

@@ -4,7 +4,7 @@
 //! - `--fixture`: seeds deterministic QA dataset (74-char title, CJK+emoji, missing-artwork
 //!   monogram fallback, synced karaoke lyrics, SponsorBlock segment)
 //! - `--self-check`: starts real Tokio runtime, SQLite WAL cache, 256 KB ChunkCache,
-//!   LoopbackProxy (`127.0.0.1`), `PlaybackController`, and `DesktopAudioBridge`, logs
+//!   LoopbackProxy (`127.0.0.1`), `PlaybackController`, and `NshAudioBackend`, logs
 //!   cold-launch latency, and exits cleanly.
 
 use std::sync::Arc;

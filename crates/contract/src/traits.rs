@@ -3,9 +3,9 @@
 use async_trait::async_trait;
 
 use crate::{
-    AuthError, AuthSession, CacheStats, CoreResult, DownloadRecord, DownloadStatus, HistoryEntry,
-    HomeSection, LyricsDocument, MediaCommand, OfflineStats, Playlist, QueueState, SearchResults,
-    SponsorSegment, StreamInfo, Track, TrackId,
+    AudioTelemetry, AuthError, AuthSession, CacheStats, CoreResult, DownloadRecord, DownloadStatus,
+    HistoryEntry, HomeSection, LyricsDocument, MediaCommand, OfflineStats, Playlist, QueueState,
+    SearchResults, SponsorSegment, StreamInfo, Track, TrackId,
 };
 
 #[async_trait]
@@ -40,6 +40,13 @@ pub trait AudioBackend: Send + Sync {
     async fn position_ms(&self) -> u64;
     async fn update_now_playing(&self, meta: NowPlayingMetadata, playing: bool, position_ms: u64);
     fn take_command_receiver(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<MediaCommand>>;
+
+    /// Optional unified telemetry stream emitted by the platform audio executor.
+    fn take_telemetry_receiver(
+        &self,
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<AudioTelemetry>> {
+        None
+    }
 }
 
 pub trait AuthStore: Send + Sync {

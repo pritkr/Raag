@@ -1151,9 +1151,9 @@ pub fn app_shell() -> impl IntoElement {
         .child(add_to_playlist_sheet())
         .child(auth_sign_in_sheet(
             signal(store::auth_sheet_open()),
-            signal(store::rooms_snapshot().tv_oauth_user_code),
-            signal(store::rooms_snapshot().tv_oauth_verification_url),
-            signal(store::rooms_snapshot().tv_oauth_expires_in_secs),
+            signal(store::settings_snapshot().tv_oauth_user_code),
+            signal(store::settings_snapshot().tv_oauth_verification_url),
+            signal(store::settings_snapshot().tv_oauth_expires_in_secs),
             AuthSignInCallbacks {
                 on_close: std::sync::Arc::new(store::close_auth_sheet),
                 ..AuthSignInCallbacks::default()

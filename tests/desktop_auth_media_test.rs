@@ -6,9 +6,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use resonance::platform::desktop::{
-    DesktopAudioBridge, DesktopAuthStore, DesktopPlaybackProjection, SecretVault, coalesce_seek_by,
+    DesktopAuthStore, DesktopPlaybackProjection, SecretVault, coalesce_seek_by,
     map_souvlaki_playback,
 };
+use resonance::platform::nsh_audio::NshAudioBackend;
 use resonance_contract::{
     AudioBackend, AuthError, AuthSession, AuthStore, CredentialBackendKind, MediaCommand,
     NowPlayingMetadata,
@@ -192,7 +193,7 @@ fn keyring_store_clear_wipes_both_vault_and_fallback_preventing_resurrection() {
 
 #[tokio::test]
 async fn desktop_bridge_dispatches_all_media_commands_to_playback_controller() {
-    let bridge = DesktopAudioBridge::with_hwnd(None);
+    let bridge = NshAudioBackend::with_hwnd(None);
     let mut rx = bridge
         .take_command_receiver()
         .expect("command receiver available once");

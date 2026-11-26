@@ -1,13 +1,16 @@
 //! Playback & Queue state slice (`PlaybackSlice`), keyboard shortcut mapping,
 //! and native `nsh/audio` driver snapshot/event handlers.
+//!
+//! All queue & shuffle deck invariants are delegated to [`QueueManager`] in `resonance-core`
+//! so there is a single authoritative implementation across the workspace.
 
 use nsh_core::prelude::SharedString;
-use rand::seq::SliceRandom;
 use resonance_contract::{
     CodecBadgeInfo, LyricsDocument, PlayerSnapshot, PlayerState, QueueState, RepeatMode,
     ShuffleDeck, SleepTimerState, Track,
 };
 use resonance_core::fixture::fixture_lyrics;
+use resonance_core::playback::QueueManager;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShortcutAction {
@@ -58,6 +61,18 @@ pub struct PlaybackSlice {
     pub shuffle_deck: ShuffleDeck,
     pub codec_badge: Option<CodecBadgeInfo>,
     pub sleep_timer: SleepTimerState,
+}
+
+impl Default for PlaybackSlice {
+    fn default() -> Self {
+        let fixture = super::is_fixture_mode();
+        let tracks = if fixture {
+            resonance_core::fixture::fixture_tracks()
+        } else {
+            Vec::new()
+        };
+        Self::new(fixture, tracks, super::proxy_stream_url)
+    }
 }
 
 impl PlaybackSlice {
@@ -138,14 +153,9 @@ impl PlaybackSlice {
             });
         self.player.queue.current_index = Some(pos);
         if self.player.queue.shuffle {
-            if inserted_at_front {
-                self.rebuild_shuffle_deck_keeping(Some(0));
-            } else if let Some(deck_pos) =
-                self.shuffle_deck.order.iter().position(|&idx| idx == pos)
-            {
-                self.shuffle_deck.cursor = deck_pos;
-            } else {
-                self.rebuild_shuffle_deck_keeping(Some(pos));
+            let len = self.player.queue.items.len();
+            if inserted_at_front || !QueueManager::shuffle_deck_sync_cursor(&mut self.shuffle_deck, pos) {
+                QueueManager::shuffle_deck_rebuild(&mut self.shuffle_deck, len, Some(pos));
             }
         }
         self.player.current_track = Some(track.clone());
@@ -173,48 +183,43 @@ impl PlaybackSlice {
         if tracks.is_empty() {
             return None;
         }
+        let len = tracks.len();
         self.player.queue.items = tracks;
         self.player.queue.shuffle = true;
-        self.rebuild_shuffle_deck_keeping(None);
+        QueueManager::shuffle_deck_rebuild(&mut self.shuffle_deck, len, None);
         let first_idx = self.shuffle_deck.order.first().copied().unwrap_or(0);
         self.activate_queue_index(first_idx, live, proxy_url_for)
     }
 
     pub fn play_next(&mut self, track: Track) -> String {
-        let idx = self
+        let title = track.title.clone();
+        let insert_idx = self
             .player
             .queue
             .current_index
             .map(|i| (i + 1).min(self.player.queue.items.len()))
             .unwrap_or(0);
-        let title = track.title.clone();
-        self.player.queue.items.insert(idx, track);
+        QueueManager::play_next(&mut self.player.queue, track);
         if self.player.queue.shuffle {
-            if self.shuffle_deck.order.is_empty() {
-                self.rebuild_shuffle_deck_keeping(self.player.queue.current_index);
-            } else {
-                for entry in &mut self.shuffle_deck.order {
-                    if *entry >= idx {
-                        *entry += 1;
-                    }
-                }
-                let insert_pos = (self.shuffle_deck.cursor + 1).min(self.shuffle_deck.order.len());
-                self.shuffle_deck.order.insert(insert_pos, idx);
-            }
+            QueueManager::shuffle_deck_on_insert(
+                &mut self.shuffle_deck,
+                self.player.queue.items.len(),
+                insert_idx,
+                self.player.queue.current_index,
+            );
         }
         format!("Added \"{title}\" to Play Next")
     }
 
     pub fn play_last(&mut self, track: Track) -> String {
         let title = track.title.clone();
-        self.player.queue.items.push(track);
+        QueueManager::play_last(&mut self.player.queue, track);
         if self.player.queue.shuffle {
-            let new_idx = self.player.queue.items.len() - 1;
-            if self.shuffle_deck.order.is_empty() {
-                self.rebuild_shuffle_deck_keeping(self.player.queue.current_index);
-            } else {
-                self.shuffle_deck.order.push(new_idx);
-            }
+            QueueManager::shuffle_deck_on_append(
+                &mut self.shuffle_deck,
+                self.player.queue.items.len(),
+                self.player.queue.current_index,
+            );
         }
         format!("Appended \"{title}\" to end of queue")
     }
@@ -250,38 +255,20 @@ impl PlaybackSlice {
         if len == 0 {
             return None;
         }
-        if self.player.queue.shuffle && !self.shuffle_deck.order.is_empty() {
-            let next_idx = match self.player.queue.repeat {
-                RepeatMode::One => self.shuffle_deck.order[self.shuffle_deck.cursor],
-                RepeatMode::None => {
-                    if self.shuffle_deck.cursor + 1 < self.shuffle_deck.order.len() {
-                        self.shuffle_deck.cursor += 1;
-                    }
-                    self.shuffle_deck.order[self.shuffle_deck.cursor]
-                }
-                RepeatMode::All => {
-                    if self.shuffle_deck.cursor + 1 < self.shuffle_deck.order.len() {
-                        self.shuffle_deck.cursor += 1;
-                    } else {
-                        let last_played = self
-                            .shuffle_deck
-                            .order
-                            .get(self.shuffle_deck.cursor)
-                            .copied();
-                        self.reshuffle_avoiding_first(len, last_played);
-                    }
-                    self.shuffle_deck.order[self.shuffle_deck.cursor]
-                }
-            };
-            return self.activate_queue_index(next_idx, live, proxy_url_for);
-        }
-        let cur = self.player.queue.current_index.unwrap_or(0);
-        let next = match self.player.queue.repeat {
-            RepeatMode::One => cur,
-            RepeatMode::All => (cur + 1) % len,
-            RepeatMode::None => (cur + 1).min(len - 1),
+        let next_idx = if self.player.queue.shuffle && !self.shuffle_deck.order.is_empty() {
+            QueueManager::shuffle_deck_next(
+                &mut self.shuffle_deck,
+                len,
+                self.player.queue.repeat,
+                false,
+            )?
+        } else {
+            QueueManager::resolve_next_index(&self.player.queue)
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| len.saturating_sub(1))
         };
-        self.activate_queue_index(next, live, proxy_url_for)
+        self.activate_queue_index(next_idx, live, proxy_url_for)
     }
 
     pub fn previous_track(
@@ -295,17 +282,14 @@ impl PlaybackSlice {
             self.seek_generation = self.seek_generation.wrapping_add(1);
             return None;
         }
-        let len = self.player.queue.items.len();
-        if len == 0 {
+        if self.player.queue.items.is_empty() {
             return None;
         }
-        if self.player.queue.shuffle && !self.shuffle_deck.order.is_empty() {
-            self.shuffle_deck.cursor = self.shuffle_deck.cursor.saturating_sub(1);
-            let prev = self.shuffle_deck.order[self.shuffle_deck.cursor];
-            return self.activate_queue_index(prev, live, proxy_url_for);
-        }
-        let cur = self.player.queue.current_index.unwrap_or(0);
-        let prev = cur.saturating_sub(1);
+        let prev = if self.player.queue.shuffle && !self.shuffle_deck.order.is_empty() {
+            QueueManager::shuffle_deck_prev(&mut self.shuffle_deck)?
+        } else {
+            QueueManager::resolve_previous_index(&self.player.queue).ok()?
+        };
         self.activate_queue_index(prev, live, proxy_url_for)
     }
 
@@ -315,10 +299,8 @@ impl PlaybackSlice {
         live: bool,
         proxy_url_for: impl Fn(&str) -> String,
     ) -> Option<Track> {
-        if self.player.queue.shuffle
-            && let Some(deck_pos) = self.shuffle_deck.order.iter().position(|&i| i == index)
-        {
-            self.shuffle_deck.cursor = deck_pos;
+        if self.player.queue.shuffle {
+            QueueManager::shuffle_deck_sync_cursor(&mut self.shuffle_deck, index);
         }
         self.activate_queue_index(index, live, proxy_url_for)
     }
@@ -354,31 +336,9 @@ impl PlaybackSlice {
         if from >= len || to >= len || from == to {
             return;
         }
-        let item = self.player.queue.items.remove(from);
-        self.player.queue.items.insert(to, item);
-        if let Some(cur) = self.player.queue.current_index {
-            self.player.queue.current_index = Some(if cur == from {
-                to
-            } else if from < cur && cur <= to {
-                cur - 1
-            } else if to <= cur && cur < from {
-                cur + 1
-            } else {
-                cur
-            });
-        }
+        QueueManager::reorder(&mut self.player.queue, from, to);
         if self.player.queue.shuffle {
-            for entry in &mut self.shuffle_deck.order {
-                *entry = if *entry == from {
-                    to
-                } else if from < *entry && *entry <= to {
-                    *entry - 1
-                } else if to <= *entry && *entry < from {
-                    *entry + 1
-                } else {
-                    *entry
-                };
-            }
+            QueueManager::shuffle_deck_on_reorder(&mut self.shuffle_deck, from, to);
         }
     }
 
@@ -386,50 +346,26 @@ impl PlaybackSlice {
         if index >= self.player.queue.items.len() {
             return;
         }
-        self.player.queue.items.remove(index);
         if self.player.queue.shuffle {
-            if let Some(pos) = self.shuffle_deck.order.iter().position(|&i| i == index) {
-                self.shuffle_deck.order.remove(pos);
-                if pos < self.shuffle_deck.cursor {
-                    self.shuffle_deck.cursor = self.shuffle_deck.cursor.saturating_sub(1);
-                }
-            }
-            for entry in &mut self.shuffle_deck.order {
-                if *entry > index {
-                    *entry -= 1;
-                }
-            }
-            if !self.shuffle_deck.order.is_empty() {
-                self.shuffle_deck.cursor = self
-                    .shuffle_deck
-                    .cursor
-                    .min(self.shuffle_deck.order.len() - 1);
-            } else {
-                self.shuffle_deck.cursor = 0;
-            }
+            QueueManager::shuffle_deck_on_remove(&mut self.shuffle_deck, index);
         }
-        if self.player.queue.items.is_empty() {
-            self.player.queue.current_index = None;
-            self.player.current_track = None;
-            self.player.active_proxy_url = None;
-            self.player.state = PlayerState::Idle;
-            self.shuffle_deck = ShuffleDeck::default();
-        } else if let Some(cur) = self.player.queue.current_index {
-            if index < cur {
-                self.player.queue.current_index = Some(cur - 1);
-            } else if index == cur {
-                let next = cur.min(self.player.queue.items.len() - 1);
-                self.player.queue.current_index = Some(next);
-                let next_track = self.player.queue.items.get(next).cloned();
-                self.player.active_proxy_url = next_track.as_ref().map(|t| proxy_url_for(&t.id));
-                self.player.current_track = next_track;
+        match QueueManager::remove(&mut self.player.queue, index) {
+            Some(None) => {
+                self.player.current_track = None;
+                self.player.active_proxy_url = None;
+                self.player.state = PlayerState::Idle;
+                self.shuffle_deck = ShuffleDeck::default();
             }
+            Some(Some(next_track)) => {
+                self.player.active_proxy_url = Some(proxy_url_for(&next_track.id));
+                self.player.current_track = Some(next_track);
+            }
+            None => {}
         }
     }
 
     pub fn clear_queue(&mut self) {
-        self.player.queue.items.clear();
-        self.player.queue.current_index = None;
+        QueueManager::clear_preserving_modes(&mut self.player.queue);
         self.player.current_track = None;
         self.player.active_proxy_url = None;
         self.player.state = PlayerState::Idle;
@@ -440,7 +376,11 @@ impl PlaybackSlice {
         let next = !self.player.queue.shuffle;
         self.player.queue.shuffle = next;
         if next {
-            self.rebuild_shuffle_deck_keeping(self.player.queue.current_index);
+            QueueManager::shuffle_deck_rebuild(
+                &mut self.shuffle_deck,
+                self.player.queue.items.len(),
+                self.player.queue.current_index,
+            );
         } else {
             if let Some(restored) = self
                 .shuffle_deck
@@ -455,53 +395,16 @@ impl PlaybackSlice {
         }
     }
 
-    fn rebuild_shuffle_deck_keeping(&mut self, keep_first: Option<usize>) {
-        let len = self.player.queue.items.len();
-        if len == 0 {
-            self.shuffle_deck = ShuffleDeck::default();
-            return;
-        }
-        let mut rng = rand::rng();
-        let order = match keep_first.filter(|&i| i < len) {
-            Some(first) => {
-                let mut rest: Vec<usize> = (0..len).filter(|&i| i != first).collect();
-                rest.shuffle(&mut rng);
-                let mut full = Vec::with_capacity(len);
-                full.push(first);
-                full.extend(rest);
-                full
-            }
-            None => {
-                let mut full: Vec<usize> = (0..len).collect();
-                full.shuffle(&mut rng);
-                full
-            }
-        };
-        self.shuffle_deck = ShuffleDeck { order, cursor: 0 };
-    }
-
-    fn reshuffle_avoiding_first(&mut self, len: usize, avoid_first: Option<usize>) {
-        self.rebuild_shuffle_deck_keeping(None);
-        if len > 1
-            && let Some(avoid) = avoid_first
-            && self.shuffle_deck.order.first().copied() == Some(avoid)
-            && let Some(swap_pos) = self.shuffle_deck.order.iter().position(|&i| i != avoid)
-        {
-            self.shuffle_deck.order.swap(0, swap_pos);
-        }
-        self.shuffle_deck.cursor = 0;
-    }
-
     pub fn cycle_repeat(&mut self) {
-        self.player.queue.repeat = self.player.queue.repeat.cycle();
+        QueueManager::cycle_repeat(&mut self.player.queue);
     }
 
     pub fn set_volume(&mut self, volume: f32) {
-        self.player.volume = volume.clamp(0.0, 1.6);
+        self.player.volume = volume.clamp(0.0, 1.0);
     }
 
     pub fn adjust_volume(&mut self, delta: f32) {
-        self.player.volume = (self.player.volume + delta).clamp(0.0, 1.6);
+        self.player.volume = (self.player.volume + delta).clamp(0.0, 1.0);
     }
 
     pub fn toggle_mute(&mut self) {
@@ -592,43 +495,17 @@ impl PlaybackSlice {
             self.player.active_proxy_url = None;
             return None;
         }
-        if self.player.queue.shuffle && !self.shuffle_deck.order.is_empty() {
-            let next_idx = match self.player.queue.repeat {
-                RepeatMode::One => Some(self.shuffle_deck.order[self.shuffle_deck.cursor]),
-                RepeatMode::All => {
-                    if self.shuffle_deck.cursor + 1 < self.shuffle_deck.order.len() {
-                        self.shuffle_deck.cursor += 1;
-                    } else {
-                        let last_played = self
-                            .shuffle_deck
-                            .order
-                            .get(self.shuffle_deck.cursor)
-                            .copied();
-                        self.reshuffle_avoiding_first(len, last_played);
-                    }
-                    Some(self.shuffle_deck.order[self.shuffle_deck.cursor])
-                }
-                RepeatMode::None => {
-                    if self.shuffle_deck.cursor + 1 < self.shuffle_deck.order.len() {
-                        self.shuffle_deck.cursor += 1;
-                        Some(self.shuffle_deck.order[self.shuffle_deck.cursor])
-                    } else {
-                        None
-                    }
-                }
-            };
-            return if let Some(idx) = next_idx {
-                self.activate_queue_index(idx, live, proxy_url_for)
-            } else {
-                self.player.state = PlayerState::Paused;
-                None
-            };
-        }
-        let cur = self.player.queue.current_index.unwrap_or(0);
-        let next = match self.player.queue.repeat {
-            RepeatMode::One => Some(cur),
-            RepeatMode::All => Some((cur + 1) % len),
-            RepeatMode::None => (cur + 1 < len).then_some(cur + 1),
+        let next = if self.player.queue.shuffle && !self.shuffle_deck.order.is_empty() {
+            QueueManager::shuffle_deck_next(
+                &mut self.shuffle_deck,
+                len,
+                self.player.queue.repeat,
+                true,
+            )
+        } else {
+            QueueManager::resolve_next_index(&self.player.queue)
+                .ok()
+                .flatten()
         };
         if let Some(next_idx) = next {
             self.activate_queue_index(next_idx, live, proxy_url_for)
@@ -667,6 +544,15 @@ mod tests {
         assert_eq!(slice.player.queue.current_index, Some(0));
         slice.move_queue_item(0, 2);
         assert_eq!(slice.player.queue.current_index, Some(2));
+    }
+
+    #[test]
+    fn volume_is_clamped_to_unit_interval() {
+        let mut slice = PlaybackSlice::new(true, fixture_tracks(), mock_proxy);
+        slice.set_volume(1.6);
+        assert_eq!(slice.player.volume, 1.0);
+        slice.adjust_volume(-2.0);
+        assert_eq!(slice.player.volume, 0.0);
     }
 
     #[test]
