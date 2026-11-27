@@ -16,7 +16,8 @@ use crate::store;
 use crate::store::settings_slice::AudioDspCapability;
 use crate::ui::controls::{secondary_button, setting_switch};
 use crate::ui::tokens::{
-    MOBILE_MIN_TOUCH_TARGET, color_status_ok, glass_hairline, pill_glass_surface, radius_card,
+    MOBILE_MIN_TOUCH_TARGET, PROSE_MAX_WIDTH, color_status_ok, glass_hairline, pill_glass_surface,
+    radius_card,
 };
 
 #[derive(Clone)]
@@ -135,6 +136,7 @@ pub fn dsp_settings_card(props: DspCardProps) -> impl IntoElement {
                         .border_color(glass_hairline)
                         .child(
                             text("Direct system playback is active. 10-band EQ, ReplayGain, Silence Skip, and Crossfade activate automatically when the native PCM engine is enabled.")
+                                .max_w(px(PROSE_MAX_WIDTH))
                                 .text_xs()
                                 .text_color(move || theme().muted_foreground),
                         ),
@@ -142,7 +144,6 @@ pub fn dsp_settings_card(props: DspCardProps) -> impl IntoElement {
                 .child(
                     view()
                         .test_id("audio-dsp-preview-controls")
-                        .opacity(0.5)
                         .gap_2()
                         .child(gated_preview_row("ReplayGain / EBU R128 Loudness", "Requires PCM"))
                         .child(gated_preview_row("Skip Silence", "Requires PCM"))
@@ -202,8 +203,10 @@ pub fn dsp_settings_card(props: DspCardProps) -> impl IntoElement {
                             let gain_txt = if gain >= 0.0 {
                                 format!("+{gain:.0}dB")
                             } else {
-                                format!("{gain:.0}dB")
+                                format!("\u{2212}{:.0}dB", gain.abs())
                             };
+                            let dec_a11y = format!("Decrease {lbl} band (currently {gain_txt})");
+                            let inc_a11y = format!("Increase {lbl} band (currently {gain_txt})");
                             view()
                                 .min_w(px(76.0))
                                 .p_2()
@@ -232,17 +235,22 @@ pub fn dsp_settings_card(props: DspCardProps) -> impl IntoElement {
                                         .gap_1()
                                         .child(
                                             button()
+                                                .accessibility_label(dec_a11y)
                                                 .min_w(px(MOBILE_MIN_TOUCH_TARGET))
                                                 .min_h(px(MOBILE_MIN_TOUCH_TARGET))
                                                 .items_center()
                                                 .justify_center()
                                                 .rounded(move || theme().radius)
                                                 .bg(move || theme().card)
+                                                .focus_visible(|s| {
+                                                    s.outline(px(2.0))
+                                                        .outline_color(move || theme().ring)
+                                                })
                                                 .on_press(move || {
                                                     store::set_eq_band_gain(idx, gain - 1.5);
                                                 })
                                                 .child(
-                                                    text("-")
+                                                    text("\u{2212}")
                                                         .text_sm()
                                                         .font_weight(FontWeight::BOLD)
                                                         .text_color(move || theme().foreground),
@@ -250,12 +258,17 @@ pub fn dsp_settings_card(props: DspCardProps) -> impl IntoElement {
                                         )
                                         .child(
                                             button()
+                                                .accessibility_label(inc_a11y)
                                                 .min_w(px(MOBILE_MIN_TOUCH_TARGET))
                                                 .min_h(px(MOBILE_MIN_TOUCH_TARGET))
                                                 .items_center()
                                                 .justify_center()
                                                 .rounded(move || theme().radius)
                                                 .bg(move || theme().card)
+                                                .focus_visible(|s| {
+                                                    s.outline(px(2.0))
+                                                        .outline_color(move || theme().ring)
+                                                })
                                                 .on_press(move || {
                                                     store::set_eq_band_gain(idx, gain + 1.5);
                                                 })

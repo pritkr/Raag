@@ -255,7 +255,7 @@ impl AppEngine {
         );
         crate::platform::android::update_android_auto_tab(
             "tab_queue",
-            initial_snap.queue.tracks.clone(),
+            initial_snap.queue.items.clone(),
         );
         let _ = tx.send(LiveUpdate::DownloadsLoaded(initial_downloads));
         let initial_pinned = vault.list_pinned_collections().unwrap_or_default();
@@ -271,7 +271,7 @@ impl AppEngine {
         if let Some(cached_lib) = load_cached_library_snapshot(cache.as_ref()) {
             crate::platform::android::update_android_auto_tab(
                 "tab_library",
-                cached_lib.liked_tracks.clone(),
+                cached_lib.liked_songs.clone(),
             );
             let _ = tx.send(LiveUpdate::LibraryLoaded(cached_lib));
         }
@@ -444,12 +444,7 @@ fn spawn_online_bootstrap(
             provider_for_rc.update_client_matrix(matrix);
         }
         let _ = rc_for_sync.sync_solver_manifest(false).await;
-        if let Err(err) = provider_for_rc.warm_player_solver().await {
-            log::debug!(
-                "background EJS player script warm skipped: {}",
-                redact_secrets(&err.to_string())
-            );
-        }
+        provider_for_rc.warm_player_solver().await;
         let _ = tx_for_rc.send(LiveUpdate::RemoteConfigUpdated(rc_for_sync.status()));
     });
 

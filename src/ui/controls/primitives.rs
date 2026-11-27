@@ -1,15 +1,16 @@
 //! Atomic UI primitives: buttons, chips, artwork tiles, and switches.
 //! Zero raw color literals — semantic theme tokens only.
 
-use nsh_base::{button, switch, theme};
+use nsh_base::{alert_dialog, button, input, switch, theme};
 use nsh_core::prelude::*;
 
 use crate::store;
 use crate::ui::icons::{IconKind, icon};
 use crate::ui::tokens::{
-    MOBILE_MIN_TOUCH_TARGET, color_control, color_control_fg, color_hero_pill_bg,
-    color_hero_pill_fg, cover_gradient_pair, glass_hairline, is_desktop_layout, motion,
-    pill_glass_hover, pill_glass_surface, radius_card, radius_pill,
+    MOBILE_MIN_TOUCH_TARGET, color_control, color_control_fg, color_destructive_foreground,
+    color_hero_pill_bg, color_hero_pill_fg, color_on_cover, color_player_accent,
+    cover_gradient_pair, glass_hairline, is_desktop_layout, motion, pill_glass_hover,
+    pill_glass_surface, radius_card, radius_pill,
 };
 
 fn press_duration_ms() -> f32 {
@@ -154,6 +155,160 @@ pub fn secondary_button(
                 .text_sm()
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(move || theme().foreground),
+        )
+}
+
+/// High-contrast destructive action button (>=48dp touch target, WCAG AA destructive-foreground).
+pub fn destructive_button(
+    label: impl IntoReactive<SharedString>,
+    on_press: impl Fn() + 'static,
+) -> impl IntoElement {
+    button()
+        .on_press(on_press)
+        .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+        .px_4()
+        .items_center()
+        .justify_center()
+        .rounded(move || theme().radius)
+        .bg(move || theme().destructive)
+        .transition()
+        .duration(press_duration_ms)
+        .ease_out()
+        .hover(|s| s.opacity(0.92))
+        .active(|s| s.scale(active_press_scale).opacity(0.84))
+        .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
+        .disabled_style(|s| s.opacity(0.45))
+        .child(
+            text(label)
+                .text_sm()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(color_destructive_foreground),
+        )
+}
+
+/// Non-blocking native confirmation dialog (`nsh_base::alert_dialog()`) for destructive actions.
+/// Executes `on_confirm` ONLY if the user explicitly confirms; Cancel/dismiss is a safe no-op.
+pub fn confirm_destructive(
+    title: impl Into<SharedString>,
+    description: impl Into<SharedString>,
+    confirm_label: impl Into<SharedString>,
+    on_confirm: impl FnOnce() + 'static,
+) {
+    let title: SharedString = title.into();
+    let description: SharedString = description.into();
+    let confirm_label: SharedString = confirm_label.into();
+    let answer = alert_dialog()
+        .title(title)
+        .description(description)
+        .cancel("cancel", "Cancel")
+        .destructive("confirm", confirm_label)
+        .show();
+    spawn(async move {
+        if answer
+            .await
+            .is_ok_and(|res| res.action.as_deref() == Some("confirm"))
+        {
+            on_confirm();
+        }
+    });
+}
+
+/// Non-color-only active state indicator dot (4px accent pip paired with icon/border changes).
+pub fn active_state_dot(active: impl Fn() -> bool + 'static) -> impl IntoElement {
+    when(active, || {
+        view()
+            .w(px(4.0))
+            .h(px(4.0))
+            .rounded_full()
+            .bg(color_player_accent)
+            .accessibility_elements_hidden(true)
+    })
+}
+
+/// Accessible labeled text input with WCAG 1.4.11 `theme().input` border (`>= 3:1`),
+/// focus ring, >=48dp touch height, and automatic global shortcut suppression on focus/blur.
+pub fn labeled_input(
+    label: &'static str,
+    test_id: &'static str,
+    placeholder: &'static str,
+    value: impl Fn() -> String + 'static,
+    on_change: impl Fn(&str) + 'static,
+) -> impl IntoElement {
+    view()
+        .flex_1()
+        .min_w(px(0.0))
+        .gap_1p5()
+        .child(
+            text(label)
+                .text_xs()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(move || theme().foreground),
+        )
+        .child(
+            input()
+                .test_id(test_id)
+                .value(value)
+                .on_change(on_change)
+                .on_focus(|| crate::ui::controls::set_text_input_focused(true))
+                .on_blur(|| crate::ui::controls::set_text_input_focused(false))
+                .placeholder(placeholder)
+                .placeholder_color(|| color(theme().muted_foreground))
+                .caret_color(|| color(theme().primary))
+                .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                .w_full()
+                .px_3p5()
+                .text_sm()
+                .text_color(move || theme().foreground)
+                .bg(pill_glass_surface)
+                .rounded(move || theme().radius)
+                .border_1()
+                .border_color(move || theme().input)
+                .focus(|s| s.border_color(move || theme().ring)),
+        )
+}
+
+/// Accessible labeled text input supporting an `on_submit` handler and `ReturnKeyType`.
+pub fn labeled_input_with_submit(
+    label: &'static str,
+    test_id: &'static str,
+    placeholder: &'static str,
+    return_key: ReturnKeyType,
+    value: impl Fn() -> String + 'static,
+    on_change: impl Fn(&str) + 'static,
+    on_submit: impl Fn(&str) + 'static,
+) -> impl IntoElement {
+    view()
+        .flex_1()
+        .min_w(px(0.0))
+        .gap_1p5()
+        .child(
+            text(label)
+                .text_xs()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(move || theme().foreground),
+        )
+        .child(
+            input()
+                .test_id(test_id)
+                .value(value)
+                .on_change(on_change)
+                .on_submit(on_submit)
+                .on_focus(|| crate::ui::controls::set_text_input_focused(true))
+                .on_blur(|| crate::ui::controls::set_text_input_focused(false))
+                .placeholder(placeholder)
+                .placeholder_color(|| color(theme().muted_foreground))
+                .caret_color(|| color(theme().primary))
+                .return_key_type(return_key)
+                .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                .w_full()
+                .px_3p5()
+                .text_sm()
+                .text_color(move || theme().foreground)
+                .bg(pill_glass_surface)
+                .rounded(move || theme().radius)
+                .border_1()
+                .border_color(move || theme().input)
+                .focus(|s| s.border_color(move || theme().ring)),
         )
 }
 
@@ -338,6 +493,7 @@ pub fn artwork_box(
         .w(px(size_px))
         .h(px(size_px))
         .rounded(px(radius_px))
+        .bg(move || grad_from)
         .bg_linear_to_br()
         .gradient_from(move || grad_from)
         .gradient_to(move || grad_to)
@@ -353,7 +509,7 @@ pub fn artwork_box(
                     .when(!large_mono && size_px >= 64.0, |t| t.text_xl())
                     .when(size_px < 64.0, |t| t.text_sm())
                     .font_weight(FontWeight::BOLD)
-                    .text_color(move || theme().primary_foreground),
+                    .text_color(color_on_cover),
             )
         })
         .when_some(resolved_url, move |v, url| {

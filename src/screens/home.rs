@@ -14,9 +14,10 @@ use crate::ui::controls::{
     status_card, svg_icon_button, track_row_view,
 };
 use crate::ui::icons::IconKind;
+use crate::ui::text_format::{format_recoverable_error, pluralize, quote_term};
 use crate::ui::tokens::{
-    MOBILE_MIN_TOUCH_TARGET, eyebrow_label, glass_hairline, is_desktop_layout, pill_glass_surface,
-    radius_card, radius_pill,
+    MOBILE_MIN_TOUCH_TARGET, eyebrow_label, glass_hairline, is_desktop_layout, is_narrow_viewport,
+    pill_glass_surface, radius_card, radius_pill,
 };
 
 const HOME_MOODS: [&str; 11] = [
@@ -68,12 +69,13 @@ fn collection_detail_view() -> impl IntoElement {
                 .map(|c| c.to_uppercase().to_string())
                 .unwrap_or_else(|| "♫".into());
             let song_count = playlist.tracks.len();
+            let songs_label = pluralize(song_count, "song", "songs");
             let total_mins = format_total_minutes(&playlist.tracks);
             let stats_line = match playlist.subtitle.as_deref() {
                 Some(sub) if !sub.is_empty() => {
-                    format!("{sub} • {song_count} songs • {total_mins} min")
+                    format!("{sub} • {songs_label} • {total_mins} min")
                 }
-                _ => format!("{song_count} songs • {total_mins} min"),
+                _ => format!("{songs_label} • {total_mins} min"),
             };
 
             let tracks_for_play_all = playlist.tracks.clone();
@@ -123,7 +125,8 @@ fn collection_detail_view() -> impl IntoElement {
                                 )
                                 .child(
                                     text(stats_line)
-                                        .number_of_lines(1)
+                                        .number_of_lines(2)
+                                        .tabular_nums()
                                         .text_sm()
                                         .text_color(move || theme().muted_foreground),
                                 )
@@ -157,8 +160,8 @@ fn collection_detail_view() -> impl IntoElement {
                                                 store::set_autoplay_radio(true);
                                                 store::play_queue(tracks_for_radio.clone(), 0);
                                                 store::set_status_banner(format!(
-                                                    "Radio started from \"{}\"",
-                                                    radio_title
+                                                    "Radio started from {}",
+                                                    quote_term(&radio_title)
                                                 ));
                                             },
                                         )),
@@ -188,7 +191,7 @@ fn collection_detail_view() -> impl IntoElement {
                                 .on_change(store::set_collection_search_query)
                                 .on_focus(|| set_text_input_focused(true))
                                 .on_blur(|| set_text_input_focused(false))
-                                .placeholder("Find in this list")
+                                .placeholder("Filter songs, artists, albums…")
                                 .placeholder_color(|| color(theme().muted_foreground))
                                 .caret_color(|| color(theme().primary))
                                 .flex_1()
@@ -199,7 +202,7 @@ fn collection_detail_view() -> impl IntoElement {
                                 .bg(pill_glass_surface)
                                 .rounded(radius_pill)
                                 .border_1()
-                                .border_color(glass_hairline)
+                                .border_color(move || theme().input)
                                 .focus(|s| s.border_color(move || theme().ring)),
                         ),
                 )
@@ -227,19 +230,20 @@ fn collection_detail_view() -> impl IntoElement {
                     }
 
                     if filtered.is_empty() {
+                        if query.is_empty() {
+                            return status_card(
+                                "Playlist has no tracks",
+                                "Tracks will appear here once loaded.",
+                                Some("Back to Home"),
+                                Some(Box::new(store::close_collection)),
+                            )
+                            .into_element();
+                        }
                         return status_card(
-                            if query.is_empty() {
-                                "Playlist has no tracks"
-                            } else {
-                                "No matching tracks"
-                            },
-                            if query.is_empty() {
-                                "Tracks will appear here once loaded."
-                            } else {
-                                "Try another song title or artist name."
-                            },
-                            None,
-                            None,
+                            SharedString::from(format!("No tracks match {}", quote_term(&query))),
+                            "Try another song title or artist name, or clear the filter.",
+                            Some("Clear filter"),
+                            Some(Box::new(|| store::set_collection_search_query(""))),
                         )
                         .into_element();
                     }
@@ -423,33 +427,70 @@ fn track_section_view(
             let active_id = current_id_memo.get();
 
             if desktop {
-                view()
-                    .gap_1()
-                    .children(slice.chunks(3).map(|row_tracks| {
-                        let mut cols = Vec::with_capacity(3);
-                        for track in row_tracks {
+                let win_w = window().width.0;
+                let sidebar_w = if store::sidebar_collapsed() {
+                    76.0
+                } else {
+                    240.0
+                };
+                let panel_w = if store::desktop_side_panel_open() && win_w >= 1120.0 {
+                    336.0
+                } else {
+                    0.0
+                };
+                let center_w = (win_w - sidebar_w - panel_w - 64.0).max(0.0);
+                let col_count: usize = if center_w >= 960.0 {
+                    3
+                } else if center_w >= 660.0 {
+                    2
+                } else {
+                    1
+                };
+
+                if col_count == 1 {
+                    view()
+                        .gap_1()
+                        .children(slice.into_iter().map(move |track| {
                             let is_cur = active_id.as_deref() == Some(track.id.as_str());
                             let t_play = track.clone();
                             let t_next = track.clone();
-                            cols.push(
-                                view()
-                                    .flex_1()
-                                    .min_w(px(0.0))
-                                    .child(compact_mix_row(
-                                        track.clone(),
-                                        is_cur,
-                                        move || store::play_track(t_play.clone()),
-                                        move || store::play_next(t_next.clone()),
-                                    ))
-                                    .into_element(),
-                            );
-                        }
-                        while cols.len() < 3 {
-                            cols.push(view().flex_1().min_w(px(0.0)).into_element());
-                        }
-                        view().flex_row().gap_3().children(cols)
-                    }))
-                    .into_element()
+                            compact_mix_row(
+                                track,
+                                is_cur,
+                                move || store::play_track(t_play.clone()),
+                                move || store::play_next(t_next.clone()),
+                            )
+                        }))
+                        .into_element()
+                } else {
+                    view()
+                        .gap_1()
+                        .children(slice.chunks(col_count).map(|row_tracks| {
+                            let mut cols = Vec::with_capacity(col_count);
+                            for track in row_tracks {
+                                let is_cur = active_id.as_deref() == Some(track.id.as_str());
+                                let t_play = track.clone();
+                                let t_next = track.clone();
+                                cols.push(
+                                    view()
+                                        .flex_1()
+                                        .min_w(px(0.0))
+                                        .child(compact_mix_row(
+                                            track.clone(),
+                                            is_cur,
+                                            move || store::play_track(t_play.clone()),
+                                            move || store::play_next(t_next.clone()),
+                                        ))
+                                        .into_element(),
+                                );
+                            }
+                            while cols.len() < col_count {
+                                cols.push(view().flex_1().min_w(px(0.0)).into_element());
+                            }
+                            view().flex_row().gap_3().children(cols)
+                        }))
+                        .into_element()
+                }
             } else {
                 view()
                     .gap_1()
@@ -616,53 +657,60 @@ fn home_feed_view() -> impl IntoElement {
                 .p_3()
                 .gap_3()
                 .style_when(is_desktop_layout, |s| s.px_8().py_5().gap_6())
-                // Mood / category filter chips row (in-place YouTube Music home filtering)
-                .child(
-                    scroll()
-                        .horizontal()
-                        .w_full()
-                        .min_h(px(MOBILE_MIN_TOUCH_TARGET))
-                        .child(dynamic(|| {
-                            let live_chips = store::home_mood_chips();
-                            let active = store::selected_mood();
-                            let chips: Vec<(String, Option<String>)> = if !live_chips.is_empty() {
-                                live_chips
-                                    .into_iter()
-                                    .map(|c| (c.title, Some(c.params)))
-                                    .collect()
-                            } else {
-                                HOME_MOODS
-                                    .into_iter()
-                                    .map(|m| (m.to_owned(), None))
-                                    .collect()
-                            };
+                // Mood / category filter chips row (wraps on narrow viewports so no chips hide off-screen)
+                .child(dynamic(|| {
+                    let narrow = is_narrow_viewport();
+                    let live_chips = store::home_mood_chips();
+                    let active = store::selected_mood();
+                    let chips: Vec<(String, Option<String>)> = if !live_chips.is_empty() {
+                        live_chips
+                            .into_iter()
+                            .map(|c| (c.title, Some(c.params)))
+                            .collect()
+                    } else {
+                        HOME_MOODS
+                            .into_iter()
+                            .map(|m| (m.to_owned(), None))
+                            .collect()
+                    };
 
-                            let mut row = view().flex_row().items_center().gap_2().py_1();
-                            if active.is_some() {
-                                row = row.child(mood_chip_with_icon(
-                                    Some(IconKind::Close),
-                                    "Clear",
-                                    || false,
-                                    store::clear_home_mood,
-                                ));
-                            }
-                            row.children(chips.into_iter().map(|(label, params)| {
-                                let label_cmp = label.clone();
-                                let label_click = label.clone();
-                                mood_chip(
-                                    SharedString::from(label),
-                                    move || {
-                                        store::selected_mood().as_deref()
-                                            == Some(label_cmp.as_str())
-                                    },
-                                    move || {
-                                        store::select_home_mood(&label_click, params.clone());
-                                    },
-                                )
-                            }))
+                    let mut row = view()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .py_1()
+                        .when(narrow, |v| v.flex_wrap());
+                    if active.is_some() {
+                        row = row.child(mood_chip_with_icon(
+                            Some(IconKind::Close),
+                            "Clear",
+                            || false,
+                            store::clear_home_mood,
+                        ));
+                    }
+                    let row = row.children(chips.into_iter().map(|(label, params)| {
+                        let is_selected = active.as_deref() == Some(label.as_str());
+                        let label_click = label.clone();
+                        mood_chip(
+                            SharedString::from(label),
+                            move || is_selected,
+                            move || {
+                                store::select_home_mood(&label_click, params.as_deref());
+                            },
+                        )
+                    }));
+
+                    if narrow {
+                        row.w_full().into_element()
+                    } else {
+                        scroll()
+                            .horizontal()
+                            .w_full()
+                            .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                            .child(row)
                             .into_element()
-                        })),
-                )
+                    }
+                }))
                 // Loading skeletons
                 .child(when(store::is_home_loading, || {
                     view()
@@ -678,7 +726,13 @@ fn home_feed_view() -> impl IntoElement {
                     || {
                         status_card(
                             "Unable to reach YouTube Music",
-                            move || SharedString::from(store::home_error().unwrap_or_default()),
+                            move || {
+                                SharedString::from(format_recoverable_error(
+                                    "Could not load YouTube Music home feed",
+                                    &store::home_error().unwrap_or_default(),
+                                    "Check your internet connection and select Retry.",
+                                ))
+                            },
                             Some("Retry"),
                             Some(Box::new(store::refresh_home)),
                         )

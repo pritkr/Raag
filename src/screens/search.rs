@@ -5,11 +5,13 @@ use nsh_base::{button, input, theme};
 use nsh_core::prelude::*;
 use resonance_contract::{Track, format_duration_ms};
 
-use crate::store::{self, SearchFilter};
+use crate::store::{self, AppTab, SearchFilter};
 use crate::ui::controls::{
-    TrackMenuContext, artwork_box, primary_button, skeleton_row, status_card, track_context_menu,
+    TrackMenuContext, artwork_box, primary_button, set_text_input_focused, skeleton_row,
+    status_card, track_context_menu,
 };
 use crate::ui::icons::{IconKind, icon, reactive_icon};
+use crate::ui::text_format::{format_recoverable_error, pluralize, quote_term};
 use crate::ui::tokens::{
     MOBILE_MIN_TOUCH_TARGET, color_hero_pill_bg, color_hero_pill_fg, color_liked,
     color_player_accent, glass_hairline, is_desktop_layout, pill_glass_hover, pill_glass_surface,
@@ -21,6 +23,7 @@ fn filter_tab(filter: SearchFilter, test_id: &'static str) -> impl IntoElement {
     button()
         .test_id(test_id)
         .accessibility_label(filter.label())
+        .selected(active)
         .on_press(move || store::set_search_filter(filter))
         .min_h(px(MOBILE_MIN_TOUCH_TARGET))
         .px_4()
@@ -102,6 +105,7 @@ fn search_track_row(
                 .items_center()
                 .gap_3()
                 .active(|s| s.opacity(0.75))
+                .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                 .on_press(move || store::play_track(t_play.clone()))
                 .child(artwork_box(art_url, mono, 44.0, 8.0))
                 .child(
@@ -167,6 +171,7 @@ fn search_track_row(
                             text(plays)
                                 .number_of_lines(1)
                                 .text_xs()
+                                .tabular_nums()
                                 .text_color(move || theme().muted_foreground),
                         ),
                     )
@@ -179,9 +184,18 @@ fn search_track_row(
                 ),
         )
         .when(desktop, move |row| {
+            let is_liked_label = is_liked.clone();
+            let is_liked_sel = is_liked.clone();
             row.child(
                 button()
-                    .accessibility_label("Toggle Like Track")
+                    .accessibility_label(move || {
+                        Some(SharedString::from(if is_liked_label() {
+                            "Unlike track"
+                        } else {
+                            "Like track"
+                        }))
+                    })
+                    .selected(is_liked_sel)
                     .w(px(MOBILE_MIN_TOUCH_TARGET))
                     .h(px(MOBILE_MIN_TOUCH_TARGET))
                     .items_center()
@@ -189,6 +203,7 @@ fn search_track_row(
                     .rounded_full()
                     .hover(|s| s.bg(pill_glass_hover))
                     .active(|s| s.opacity(0.75))
+                    .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                     .on_press(move || store::toggle_like_track(t_like.clone()))
                     .child(reactive_icon(
                         {
@@ -221,6 +236,7 @@ fn search_track_row(
                     .rounded_full()
                     .hover(|s| s.bg(pill_glass_hover))
                     .active(|s| s.opacity(0.75))
+                    .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                     .on_press(move || store::play_next(t_next.clone()))
                     .child(icon(IconKind::Plus, 16.0, move || theme().muted_foreground)),
             )
@@ -269,11 +285,16 @@ pub fn search_screen() -> impl IntoElement {
                                     "Find songs, videos, albums, playlists, and artists",
                                 )
                             } else {
-                                SharedString::from(format!("{count} results for \"{q}\""))
+                                SharedString::from(format!(
+                                    "{} for {}",
+                                    pluralize(count, "result", "results"),
+                                    quote_term(&q)
+                                ))
                             }
                         })
                         .number_of_lines(1)
                         .text_xs()
+                        .tabular_nums()
                         .text_color(move || theme().muted_foreground),
                     ),
             )
@@ -294,7 +315,7 @@ pub fn search_screen() -> impl IntoElement {
                             .rounded(radius_pill)
                             .bg(pill_glass_surface)
                             .border_1()
-                            .border_color(glass_hairline)
+                            .border_color(move || theme().input)
                             .child(icon(IconKind::Search, 16.0, move || {
                                 theme().muted_foreground
                             }))
@@ -302,6 +323,8 @@ pub fn search_screen() -> impl IntoElement {
                                 input()
                                     .test_id("search-input")
                                     .value(move || query_sig.get())
+                                    .on_focus(|| set_text_input_focused(true))
+                                    .on_blur(|| set_text_input_focused(false))
                                     .on_change(move |txt: &str| {
                                         query_sig.set(txt.to_owned());
                                         store::fetch_search_suggestions(txt);
@@ -311,7 +334,7 @@ pub fn search_screen() -> impl IntoElement {
                                         query_sig.set(txt.to_owned());
                                         store::run_search(txt);
                                     })
-                                    .placeholder("Search songs, artists, albums...")
+                                    .placeholder("Search songs, artists, albums…")
                                     .placeholder_color(|| color(theme().muted_foreground))
                                     .caret_color(|| color(theme().primary))
                                     .return_key_type(ReturnKeyType::Search)
@@ -331,6 +354,9 @@ pub fn search_screen() -> impl IntoElement {
                                         .justify_center()
                                         .rounded_full()
                                         .hover(|s| s.bg(pill_glass_hover))
+                                        .focus_visible(|s| {
+                                            s.outline(px(2.0)).outline_color(move || theme().ring)
+                                        })
                                         .on_press(move || {
                                             query_sig.set(String::new());
                                             store::run_search("");
@@ -341,7 +367,7 @@ pub fn search_screen() -> impl IntoElement {
                                 },
                             )),
                     )
-                    .child(primary_button("Go", move || {
+                    .child(primary_button("Search", move || {
                         store::run_search(&query_sig.get_untracked());
                     })),
             )
@@ -383,6 +409,9 @@ pub fn search_screen() -> impl IntoElement {
                             .border_1()
                             .border_color(glass_hairline)
                             .hover(|s| s.bg(pill_glass_hover))
+                            .focus_visible(|s| {
+                                s.outline(px(2.0)).outline_color(move || theme().ring)
+                            })
                             .on_press(move || {
                                 query_sig.set(sugg_click.clone());
                                 store::run_search(&sugg_click);
@@ -404,7 +433,13 @@ pub fn search_screen() -> impl IntoElement {
                     let q_retry = query_sig;
                     status_card(
                         "Search unavailable",
-                        move || SharedString::from(store::search_error().unwrap_or_default()),
+                        move || {
+                            SharedString::from(format_recoverable_error(
+                                "Search could not complete",
+                                &store::search_error().unwrap_or_default(),
+                                "Check your connection and select Retry.",
+                            ))
+                        },
                         Some("Retry"),
                         Some(Box::new(move || {
                             store::run_search(&q_retry.get_untracked());
@@ -422,11 +457,25 @@ pub fn search_screen() -> impl IntoElement {
                     !albums.is_empty() && (filter == SearchFilter::All || collection_only);
 
                 if tracks.is_empty() && (!show_albums || albums.is_empty()) {
+                    let raw_q = store::search_query();
+                    let trimmed = raw_q.trim();
+                    if trimmed.is_empty() {
+                        return status_card(
+                            "Start searching",
+                            "Search YouTube Music for songs, artists, albums, playlists, or podcasts.",
+                            Some("Browse Explore"),
+                            Some(Box::new(|| store::set_tab(AppTab::Explore))),
+                        )
+                        .into_element();
+                    }
                     return status_card(
-                        "No matching results",
-                        "Try searching for another song, artist, album, or playlist.",
-                        None,
-                        None,
+                        SharedString::from(format!("No matches for {}", quote_term(trimmed))),
+                        "Check your spelling, try another filter tab, or clear the search.",
+                        Some("Clear search"),
+                        Some(Box::new(move || {
+                            query_sig.set(String::new());
+                            store::run_search("");
+                        })),
                     )
                     .into_element();
                 }
@@ -440,14 +489,28 @@ pub fn search_screen() -> impl IntoElement {
                         SearchFilter::Podcasts => "Podcasts",
                         _ => "Albums & Collections",
                     };
+                    let album_count_label = pluralize(albums.len(), "item", "items");
                     out = out.child(
                         view()
                             .gap_2()
                             .child(
-                                text(section_label)
-                                    .text_xs()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(move || theme().muted_foreground),
+                                view()
+                                    .flex_row()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap_2()
+                                    .child(
+                                        text(section_label)
+                                            .text_xs()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(move || theme().muted_foreground),
+                                    )
+                                    .child(
+                                        text(album_count_label)
+                                            .text_xs()
+                                            .tabular_nums()
+                                            .text_color(move || theme().muted_foreground),
+                                    ),
                             )
                             .child(
                                 scroll()
@@ -472,9 +535,14 @@ pub fn search_screen() -> impl IntoElement {
                                                     alb.subtitle.clone().unwrap_or_default();
                                                 let art_btn = alb.artwork_url.clone();
                                                 button()
+                                                    .accessibility_label(title_btn.clone())
                                                     .w(px(136.0))
                                                     .gap_1p5()
                                                     .active(|s| s.opacity(0.8))
+                                                    .focus_visible(|s| {
+                                                        s.outline(px(2.0))
+                                                            .outline_color(move || theme().ring)
+                                                    })
                                                     .on_press(move || {
                                                         if id_btn.starts_with("UC")
                                                             || filter == SearchFilter::Artists
@@ -549,6 +617,9 @@ pub fn search_screen() -> impl IntoElement {
                                 .border_1()
                                 .border_color(glass_hairline)
                                 .hover(|s| s.bg(pill_glass_hover))
+                                .focus_visible(|s| {
+                                    s.outline(px(2.0)).outline_color(move || theme().ring)
+                                })
                                 .on_press(store::load_more_search)
                                 .child(
                                     text("Load more")

@@ -54,7 +54,7 @@ fn mobile_dark_fixture_journey_covers_now_playing_lyrics_queue_search_and_librar
 
     // Tap Collection card on Home to browse Album/Playlist detail, then return
     app.press("Nocturne Telemetry")?;
-    app.wait_for("Play All")?;
+    app.wait_for("Play")?;
     app.press("Back")?;
     app.wait_for("Quick Picks")?;
 
@@ -110,6 +110,21 @@ fn mobile_dark_fixture_journey_covers_now_playing_lyrics_queue_search_and_librar
     app.press("id:nav-settings-shortcut")?;
     app.wait_for("Settings")?;
     app.wait_for("Clear Cache")?;
+    // Cancel must keep cached bytes intact
+    app.on_dialog(|d| {
+        assert!(
+            d.title
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Clear offline cache"),
+            "unexpected Clear Cache dialog title: {:?}",
+            d.title
+        );
+        nsh_testing::DialogAnswer::Press("Cancel".to_owned())
+    });
+    app.press("Clear Cache")?;
+    // Confirming clears all cached chunks and metadata
+    app.on_dialog(|_| nsh_testing::DialogAnswer::Press("Clear Cache".to_owned()));
     app.press("Clear Cache")?;
     app.wait_for("Audio chunks: 0.0 MB (0 chunks) • Artwork: 0.0 MB • Metadata: 0 rows")?;
 

@@ -8,19 +8,20 @@
 
 use std::sync::Arc;
 
-use nsh_base::{button, input, theme};
+use nsh_base::{button, theme};
 use nsh_core::prelude::*;
 use resonance_contract::RoomRole;
 use resonance_core::rooms::RoomStateSnapshot;
 
 use crate::store::ListenTogetherSubMode;
 use crate::ui::controls::{
-    glass_pill_button, hero_pill_button, primary_button, secondary_button, status_card,
+    confirm_destructive, glass_pill_button, hero_pill_button, labeled_input, secondary_button,
+    status_card,
 };
 use crate::ui::icons::IconKind;
 use crate::ui::tokens::{
-    MOBILE_MIN_TOUCH_TARGET, glass_hairline, is_desktop_layout, pill_glass_surface, radius_card,
-    radius_pill,
+    MOBILE_MIN_TOUCH_TARGET, color_destructive_foreground, glass_hairline, is_desktop_layout,
+    pill_glass_surface, radius_card, radius_pill,
 };
 
 #[derive(Clone)]
@@ -105,11 +106,16 @@ pub fn listen_together_screen(
                 .child(
                     view()
                         .flex_row()
+                        .flex_wrap()
                         .gap_2()
                         .child(
                             button()
+                                .accessibility_label("Radio Mix")
+                                .selected(move || sub_mode.get() == ListenTogetherSubMode::RadioMix)
                                 .min_h(px(MOBILE_MIN_TOUCH_TARGET))
                                 .px_4()
+                                .items_center()
+                                .justify_center()
                                 .rounded(radius_pill)
                                 .bg(move || {
                                     if sub_mode.get() == ListenTogetherSubMode::RadioMix {
@@ -117,6 +123,9 @@ pub fn listen_together_screen(
                                     } else {
                                         pill_glass_surface()
                                     }
+                                })
+                                .focus_visible(|s| {
+                                    s.outline(px(2.0)).outline_color(move || theme().ring)
                                 })
                                 .on_press(move || sub_mode.set(ListenTogetherSubMode::RadioMix))
                                 .child(
@@ -134,8 +143,12 @@ pub fn listen_together_screen(
                         )
                         .child(
                             button()
+                                .accessibility_label("Listen Together")
+                                .selected(move || sub_mode.get() == ListenTogetherSubMode::Rooms)
                                 .min_h(px(MOBILE_MIN_TOUCH_TARGET))
                                 .px_4()
+                                .items_center()
+                                .justify_center()
                                 .rounded(radius_pill)
                                 .bg(move || {
                                     if sub_mode.get() == ListenTogetherSubMode::Rooms {
@@ -143,6 +156,9 @@ pub fn listen_together_screen(
                                     } else {
                                         pill_glass_surface()
                                     }
+                                })
+                                .focus_visible(|s| {
+                                    s.outline(px(2.0)).outline_color(move || theme().ring)
                                 })
                                 .on_press(move || sub_mode.set(ListenTogetherSubMode::Rooms))
                                 .child(
@@ -235,6 +251,7 @@ pub fn listen_together_screen(
                                                             snap.clock_offset_ms.abs()
                                                         ))
                                                         .text_xs()
+                                                        .tabular_nums()
                                                         .text_color(move || theme().muted_foreground),
                                                     ),
                                             )
@@ -260,9 +277,7 @@ pub fn listen_together_screen(
                                                     text(msg)
                                                         .text_xs()
                                                         .font_weight(FontWeight::SEMIBOLD)
-                                                        .text_color(move || {
-                                                            theme().primary_foreground
-                                                        }),
+                                                        .text_color(color_destructive_foreground),
                                                 ),
                                         )
                                     })
@@ -286,23 +301,44 @@ pub fn listen_together_screen(
                                                     .child(secondary_button("Vote Skip", move || {
                                                         cb_vs_inner()
                                                     }))
-                                                    .children(["🔥", "❤️", "🎧", "✨"].into_iter().map(|emoji| {
-                                                        let cb_e = Arc::clone(&cb_rx_inner);
-                                                        let label = emoji.to_owned();
-                                                        button()
-                                                            .min_h(px(MOBILE_MIN_TOUCH_TARGET))
-                                                            .px_3()
-                                                            .rounded(radius_pill)
-                                                            .bg(move || theme().secondary)
-                                                            .on_press(move || cb_e(label.clone()))
-                                                            .child(
-                                                                text(emoji)
-                                                                    .text_sm()
-                                                                    .text_color(move || {
-                                                                        theme().foreground
-                                                                    }),
-                                                            )
-                                                    })),
+                                                    .children(
+                                                        [
+                                                            ("🔥", "Send fire reaction"),
+                                                            ("❤️", "Send heart reaction"),
+                                                            ("🎧", "Send headphones reaction"),
+                                                            ("✨", "Send sparkle reaction"),
+                                                        ]
+                                                        .into_iter()
+                                                        .map(|(emoji, a11y)| {
+                                                            let cb_e = Arc::clone(&cb_rx_inner);
+                                                            let label = emoji.to_owned();
+                                                            button()
+                                                                .accessibility_label(a11y)
+                                                                .min_w(px(MOBILE_MIN_TOUCH_TARGET))
+                                                                .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                                                                .px_3()
+                                                                .items_center()
+                                                                .justify_center()
+                                                                .rounded(radius_pill)
+                                                                .bg(move || theme().secondary)
+                                                                .focus_visible(|s| {
+                                                                    s.outline(px(2.0))
+                                                                        .outline_color(move || {
+                                                                            theme().ring
+                                                                        })
+                                                                })
+                                                                .on_press(move || {
+                                                                    cb_e(label.clone())
+                                                                })
+                                                                .child(
+                                                                    text(emoji)
+                                                                        .text_sm()
+                                                                        .text_color(move || {
+                                                                            theme().foreground
+                                                                        }),
+                                                                )
+                                                        }),
+                                                    ),
                                             ),
                                     )
                                     .when(!snap.playback.queue.is_empty(), |v| {
@@ -315,6 +351,7 @@ pub fn listen_together_screen(
                                                         snap.playback.queue.len()
                                                     ))
                                                     .text_sm()
+                                                    .tabular_nums()
                                                     .font_weight(FontWeight::SEMIBOLD)
                                                     .text_color(move || theme().foreground),
                                                 )
@@ -336,6 +373,7 @@ pub fn listen_together_screen(
                                                     snap.participants.len()
                                                 ))
                                                 .text_sm()
+                                                .tabular_nums()
                                                 .font_weight(FontWeight::SEMIBOLD)
                                                 .text_color(move || theme().foreground),
                                             )
@@ -346,6 +384,8 @@ pub fn listen_together_screen(
                                                 };
                                                 let peer_id = p.peer_id.clone();
                                                 let peer_id_kick = p.peer_id.clone();
+                                                let display_name_tr = p.display_name.clone();
+                                                let display_name_kick = p.display_name.clone();
                                                 let can_manage = is_host && p.role == RoomRole::Guest;
                                                 let cb_tr_p = Arc::clone(&cb_tr_inner);
                                                 let cb_k_p = Arc::clone(&cb_k_inner);
@@ -367,13 +407,37 @@ pub fn listen_together_screen(
                                                                 .child(secondary_button(
                                                                     "Make Host",
                                                                     move || {
-                                                                        cb_tr_p(peer_id.clone())
+                                                                        let cb = Arc::clone(&cb_tr_p);
+                                                                        let id = peer_id.clone();
+                                                                        let name = display_name_tr
+                                                                            .clone();
+                                                                        confirm_destructive(
+                                                                            "Transfer host control?",
+                                                                            format!(
+                                                                                "Make {name} the room host? You will become a guest."
+                                                                            ),
+                                                                            "Transfer Host",
+                                                                            move || cb(id),
+                                                                        );
                                                                     },
                                                                 ))
                                                                 .child(secondary_button(
                                                                     "Kick",
                                                                     move || {
-                                                                        cb_k_p(peer_id_kick.clone())
+                                                                        let cb = Arc::clone(&cb_k_p);
+                                                                        let id =
+                                                                            peer_id_kick.clone();
+                                                                        let name =
+                                                                            display_name_kick
+                                                                                .clone();
+                                                                        confirm_destructive(
+                                                                            "Remove participant?",
+                                                                            format!(
+                                                                                "Remove {name} from this Listen Together room?"
+                                                                            ),
+                                                                            "Remove",
+                                                                            move || cb(id),
+                                                                        );
                                                                     },
                                                                 )),
                                                         )
@@ -383,8 +447,6 @@ pub fn listen_together_screen(
                             } else {
                                 let cb_c_inner = Arc::clone(&cb_c);
                                 let cb_j_inner = Arc::clone(&cb_j);
-                                let cb_c_connect = Arc::clone(&cb_c);
-                                let cb_j_connect = Arc::clone(&cb_j);
                                 view()
                                     .p_5()
                                     .gap_4()
@@ -398,20 +460,27 @@ pub fn listen_together_screen(
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .text_color(move || theme().foreground),
                                     )
-                                    .child(
-                                        input()
-                                            .value(move || display_name_draft.get())
-                                            .on_change(move |v: &str| display_name_draft.set(v.to_owned()))
-                                            .placeholder("Display name")
-                                            .min_h(px(MOBILE_MIN_TOUCH_TARGET)),
-                                    )
-                                    .child(
-                                        input()
-                                            .value(move || relay_url_draft.get())
-                                            .on_change(move |v: &str| relay_url_draft.set(v.to_owned()))
-                                            .placeholder("Relay URL (https://...)")
-                                            .min_h(px(MOBILE_MIN_TOUCH_TARGET)),
-                                    )
+                                    .child(labeled_input(
+                                        "Display name",
+                                        "room-display-name-input",
+                                        "Listener",
+                                        move || display_name_draft.get(),
+                                        move |v: &str| display_name_draft.set(v.to_owned()),
+                                    ))
+                                    .child(labeled_input(
+                                        "Relay URL",
+                                        "room-relay-url-input",
+                                        "https://relay.raag.audio",
+                                        move || relay_url_draft.get(),
+                                        move |v: &str| relay_url_draft.set(v.to_owned()),
+                                    ))
+                                    .child(labeled_input(
+                                        "Room code (required to join an existing room)",
+                                        "room-join-code-input",
+                                        "e.g. RAAG-7K4M",
+                                        move || join_code_draft.get(),
+                                        move |v: &str| join_code_draft.set(v.to_owned()),
+                                    ))
                                     .child(
                                         view()
                                             .flex_row()
@@ -448,30 +517,6 @@ pub fn listen_together_screen(
                                                         },
                                                     )),
                                             ),
-                                    )
-                                    .child(
-                                        input()
-                                            .value(move || join_code_draft.get())
-                                            .on_change(move |v: &str| join_code_draft.set(v.to_owned()))
-                                            .placeholder("Room code (e.g. RAAG-7K4M)")
-                                            .min_h(px(MOBILE_MIN_TOUCH_TARGET)),
-                                    )
-                                    .child(
-                                        primary_button("Connect", move || {
-                                            let code = join_code_draft.get();
-                                            if code.trim().is_empty() {
-                                                cb_c_connect(
-                                                    relay_url_draft.get(),
-                                                    display_name_draft.get(),
-                                                );
-                                            } else {
-                                                cb_j_connect(
-                                                    relay_url_draft.get(),
-                                                    code,
-                                                    display_name_draft.get(),
-                                                );
-                                            }
-                                        }),
                                     )
                             }
                         })

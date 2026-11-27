@@ -30,8 +30,13 @@ fn start_mobile_dark() -> Headless {
 
 fn start_desktop() -> Headless {
     resonance::store::enable_fixture_mode(true);
+    let desktop = Size::new(Points(1200.0), Points(800.0));
     Headless::start(EngineConfig {
-        viewport: Size::new(Points(1200.0), Points(800.0)),
+        viewport: desktop,
+        environment: Environment {
+            window: desktop,
+            ..Environment::default()
+        },
         ..EngineConfig::new(Root::of::<resonance::App>())
     })
     .expect("desktop headless starts cleanly")
@@ -77,7 +82,7 @@ fn phase5_mini_player_now_playing_volume_lyrics_queue_and_offline_toast() -> Res
         "lyrics screen must display active line progress counter"
     );
     app.press("+5s")?;
-    app.press("-5s")?;
+    app.press("\u{2212}5s")?;
 
     // 4. Open Queue -> verify total duration summary + Shuffle/Repeat toggles
     app.press("id:nav-queue")?;
@@ -141,6 +146,7 @@ fn phase5_desktop_shortcuts_and_zero_raw_colors_in_controls() -> Result<(), Stri
 
     // Desktop layout exposes keyboard shortcuts in a header `?` popover
     let mut desktop = start_desktop();
+    desktop.wait_for("Quick Picks")?;
     desktop.press("id:shortcuts-help-btn")?;
     desktop.wait_for("Keyboard Shortcuts")?;
     desktop.wait_for("Play / Pause")?;

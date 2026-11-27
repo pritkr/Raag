@@ -15,10 +15,10 @@ pub fn adaptive_to_css(c: AdaptiveColor) -> String {
     format!("#{r:02x}{g:02x}{b:02x}")
 }
 
-/// Original Raag brand mark: crimson-to-ember rounded crest with concentric acoustic wave arcs
+/// Original Raag brand mark: warm saffron-copper rounded crest with concentric acoustic wave arcs
 /// and a stylized geometric harmonic bar emblem.
 pub fn raag_brand_icon(size_px: f32) -> impl IntoElement {
-    const MARKUP: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48"><defs><linearGradient id="rg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#E12D39"/><stop offset="100%" stop-color="#FF5A36"/></linearGradient></defs><rect x="2" y="2" width="44" height="44" rx="13" fill="url(#rg)"/><path d="M13 30c0-6.1 4.9-11 11-11s11 4.9 11 11" fill="none" stroke="#FFFFFF" stroke-width="2.6" stroke-linecap="round" opacity="0.45"/><path d="M18 30c0-3.3 2.7-6 6-6s6 2.7 6 6" fill="none" stroke="#FFFFFF" stroke-width="2.8" stroke-linecap="round" opacity="0.8"/><rect x="22" y="13" width="4" height="19" rx="2" fill="#FFFFFF"/><rect x="15" y="19" width="3.5" height="13" rx="1.75" fill="#FFFFFF" opacity="0.9"/><rect x="29.5" y="17" width="3.5" height="15" rx="1.75" fill="#FFFFFF" opacity="0.9"/></svg>"##;
+    const MARKUP: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48"><defs><linearGradient id="rg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#A8490B"/><stop offset="100%" stop-color="#EB7A3C"/></linearGradient></defs><rect x="2" y="2" width="44" height="44" rx="13" fill="url(#rg)"/><path d="M13 30c0-6.1 4.9-11 11-11s11 4.9 11 11" fill="none" stroke="#FFFFFF" stroke-width="2.6" stroke-linecap="round" opacity="0.45"/><path d="M18 30c0-3.3 2.7-6 6-6s6 2.7 6 6" fill="none" stroke="#FFFFFF" stroke-width="2.8" stroke-linecap="round" opacity="0.8"/><rect x="22" y="13" width="4" height="19" rx="2" fill="#FFFFFF"/><rect x="15" y="19" width="3.5" height="13" rx="1.75" fill="#FFFFFF" opacity="0.9"/><rect x="29.5" y="17" width="3.5" height="15" rx="1.75" fill="#FFFFFF" opacity="0.9"/></svg>"##;
     image(ImageSrc::svg_markup(MARKUP))
         .w(px(size_px))
         .h(px(size_px))
@@ -89,8 +89,20 @@ pub enum IconKind {
     HelpCircle,
 }
 
-fn svg_markup_for(kind: IconKind, hex: &str) -> String {
-    match kind {
+/// Computes optical SVG stroke weight so small icons (12–18px) stay crisp without thinning out.
+fn optical_stroke_width(size_px: f32) -> &'static str {
+    if size_px <= 15.0 {
+        "2.35"
+    } else if size_px <= 18.0 {
+        "2.15"
+    } else {
+        "2"
+    }
+}
+
+fn svg_markup_for(kind: IconKind, hex: &str, size_px: f32) -> String {
+    let sw = optical_stroke_width(size_px);
+    let raw = match kind {
         IconKind::Home => format!(
             r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="{hex}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>"#
         ),
@@ -229,6 +241,11 @@ fn svg_markup_for(kind: IconKind, hex: &str) -> String {
         IconKind::HelpCircle => format!(
             r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="{hex}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>"#
         ),
+    };
+    if sw == "2" {
+        raw
+    } else {
+        raw.replace(r#"stroke-width="2""#, &format!(r#"stroke-width="{sw}""#))
     }
 }
 
@@ -240,7 +257,7 @@ pub fn icon(
 ) -> impl IntoElement {
     image(move || {
         let hex = adaptive_to_css(color_fn());
-        ImageSrc::svg_markup(&svg_markup_for(kind, &hex))
+        ImageSrc::svg_markup(&svg_markup_for(kind, &hex, size_px))
     })
     .w(px(size_px))
     .h(px(size_px))
@@ -255,7 +272,7 @@ pub fn reactive_icon(
 ) -> impl IntoElement {
     image(move || {
         let hex = adaptive_to_css(color_fn());
-        ImageSrc::svg_markup(&svg_markup_for(kind_fn(), &hex))
+        ImageSrc::svg_markup(&svg_markup_for(kind_fn(), &hex, size_px))
     })
     .w(px(size_px))
     .h(px(size_px))

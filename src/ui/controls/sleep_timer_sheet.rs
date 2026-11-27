@@ -62,7 +62,7 @@ pub fn cancel_sleep_timer() {
     if let Some(vol) = store::cancel_sleep_timer_mode() {
         store::set_volume(vol);
     }
-    store::set_status_banner("Sleep timer cancelled");
+    store::set_status_banner("Sleep timer canceled");
 }
 
 pub fn sleep_timer_state() -> SleepTimerState {
@@ -95,6 +95,7 @@ fn preset_row(
     on_press: impl Fn() + 'static,
 ) -> impl IntoElement {
     button()
+        .selected(active)
         .on_press(on_press)
         .min_h(px(MOBILE_MIN_TOUCH_TARGET))
         .px_3p5()
@@ -205,68 +206,83 @@ pub fn sleep_timer_sheet() -> impl IntoElement {
                             ),
                     )
                     .child(
-                        view()
-                            .gap_1p5()
-                            .child(preset_row(
-                                "Off",
-                                || store::sleep_timer_mode() == SleepTimerMode::Off,
-                                cancel_sleep_timer,
-                            ))
-                            .child(preset_row(
-                                "15 minutes",
-                                || is_countdown_preset(15),
-                                || set_sleep_timer_minutes(15),
-                            ))
-                            .child(preset_row(
-                                "30 minutes",
-                                || is_countdown_preset(30),
-                                || set_sleep_timer_minutes(30),
-                            ))
-                            .child(preset_row(
-                                "45 minutes",
-                                || is_countdown_preset(45),
-                                || set_sleep_timer_minutes(45),
-                            ))
-                            .child(preset_row(
-                                "60 minutes",
-                                || is_countdown_preset(60),
-                                || set_sleep_timer_minutes(60),
-                            ))
-                            .child(preset_row(
-                                "End of current track",
-                                || store::sleep_timer_mode() == SleepTimerMode::EndOfTrack,
-                                set_sleep_timer_end_of_track,
-                            )),
-                    )
-                    .child(when(
-                        || matches!(store::sleep_timer_mode(), SleepTimerMode::Countdown { .. }),
-                        || {
-                            button()
-                                .on_press(extend_sleep_timer_5m)
-                                .min_h(px(MOBILE_MIN_TOUCH_TARGET))
-                                .px_4()
-                                .items_center()
-                                .justify_center()
-                                .rounded(radius_pill)
-                                .bg(pill_glass_surface)
-                                .border_1()
-                                .border_color(glass_hairline)
-                                .transition()
-                                .duration(timer_transition_ms)
-                                .ease_out()
-                                .hover(|s| s.bg(pill_glass_hover))
-                                .active(|s| s.scale(timer_press_scale))
-                                .focus_visible(|s| {
-                                    s.outline(px(2.0)).outline_color(move || theme().ring)
-                                })
+                        scroll().max_h(px(460.0)).child(
+                            view()
+                                .gap_3()
                                 .child(
-                                    text("+5 minutes")
-                                        .text_sm()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(move || theme().primary),
+                                    view()
+                                        .gap_1p5()
+                                        .child(preset_row(
+                                            "Off",
+                                            || store::sleep_timer_mode() == SleepTimerMode::Off,
+                                            cancel_sleep_timer,
+                                        ))
+                                        .child(preset_row(
+                                            "15 minutes",
+                                            || is_countdown_preset(15),
+                                            || set_sleep_timer_minutes(15),
+                                        ))
+                                        .child(preset_row(
+                                            "30 minutes",
+                                            || is_countdown_preset(30),
+                                            || set_sleep_timer_minutes(30),
+                                        ))
+                                        .child(preset_row(
+                                            "45 minutes",
+                                            || is_countdown_preset(45),
+                                            || set_sleep_timer_minutes(45),
+                                        ))
+                                        .child(preset_row(
+                                            "60 minutes",
+                                            || is_countdown_preset(60),
+                                            || set_sleep_timer_minutes(60),
+                                        ))
+                                        .child(preset_row(
+                                            "End of current track",
+                                            || {
+                                                store::sleep_timer_mode()
+                                                    == SleepTimerMode::EndOfTrack
+                                            },
+                                            set_sleep_timer_end_of_track,
+                                        )),
                                 )
-                        },
-                    )),
+                                .child(when(
+                                    || {
+                                        matches!(
+                                            store::sleep_timer_mode(),
+                                            SleepTimerMode::Countdown { .. }
+                                        )
+                                    },
+                                    || {
+                                        button()
+                                            .on_press(extend_sleep_timer_5m)
+                                            .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                                            .px_4()
+                                            .items_center()
+                                            .justify_center()
+                                            .rounded(radius_pill)
+                                            .bg(pill_glass_surface)
+                                            .border_1()
+                                            .border_color(glass_hairline)
+                                            .transition()
+                                            .duration(timer_transition_ms)
+                                            .ease_out()
+                                            .hover(|s| s.bg(pill_glass_hover))
+                                            .active(|s| s.scale(timer_press_scale))
+                                            .focus_visible(|s| {
+                                                s.outline(px(2.0))
+                                                    .outline_color(move || theme().ring)
+                                            })
+                                            .child(
+                                                text("+5 minutes")
+                                                    .text_sm()
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .text_color(move || theme().primary),
+                                            )
+                                    },
+                                )),
+                        ),
+                    ),
             )
     })
 }

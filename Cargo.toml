@@ -31,7 +31,7 @@ serde_json = "1.0"
 thiserror = "2.0"
 async-trait = "0.1"
 rusqlite = { version = "0.33", features = ["bundled"] }
-rquickjs = { version = "0.12.0", features = ["classes"] }
+rquickjs = { version = "0.9", features = ["classes"] }
 sha1 = "0.10"
 sha2 = "0.10"
 hex = "0.4"

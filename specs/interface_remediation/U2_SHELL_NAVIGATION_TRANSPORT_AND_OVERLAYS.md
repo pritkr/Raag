@@ -17,6 +17,7 @@
 > - `src/ui/controls/vault_widgets.rs`
 >
 > **HARD RULE:** Zero `rgb(`, `rgba(`, or `0xFF` anywhere in these files (not even in comments!).
+> **12:41 Sync Baseline:** Preserve `src/ui/controls/ambient.rs` (`ambient_shader_backdrop`, `live_equalizer_indicator`, `animated_play_pause_icon`, `animated_like_heart`), `back_button()`, `keyboard_shortcuts_popover()` (`id:shortcuts-help-btn`), and existing `.focus_visible` / reduced-motion transitions added at 12:41. Focus on all remaining open defects: `Escape` modal cascade, `nav_pill_button` focus, `color_on_cover`, `color_status_ok`, `confirm_destructive`, visible seekbar thumb, active state dots/labels, scrollable max-width sheets, `labeled_input`, vault cache contrast & `48dp` quota pills, and recoverable errors.
 
 ---
 

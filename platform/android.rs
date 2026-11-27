@@ -1347,7 +1347,8 @@ impl AndroidDspHandle {
             }
             let samples = input.len() / 4;
             scratch.clear();
-            scratch.reserve(samples.saturating_sub(scratch.capacity()));
+            let additional = samples.saturating_sub(scratch.capacity());
+            scratch.reserve(additional);
             for chunk in input.chunks_exact(4) {
                 scratch.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
             }
@@ -1367,7 +1368,8 @@ impl AndroidDspHandle {
             }
             let samples = input.len() / 2;
             scratch.clear();
-            scratch.reserve(samples.saturating_sub(scratch.capacity()));
+            let additional = samples.saturating_sub(scratch.capacity());
+            scratch.reserve(additional);
             for chunk in input.chunks_exact(2) {
                 let s = i16::from_le_bytes([chunk[0], chunk[1]]);
                 scratch.push(s as f32 / 32768.0);

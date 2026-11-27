@@ -1,15 +1,17 @@
 //! Reusable sheet & modal panel surfaces with semantic theme tokens and >= 48dp targets.
 
-use nsh_base::{button, input, theme};
+use nsh_base::{button, theme};
 use nsh_core::prelude::*;
 use resonance_contract::DownloadStatus;
 
 use crate::store::{self, AppTab};
 use crate::ui::controls::context_menu::{track_sheet_header_preview, track_youtube_music_url};
+use crate::ui::controls::primitives::{confirm_destructive, labeled_input};
 use crate::ui::icons::{IconKind, icon};
 use crate::ui::tokens::{
-    MOBILE_MIN_TOUCH_TARGET, frosted_card_surface, glass_hairline, glass_specular_hairline, motion,
-    overlay_scrim, pill_glass_hover, pill_glass_surface, radius_card, radius_panel, radius_pill,
+    MOBILE_MIN_TOUCH_TARGET, frosted_card_surface, glass_hairline, glass_specular_hairline,
+    is_desktop_layout, motion, overlay_scrim, pill_glass_hover, pill_glass_surface, radius_card,
+    radius_panel, radius_pill,
 };
 
 fn sheet_transition_ms() -> f32 {
@@ -31,6 +33,8 @@ pub fn modal_panel_container(
     content: impl IntoElement,
 ) -> impl IntoElement {
     view()
+        .w_full()
+        .max_w(px(440.0))
         .p_4()
         .gap_3()
         .rounded(radius_panel)
@@ -56,7 +60,7 @@ pub fn modal_panel_container(
                         .text_color(move || theme().muted_foreground),
                 ),
         )
-        .child(content)
+        .child(scroll().max_h(px(520.0)).child(content))
 }
 
 /// Accessible >= 48dp action sheet row with leading icon and label.
@@ -171,7 +175,7 @@ pub fn track_action_sheet() -> impl IntoElement {
                         ))
                         .child(action_sheet_row(
                             IconKind::Plus,
-                            "Add to Playlist...",
+                            "Add to Playlist…",
                             move || {
                                 store::open_add_to_playlist_sheet(t_playlist.clone());
                             },
@@ -187,7 +191,18 @@ pub fn track_action_sheet() -> impl IntoElement {
                                     | DownloadStatus::Tagging,
                                 ) => store::pause_download(&vid_dl),
                                 Some(DownloadStatus::Paused) => store::resume_download(&vid_dl),
-                                Some(DownloadStatus::Completed) => store::delete_download(&vid_dl),
+                                Some(DownloadStatus::Completed) => {
+                                    let id = vid_dl.clone();
+                                    let title = t_dl.title.clone();
+                                    confirm_destructive(
+                                        "Remove offline download?",
+                                        format!(
+                                            "Remove “{title}” from offline downloads on this device?"
+                                        ),
+                                        "Remove Download",
+                                        move || store::delete_download(&id),
+                                    );
+                                }
                             }
                             store::close_track_sheet();
                         }))
@@ -244,11 +259,21 @@ pub fn track_action_sheet() -> impl IntoElement {
                         ))
                         .when_some(playlist_id, |v, pid| {
                             let vid = vid_remove.clone();
+                            let track_title = track.title.clone();
                             v.child(action_sheet_row(
                                 IconKind::Trash,
                                 "Remove from Playlist",
                                 move || {
-                                    store::remove_track_from_playlist(pid.clone(), vid.clone());
+                                    let pid_c = pid.clone();
+                                    let vid_c = vid.clone();
+                                    confirm_destructive(
+                                        "Remove from playlist?",
+                                        format!("Remove “{track_title}” from this playlist?"),
+                                        "Remove",
+                                        move || {
+                                            store::remove_track_from_playlist(pid_c, vid_c);
+                                        },
+                                    );
                                     store::close_track_sheet();
                                 },
                             ))
@@ -281,8 +306,13 @@ pub fn add_to_playlist_sheet() -> impl IntoElement {
             let privacy_btn = move |lbl: &'static str| {
                 let is_sel = move || privacy.get() == lbl;
                 button()
+                    .selected(is_sel)
                     .on_press(move || privacy.set(lbl))
                     .min_h(px(36.0))
+                    .style_when(
+                        || !is_desktop_layout(),
+                        |s| s.min_h(px(MOBILE_MIN_TOUCH_TARGET)),
+                    )
                     .px_3()
                     .items_center()
                     .justify_center()
@@ -343,22 +373,13 @@ pub fn add_to_playlist_sheet() -> impl IntoElement {
                                         .font_weight(FontWeight::SEMIBOLD)
                                         .text_color(move || theme().foreground),
                                 )
-                                .child(
-                                    input()
-                                        .test_id("new-playlist-title-input")
-                                        .value(move || new_title.get())
-                                        .on_change(move |s: &str| new_title.set(s.to_owned()))
-                                        .placeholder("Playlist name")
-                                        .placeholder_color(|| color(theme().muted_foreground))
-                                        .caret_color(|| color(theme().primary))
-                                        .min_h(px(MOBILE_MIN_TOUCH_TARGET))
-                                        .px_3()
-                                        .text_sm()
-                                        .text_color(move || theme().foreground)
-                                        .rounded(move || theme().radius)
-                                        .border_1()
-                                        .border_color(glass_hairline),
-                                )
+                                .child(labeled_input(
+                                    "Playlist name",
+                                    "new-playlist-title-input",
+                                    "e.g. Late Night Raag",
+                                    move || new_title.get(),
+                                    move |s| new_title.set(s.to_owned()),
+                                ))
                                 .child(
                                     view()
                                         .flex_row()

@@ -5,4 +5,5 @@
 
 pub mod controls;
 pub mod icons;
+pub mod text_format;
 pub mod tokens;

@@ -10,6 +10,7 @@ use nsh_core::prelude::*;
 use resonance_contract::{UpdateChannel, UpdateInfo, UpdatePhase};
 
 use crate::ui::controls::{glass_pill_button, hero_pill_button, secondary_button, setting_switch};
+use crate::ui::text_format::format_recoverable_error;
 use crate::ui::tokens::{
     MOBILE_MIN_TOUCH_TARGET, color_status_ok, glass_hairline, pill_glass_surface, radius_card,
 };
@@ -87,6 +88,7 @@ pub fn settings_updater_card(props: UpdaterCardProps) -> impl IntoElement {
             // Channel toggle: Stable / Beta
             view()
                 .flex_row()
+                .flex_wrap()
                 .items_center()
                 .justify_between()
                 .gap_2()
@@ -103,8 +105,12 @@ pub fn settings_updater_card(props: UpdaterCardProps) -> impl IntoElement {
                         .child(
                             button()
                                 .test_id("updater-channel-stable")
+                                .accessibility_label("Stable channel")
+                                .selected(move || props.channel.get() == UpdateChannel::Stable)
                                 .min_h(px(MOBILE_MIN_TOUCH_TARGET))
                                 .px_3()
+                                .items_center()
+                                .justify_center()
                                 .rounded_full()
                                 .bg(move || {
                                     if props.channel.get() == UpdateChannel::Stable {
@@ -112,6 +118,9 @@ pub fn settings_updater_card(props: UpdaterCardProps) -> impl IntoElement {
                                     } else {
                                         pill_glass_surface()
                                     }
+                                })
+                                .focus_visible(|s| {
+                                    s.outline(px(2.0)).outline_color(move || theme().ring)
                                 })
                                 .on_press(move || on_channel_stable(UpdateChannel::Stable))
                                 .child(
@@ -130,8 +139,12 @@ pub fn settings_updater_card(props: UpdaterCardProps) -> impl IntoElement {
                         .child(
                             button()
                                 .test_id("updater-channel-beta")
+                                .accessibility_label("Beta channel")
+                                .selected(move || props.channel.get() == UpdateChannel::Beta)
                                 .min_h(px(MOBILE_MIN_TOUCH_TARGET))
                                 .px_3()
+                                .items_center()
+                                .justify_center()
                                 .rounded_full()
                                 .bg(move || {
                                     if props.channel.get() == UpdateChannel::Beta {
@@ -139,6 +152,9 @@ pub fn settings_updater_card(props: UpdaterCardProps) -> impl IntoElement {
                                     } else {
                                         pill_glass_surface()
                                     }
+                                })
+                                .focus_visible(|s| {
+                                    s.outline(px(2.0)).outline_color(move || theme().ring)
                                 })
                                 .on_press(move || on_channel_beta(UpdateChannel::Beta))
                                 .child(
@@ -177,6 +193,7 @@ pub fn settings_updater_card(props: UpdaterCardProps) -> impl IntoElement {
             let on_skip = props.on_skip_version.clone();
             let on_install_quit = props.on_install_on_quit.clone();
             let on_restart = props.on_restart_now.clone();
+            let on_retry_check = props.on_check_now.clone();
 
             dynamic(move || match props.phase.get() {
                 UpdatePhase::Idle => view().into_element(),
@@ -280,13 +297,14 @@ pub fn settings_updater_card(props: UpdaterCardProps) -> impl IntoElement {
                         .child(
                             view()
                                 .h(px(6.0))
-                                .w(px(240.0))
+                                .w_full()
+                                .overflow_hidden()
                                 .rounded_full()
                                 .bg(pill_glass_surface)
                                 .child(
                                     view()
                                         .h_full()
-                                        .w(px(240.0 * fraction))
+                                        .w(percentage(fraction.clamp(0.0, 1.0)))
                                         .rounded_full()
                                         .bg(move || theme().primary),
                                 ),
@@ -342,10 +360,22 @@ pub fn settings_updater_card(props: UpdaterCardProps) -> impl IntoElement {
                         )
                         .into_element()
                 }
-                UpdatePhase::Error(err) => text(format!("Update check failed: {err}"))
-                    .text_xs()
-                    .text_color(move || theme().destructive)
-                    .into_element(),
+                UpdatePhase::Error(err) => {
+                    let retry_cb = on_retry_check.clone();
+                    view()
+                        .gap_2()
+                        .child(
+                            text(format_recoverable_error(
+                                "Could not check for updates",
+                                &err,
+                                "Check your network connection and select Retry Check.",
+                            ))
+                            .text_xs()
+                            .text_color(move || theme().destructive),
+                        )
+                        .child(secondary_button("Retry Check", move || retry_cb()))
+                        .into_element()
+                }
             })
         })
 }
@@ -365,6 +395,7 @@ pub fn updater_top_banner(
         view()
             .test_id("updater-top-banner")
             .flex_row()
+            .flex_wrap()
             .items_center()
             .justify_between()
             .gap_2()
@@ -391,7 +422,14 @@ pub fn updater_top_banner(
                             .test_id("updater-banner-dismiss-btn")
                             .min_h(px(MOBILE_MIN_TOUCH_TARGET))
                             .min_w(px(MOBILE_MIN_TOUCH_TARGET))
+                            .px_3()
+                            .items_center()
+                            .justify_center()
+                            .rounded_full()
                             .accessibility_label("Dismiss update banner")
+                            .focus_visible(|s| {
+                                s.outline(px(2.0)).outline_color(move || theme().ring)
+                            })
                             .on_press(move || dismiss_cb())
                             .child(
                                 text("Dismiss")

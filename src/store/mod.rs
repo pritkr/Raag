@@ -375,7 +375,7 @@ fn apply_live_update(update: LiveUpdate) {
         LiveUpdate::PlaybackUpdated(mut snapshot) => {
             crate::platform::android::update_android_auto_tab(
                 "tab_queue",
-                snapshot.queue.tracks.clone(),
+                snapshot.queue.items.clone(),
             );
             // `PlaybackController` is authoritative in live mode; only preserve UI-owned offline_mode.
             playback_signal().update(|p| {
@@ -487,7 +487,7 @@ fn apply_live_update(update: LiveUpdate) {
         LiveUpdate::LibraryLoaded(snapshot) => {
             crate::platform::android::update_android_auto_tab(
                 "tab_library",
-                snapshot.liked_tracks.clone(),
+                snapshot.liked_songs.clone(),
             );
             playback_signal().update(|p| {
                 library_signal().update(|l| {

@@ -35,7 +35,7 @@ fn parse_hex_rgb(hex: &str) -> Option<(f64, f64, f64)> {
 }
 
 fn srgb_to_linear(c: f64) -> f64 {
-    if c <= 0.03928 {
+    if c <= 0.04045 {
         c / 12.92
     } else {
         ((c + 0.055) / 1.055).powf(2.4)
@@ -53,6 +53,28 @@ fn contrast_ratio(hex_a: &str, hex_b: &str) -> f64 {
     (hi + 0.05) / (lo + 0.05)
 }
 
+/// Converts a `#RRGGBB` sRGB color into its Ottosson OKLCH hue angle in degrees `[0, 360)`.
+fn srgb_to_oklch_hue_deg(hex: &str) -> f64 {
+    let (sr, sg, sb) = parse_hex_rgb(hex).expect("valid hex for OKLCH");
+    let r = srgb_to_linear(sr);
+    let g = srgb_to_linear(sg);
+    let b = srgb_to_linear(sb);
+
+    let l = (0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b).cbrt();
+    let m = (0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b).cbrt();
+    let s = (0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b).cbrt();
+
+    let a = 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s;
+    let bk = 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s;
+
+    bk.atan2(a).to_degrees().rem_euclid(360.0)
+}
+
+fn hue_diff_deg(h1: f64, h2: f64) -> f64 {
+    let d = (h1 - h2).abs();
+    d.min(360.0 - d)
+}
+
 #[test]
 fn wcag_aa_contrast_passes_for_both_light_and_dark_themes() {
     let raw = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("theme.json"))
@@ -62,15 +84,47 @@ fn wcag_aa_contrast_passes_for_both_light_and_dark_themes() {
     for mode in ["light", "dark"] {
         let vars = &json["cssVars"][mode];
         let pairs = [
+            // Core text & surface pairs
             ("foreground", "background", 7.0),
             ("card-foreground", "card", 7.0),
+            ("popover-foreground", "popover", 7.0),
             ("primary-foreground", "primary", 4.5),
             ("liked-foreground", "liked", 4.5),
             ("secondary-foreground", "secondary", 4.5),
             ("accent-foreground", "accent", 4.5),
             ("muted-foreground", "background", 4.5),
+            ("muted-foreground", "card", 4.5),
+            ("muted-foreground", "muted", 4.5),
+            ("muted-foreground", "ambient-warm", 4.5),
             ("lyric-active", "background", 7.0),
+            ("lyric-inactive", "background", 4.5),
+            ("lyric-inactive", "ambient-warm", 4.5),
             ("control-foreground", "control", 4.5),
+            // Brand accent & semantic role foregrounds on surfaces
+            ("primary", "background", 4.5),
+            ("primary", "card", 4.5),
+            ("primary", "muted", 4.5),
+            ("destructive-foreground", "destructive", 4.5),
+            ("destructive", "background", 4.5),
+            ("destructive", "card", 4.5),
+            ("destructive", "muted", 4.5),
+            ("status-ok", "background", 4.5),
+            ("status-ok", "card", 4.5),
+            ("status-ok", "muted", 4.5),
+            ("sponsor-badge", "background", 4.5),
+            ("sponsor-badge", "card", 4.5),
+            ("sponsor-badge", "muted", 4.5),
+            ("on-cover", "liked", 4.5),
+            ("on-cover", "cover-1-from", 4.5),
+            ("on-cover", "cover-2-from", 4.5),
+            ("on-cover", "cover-3-from", 4.5),
+            ("on-cover", "cover-4-from", 4.5),
+            ("on-cover", "cover-5-from", 4.5),
+            ("on-cover", "cover-6-from", 4.5),
+            // Non-text UI component boundaries (WCAG 1.4.11 >= 3.0:1)
+            ("input", "background", 3.0),
+            ("input", "card", 3.0),
+            ("ring", "background", 3.0),
         ];
         for (fg_key, bg_key, min_ratio) in pairs {
             let fg = vars[fg_key]
@@ -83,6 +137,30 @@ fn wcag_aa_contrast_passes_for_both_light_and_dark_themes() {
             assert!(
                 ratio >= min_ratio,
                 "Contrast violation in {mode} theme: {fg_key}({fg}) on {bg_key}({bg}) = {ratio:.2}:1 (< {min_ratio}:1)"
+            );
+        }
+
+        // Semantic hue separation (OKLCH >= 15 degrees between distinct roles)
+        let role_keys = ["primary", "destructive", "sponsor-badge", "status-ok"];
+        for i in 0..role_keys.len() {
+            for j in (i + 1)..role_keys.len() {
+                let k1 = role_keys[i];
+                let k2 = role_keys[j];
+                let h1 = srgb_to_oklch_hue_deg(vars[k1].as_str().unwrap());
+                let h2 = srgb_to_oklch_hue_deg(vars[k2].as_str().unwrap());
+                let diff = hue_diff_deg(h1, h2);
+                assert!(
+                    diff >= 15.0,
+                    "OKLCH hue collision in {mode}: {k1}({h1:.1}deg) vs {k2}({h2:.1}deg) = {diff:.1}deg (< 15deg)"
+                );
+            }
+        }
+
+        // Dead legacy chart tokens must remain removed
+        for chart_key in ["chart-1", "chart-2", "chart-3", "chart-4", "chart-5"] {
+            assert!(
+                vars.get(chart_key).is_none(),
+                "legacy token {mode}.{chart_key} must not exist in theme.json"
             );
         }
     }

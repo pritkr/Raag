@@ -8,14 +8,15 @@ use resonance_contract::format_duration_ms;
 use crate::store::{self, AppTab, DesktopSidePanel};
 use crate::ui::controls::ambient::{animated_like_heart, animated_play_pause_icon};
 use crate::ui::controls::context_menu::{TrackMenuContext, track_context_menu};
-use crate::ui::controls::primitives::svg_icon_button;
+use crate::ui::controls::primitives::{active_state_dot, svg_icon_button};
 use crate::ui::controls::sleep_timer_sheet::{open_sleep_timer_sheet, sleep_timer_badge_label};
 use crate::ui::controls::speed_sheet::{open_speed_sheet, speed_badge_label};
 use crate::ui::icons::{IconKind, icon, reactive_icon};
 use crate::ui::tokens::{
-    MOBILE_MIN_TOUCH_TARGET, color_control, color_control_fg, color_liked, color_player_accent,
-    cover_gradient_pair, frosted_bar_surface, glass_hairline, glass_specular_hairline,
-    is_desktop_panel_visible, motion, pill_glass_hover,
+    MOBILE_MIN_TOUCH_TARGET, color_control, color_control_fg, color_liked, color_on_cover,
+    color_player_accent, cover_gradient_pair, frosted_bar_surface, glass_hairline,
+    glass_specular_hairline, is_desktop_panel_visible, motion, pill_glass_hover,
+    pill_glass_surface,
 };
 
 fn btn_transition_ms() -> f32 {
@@ -33,7 +34,7 @@ fn btn_press_scale() -> f32 {
 fn trigger_panel_layout_animation() {
     if !store::reduced_motion() {
         let _ = std::panic::catch_unwind(|| {
-            animate_layout(LayoutAnimation::EASE_IN_EASE_OUT);
+            animate_layout(nsh_core::LayoutAnimation::EASE_IN_EASE_OUT);
         });
     }
 }
@@ -62,13 +63,11 @@ pub fn seek_slider(
         })
         .step(500.0)
         .accessibility_label("Playback Position")
-        .track_class("w-full h-3 justify-center")
-        .indicator_class("w-full h-1 rounded-full bg-muted")
+        .track_class("w-full h-6 justify-center")
+        .indicator_class("w-full h-1.5 rounded-full bg-muted")
         .range_class("rounded-full")
         .range_style(|s| s.bg(color_player_accent))
-        .thumb_class(
-            "size-3 rounded-full opacity-0 group-hover:opacity-100 group-active:opacity-100",
-        )
+        .thumb_class("size-3.5 rounded-full")
         .thumb_style(|s| s.bg(color_player_accent))
         .on_change(move |v: &SliderValue| {
             on_seek(v.start().max(0.0).round() as u64);
@@ -138,13 +137,11 @@ pub fn desktop_player_bar() -> impl IntoElement {
                         })
                         .step(500.0)
                         .accessibility_label("Desktop Playback Seek Bar")
-                        .track_class("w-full h-3 justify-center")
+                        .track_class("w-full h-5 justify-center")
                         .indicator_class("w-full h-1 bg-muted")
                         .range_class("h-1")
                         .range_style(|s| s.bg(color_player_accent))
-                        .thumb_class(
-                            "size-3 rounded-full opacity-0 group-hover:opacity-100 group-active:opacity-100",
-                        )
+                        .thumb_class("size-3.5 rounded-full")
                         .thumb_style(|s| s.bg(color_player_accent))
                         .on_change(|v: &SliderValue| {
                             store::seek_ms(v.start().max(0.0).round() as u64);
@@ -238,7 +235,7 @@ pub fn desktop_player_bar() -> impl IntoElement {
                                                 .test_id("mini-player-monogram")
                                                 .text_base()
                                                 .font_weight(FontWeight::BOLD)
-                                                .text_color(move || theme().primary_foreground)
+                                                .text_color(color_on_cover)
                                             }),
                                         ),
                                 )
@@ -304,12 +301,29 @@ pub fn desktop_player_bar() -> impl IntoElement {
                         )
                         .child(
                             button()
-                                .accessibility_label("Player Bar Dislike")
-                                .w(px(34.0))
-                                .h(px(34.0))
+                                .selected(is_disliked)
+                                .accessibility_label(move || {
+                                    Some(SharedString::from(if is_disliked() {
+                                        "Player Bar Dislike (Active)"
+                                    } else {
+                                        "Player Bar Dislike"
+                                    }))
+                                })
+                                .w(px(36.0))
+                                .h(px(36.0))
+                                .flex_col()
                                 .items_center()
                                 .justify_center()
+                                .gap_0p5()
                                 .rounded_full()
+                                .border_1()
+                                .border_color(move || {
+                                    if is_disliked() {
+                                        color_player_accent()
+                                    } else {
+                                        frosted_bar_surface()
+                                    }
+                                })
                                 .transition()
                                 .duration(btn_transition_ms)
                                 .ease_out()
@@ -325,7 +339,8 @@ pub fn desktop_player_bar() -> impl IntoElement {
                                     } else {
                                         theme().muted_foreground
                                     }
-                                })),
+                                }))
+                                .child(active_state_dot(is_disliked)),
                         )
                         .child(dynamic(|| {
                             if let Some(track) = store::player_snapshot().current_track {
@@ -351,12 +366,28 @@ pub fn desktop_player_bar() -> impl IntoElement {
                         .gap_2p5()
                         .child(
                             button()
-                                .accessibility_label("Player Bar Shuffle")
-                                .w(px(36.0))
-                                .h(px(36.0))
+                                .selected(is_shuffle)
+                                .accessibility_label(move || {
+                                    Some(SharedString::from(if is_shuffle() {
+                                        "Player Bar Shuffle (On)"
+                                    } else {
+                                        "Player Bar Shuffle"
+                                    }))
+                                })
+                                .w(px(38.0))
+                                .h(px(38.0))
+                                .flex_col()
                                 .items_center()
                                 .justify_center()
+                                .gap_0p5()
                                 .rounded_full()
+                                .bg(move || {
+                                    if is_shuffle() {
+                                        pill_glass_surface()
+                                    } else {
+                                        frosted_bar_surface()
+                                    }
+                                })
                                 .transition()
                                 .duration(btn_transition_ms)
                                 .ease_out()
@@ -372,7 +403,8 @@ pub fn desktop_player_bar() -> impl IntoElement {
                                     } else {
                                         theme().muted_foreground
                                     }
-                                })),
+                                }))
+                                .child(active_state_dot(is_shuffle)),
                         )
                         .child(svg_icon_button(
                             IconKind::SkipBack,
@@ -418,12 +450,41 @@ pub fn desktop_player_bar() -> impl IntoElement {
                         ))
                         .child(
                             button()
-                                .accessibility_label("Player Bar Repeat Mode")
-                                .w(px(36.0))
-                                .h(px(36.0))
+                                .selected(move || {
+                                    store::player_snapshot().queue.repeat
+                                        != resonance_contract::RepeatMode::None
+                                })
+                                .accessibility_label(move || {
+                                    Some(SharedString::from(
+                                        match store::player_snapshot().queue.repeat {
+                                            resonance_contract::RepeatMode::None => {
+                                                "Player Bar Repeat Mode"
+                                            }
+                                            resonance_contract::RepeatMode::All => {
+                                                "Player Bar Repeat Mode (All)"
+                                            }
+                                            resonance_contract::RepeatMode::One => {
+                                                "Player Bar Repeat Mode (One)"
+                                            }
+                                        },
+                                    ))
+                                })
+                                .w(px(38.0))
+                                .h(px(38.0))
+                                .flex_col()
                                 .items_center()
                                 .justify_center()
+                                .gap_0p5()
                                 .rounded_full()
+                                .bg(move || {
+                                    if store::player_snapshot().queue.repeat
+                                        != resonance_contract::RepeatMode::None
+                                    {
+                                        pill_glass_surface()
+                                    } else {
+                                        frosted_bar_surface()
+                                    }
+                                })
                                 .transition()
                                 .duration(btn_transition_ms)
                                 .ease_out()
@@ -448,7 +509,11 @@ pub fn desktop_player_bar() -> impl IntoElement {
                                             color_player_accent()
                                         }
                                     },
-                                )),
+                                ))
+                                .child(active_state_dot(move || {
+                                    store::player_snapshot().queue.repeat
+                                        != resonance_contract::RepeatMode::None
+                                })),
                         ),
                 )
                 .child(
@@ -571,54 +636,112 @@ pub fn desktop_player_bar() -> impl IntoElement {
                             || f64::from(store::player_snapshot().volume),
                             store::set_volume,
                         ))
-                        .child(svg_icon_button(
-                            IconKind::Lyrics,
-                            16.0,
-                            34.0,
-                            "Toggle Lyrics",
-                            true,
-                            move || {
-                                if store::desktop_side_panel_open()
-                                    && store::desktop_side_panel() == DesktopSidePanel::Lyrics
-                                {
-                                    color_player_accent()
-                                } else {
-                                    theme().muted_foreground
-                                }
-                            },
-                            || {
-                                if is_desktop_panel_visible() {
-                                    trigger_panel_layout_animation();
-                                    store::toggle_desktop_side_panel(DesktopSidePanel::Lyrics);
-                                } else {
-                                    store::set_tab(AppTab::Lyrics);
-                                }
-                            },
-                        ))
-                        .child(svg_icon_button(
-                            IconKind::Queue,
-                            16.0,
-                            34.0,
-                            "Toggle Queue",
-                            true,
-                            move || {
-                                if store::desktop_side_panel_open()
-                                    && store::desktop_side_panel() == DesktopSidePanel::Queue
-                                {
-                                    color_player_accent()
-                                } else {
-                                    theme().muted_foreground
-                                }
-                            },
-                            || {
-                                if is_desktop_panel_visible() {
-                                    trigger_panel_layout_animation();
-                                    store::toggle_desktop_side_panel(DesktopSidePanel::Queue);
-                                } else {
-                                    store::set_tab(AppTab::Queue);
-                                }
-                            },
-                        ))
+                        .child(
+                            button()
+                                .selected(move || {
+                                    store::desktop_side_panel_open()
+                                        && store::desktop_side_panel() == DesktopSidePanel::Lyrics
+                                })
+                                .accessibility_label("Toggle Lyrics")
+                                .w(px(36.0))
+                                .h(px(36.0))
+                                .flex_col()
+                                .items_center()
+                                .justify_center()
+                                .gap_0p5()
+                                .rounded_full()
+                                .bg(move || {
+                                    if store::desktop_side_panel_open()
+                                        && store::desktop_side_panel() == DesktopSidePanel::Lyrics
+                                    {
+                                        pill_glass_surface()
+                                    } else {
+                                        frosted_bar_surface()
+                                    }
+                                })
+                                .transition()
+                                .duration(btn_transition_ms)
+                                .ease_out()
+                                .hover(|s| s.bg(pill_glass_hover))
+                                .active(|s| s.scale(btn_press_scale))
+                                .focus_visible(|s| {
+                                    s.outline(px(2.0)).outline_color(move || theme().ring)
+                                })
+                                .on_press(|| {
+                                    if is_desktop_panel_visible() {
+                                        trigger_panel_layout_animation();
+                                        store::toggle_desktop_side_panel(DesktopSidePanel::Lyrics);
+                                    } else {
+                                        store::set_tab(AppTab::Lyrics);
+                                    }
+                                })
+                                .child(icon(IconKind::Lyrics, 16.0, move || {
+                                    if store::desktop_side_panel_open()
+                                        && store::desktop_side_panel() == DesktopSidePanel::Lyrics
+                                    {
+                                        color_player_accent()
+                                    } else {
+                                        theme().muted_foreground
+                                    }
+                                }))
+                                .child(active_state_dot(move || {
+                                    store::desktop_side_panel_open()
+                                        && store::desktop_side_panel() == DesktopSidePanel::Lyrics
+                                })),
+                        )
+                        .child(
+                            button()
+                                .selected(move || {
+                                    store::desktop_side_panel_open()
+                                        && store::desktop_side_panel() == DesktopSidePanel::Queue
+                                })
+                                .accessibility_label("Toggle Queue")
+                                .w(px(36.0))
+                                .h(px(36.0))
+                                .flex_col()
+                                .items_center()
+                                .justify_center()
+                                .gap_0p5()
+                                .rounded_full()
+                                .bg(move || {
+                                    if store::desktop_side_panel_open()
+                                        && store::desktop_side_panel() == DesktopSidePanel::Queue
+                                    {
+                                        pill_glass_surface()
+                                    } else {
+                                        frosted_bar_surface()
+                                    }
+                                })
+                                .transition()
+                                .duration(btn_transition_ms)
+                                .ease_out()
+                                .hover(|s| s.bg(pill_glass_hover))
+                                .active(|s| s.scale(btn_press_scale))
+                                .focus_visible(|s| {
+                                    s.outline(px(2.0)).outline_color(move || theme().ring)
+                                })
+                                .on_press(|| {
+                                    if is_desktop_panel_visible() {
+                                        trigger_panel_layout_animation();
+                                        store::toggle_desktop_side_panel(DesktopSidePanel::Queue);
+                                    } else {
+                                        store::set_tab(AppTab::Queue);
+                                    }
+                                })
+                                .child(icon(IconKind::Queue, 16.0, move || {
+                                    if store::desktop_side_panel_open()
+                                        && store::desktop_side_panel() == DesktopSidePanel::Queue
+                                    {
+                                        color_player_accent()
+                                    } else {
+                                        theme().muted_foreground
+                                    }
+                                }))
+                                .child(active_state_dot(move || {
+                                    store::desktop_side_panel_open()
+                                        && store::desktop_side_panel() == DesktopSidePanel::Queue
+                                })),
+                        )
                         .child(
                             button()
                                 .accessibility_label("Toggle Fullscreen Player")
@@ -765,7 +888,7 @@ pub fn mini_player_bar(
                                                 .test_id("mini-player-monogram")
                                                 .text_base()
                                                 .font_weight(FontWeight::BOLD)
-                                                .text_color(move || theme().primary_foreground)
+                                                .text_color(color_on_cover)
                                         }
                                     }),
                                 ),

@@ -18,6 +18,12 @@ pub const DESKTOP_PANEL_MIN_WIDTH: f32 = 1080.0;
 /// Minimum interactive touch target on Android/mobile per Binary Visual Rubric #1.
 pub const MOBILE_MIN_TOUCH_TARGET: f32 = 48.0;
 
+/// Compact narrow-mobile threshold (320px–379px) for responsive reflow & artwork scaling.
+pub const NARROW_VIEWPORT_MAX_WIDTH: f32 = 380.0;
+
+/// Optimal prose line-length cap (~60–72ch at 14–16px body size).
+pub const PROSE_MAX_WIDTH: f32 = 660.0;
+
 /// Motion tokens honoring system reduced-motion setting.
 pub mod motion {
     use super::*;
@@ -73,6 +79,10 @@ pub fn grid_columns() -> u32 {
     }
 }
 
+pub fn is_narrow_viewport() -> bool {
+    window().width.0 < NARROW_VIEWPORT_MAX_WIDTH
+}
+
 pub fn is_desktop_panel_visible() -> bool {
     window().width.0 >= DESKTOP_PANEL_MIN_WIDTH
 }
@@ -83,6 +93,16 @@ pub fn radius_card() -> Points {
 
 pub fn radius_inset() -> Points {
     px(theme().number("radius-inset").unwrap_or(8.0))
+}
+
+/// Concentric inner radius for elements nested inside a `radius_panel` container (`18px - 10px - 1px = 7px`).
+pub fn radius_panel_inner() -> Points {
+    px((theme().number("radius-panel").unwrap_or(18.0) - 11.0).max(4.0))
+}
+
+/// Concentric inner radius for tabs/segments nested inside a `radius_card` container (`12px - 4px = 8px`).
+pub fn radius_tab_inner() -> Points {
+    radius_inset()
 }
 
 pub fn radius_panel() -> Points {
@@ -301,6 +321,18 @@ pub fn color_sponsor_badge() -> AdaptiveColor {
 
 pub fn color_status_ok() -> AdaptiveColor {
     theme().color("status-ok").unwrap_or(theme().primary)
+}
+
+/// High-contrast text/icon foreground painted on `theme().destructive` fills (`>= 5.9:1` Light & Dark).
+pub fn color_destructive_foreground() -> AdaptiveColor {
+    theme()
+        .color("destructive-foreground")
+        .unwrap_or(theme().primary_foreground)
+}
+
+/// Guaranteed white (`#ffffff`) foreground for monograms & badges painted over cover gradients.
+pub fn color_on_cover() -> AdaptiveColor {
+    theme().color("on-cover").unwrap_or(theme().foreground)
 }
 
 // ---------------------------------------------------------------------------

@@ -8,11 +8,12 @@ use resonance_contract::{DownloadStatus, Track, format_duration_ms};
 use crate::store;
 use crate::ui::controls::ambient::live_equalizer_indicator;
 use crate::ui::controls::context_menu::{TrackMenuContext, track_context_menu};
-use crate::ui::controls::primitives::artwork_box;
+use crate::ui::controls::primitives::{artwork_box, confirm_destructive};
 use crate::ui::icons::{IconKind, icon, reactive_icon};
 use crate::ui::tokens::{
-    MOBILE_MIN_TOUCH_TARGET, color_liked, color_player_accent, frosted_bar_surface, glass_hairline,
-    is_desktop_layout, motion, pill_glass_hover, pill_glass_surface, radius_card,
+    MOBILE_MIN_TOUCH_TARGET, color_liked, color_player_accent, color_status_ok,
+    frosted_bar_surface, glass_hairline, is_desktop_layout, motion, pill_glass_hover,
+    pill_glass_surface, radius_card,
 };
 
 fn row_transition_ms() -> f32 {
@@ -30,14 +31,30 @@ fn row_press_scale() -> f32 {
 /// Reactive per-track download state badge & quick action button (>= 48dp touch target).
 pub fn download_state_badge(track: Track) -> impl IntoElement {
     let track_id = track.id.clone();
+    let track_id_a11y = track.id.clone();
     let track_id_icon = track.id.clone();
     let track_id_label = track.id.clone();
     let track_id_color = track.id.clone();
+    let track_title_dl = track.title.clone();
     let track_for_press = track.clone();
 
     button()
         .test_id(&format!("track-download-btn-{}", track.id))
-        .accessibility_label("Download Track")
+        .accessibility_label(move || {
+            Some(SharedString::from(
+                match store::download_record(&track_id_a11y).map(|r| r.status) {
+                    None => "Download Track",
+                    Some(
+                        DownloadStatus::Queued
+                        | DownloadStatus::Downloading
+                        | DownloadStatus::Tagging,
+                    ) => "Pause Download",
+                    Some(DownloadStatus::Paused) => "Resume Download",
+                    Some(DownloadStatus::Completed) => "Remove Offline Download",
+                    Some(DownloadStatus::Failed | DownloadStatus::Cancelled) => "Retry Download",
+                },
+            ))
+        })
         .min_h(px(MOBILE_MIN_TOUCH_TARGET))
         .min_w(px(MOBILE_MIN_TOUCH_TARGET))
         .px_2()
@@ -62,7 +79,16 @@ pub fn download_state_badge(track: Track) -> impl IntoElement {
                 DownloadStatus::Failed | DownloadStatus::Cancelled => {
                     store::enqueue_download(track_for_press.clone())
                 }
-                DownloadStatus::Completed => store::delete_download(&rec.video_id),
+                DownloadStatus::Completed => {
+                    let id = rec.video_id.clone();
+                    let title = track_title_dl.clone();
+                    confirm_destructive(
+                        "Remove offline download?",
+                        format!("Remove “{title}” from offline downloads on this device?"),
+                        "Remove Download",
+                        move || store::delete_download(&id),
+                    );
+                }
             },
         })
         .child(reactive_icon(
@@ -77,7 +103,7 @@ pub fn download_state_badge(track: Track) -> impl IntoElement {
             },
             15.0,
             move || match store::download_record(&track_id_color) {
-                Some(rec) if rec.status == DownloadStatus::Completed => theme().primary,
+                Some(rec) if rec.status == DownloadStatus::Completed => color_status_ok(),
                 Some(rec)
                     if matches!(
                         rec.status,
@@ -405,7 +431,7 @@ pub fn track_row_view(
                                                     r.status == DownloadStatus::Completed
                                                 })
                                     },
-                                    || icon(IconKind::CheckCircle, 12.0, move || theme().primary),
+                                    || icon(IconKind::CheckCircle, 12.0, color_status_ok),
                                 ))
                                 .child(
                                     text(artist)

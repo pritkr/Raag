@@ -8,11 +8,13 @@ use nsh_core::prelude::*;
 use resonance_contract::{CastDevice, CastProtocol, CastSessionState};
 
 use crate::store;
-use crate::ui::controls::primitives::{secondary_button, svg_icon_button};
+use crate::ui::controls::primitives::{active_state_dot, secondary_button, svg_icon_button};
 use crate::ui::controls::sheets::modal_panel_container;
 use crate::ui::icons::{IconKind, icon};
+use crate::ui::text_format::format_recoverable_error;
 use crate::ui::tokens::{
-    MOBILE_MIN_TOUCH_TARGET, motion, pill_glass_hover, pill_glass_surface, radius_card, radius_pill,
+    MOBILE_MIN_TOUCH_TARGET, glass_hairline, motion, pill_glass_hover, pill_glass_surface,
+    radius_card, radius_pill,
 };
 
 fn protocol_badge_label(protocol: CastProtocol) -> &'static str {
@@ -24,23 +26,54 @@ fn protocol_badge_label(protocol: CastProtocol) -> &'static str {
 }
 
 /// Accessible >= 48dp Cast button for Now Playing & Mini-Player bars.
-/// Lights up with `theme().primary` when `connected` is true.
+/// Lights up with `theme().primary` and an active indicator dot when `connected` is true.
 pub fn cast_button(connected: bool, on_press: impl Fn() + 'static) -> impl IntoElement {
-    svg_icon_button(
-        IconKind::Radio,
-        20.0,
-        MOBILE_MIN_TOUCH_TARGET,
-        "Cast",
-        false,
-        move || {
+    button()
+        .selected(move || connected)
+        .on_press(on_press)
+        .accessibility_label(if connected {
+            "Cast (Connected)"
+        } else {
+            "Cast"
+        })
+        .w(px(MOBILE_MIN_TOUCH_TARGET))
+        .h(px(MOBILE_MIN_TOUCH_TARGET))
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap_0p5()
+        .rounded_full()
+        .bg(pill_glass_surface)
+        .border_1()
+        .border_color(move || {
+            if connected {
+                theme().primary
+            } else {
+                glass_hairline()
+            }
+        })
+        .transition()
+        .duration(|| motion::transition_ms(motion::PRESS_MS, store::reduced_motion()))
+        .ease_out()
+        .hover(|s| s.bg(pill_glass_hover))
+        .active(|s| {
+            s.scale(|| {
+                if store::reduced_motion() {
+                    1.0
+                } else {
+                    motion::PRESS_SCALE
+                }
+            })
+        })
+        .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
+        .child(icon(IconKind::Radio, 20.0, move || {
             if connected {
                 theme().primary
             } else {
                 theme().foreground
             }
-        },
-        on_press,
-    )
+        }))
+        .child(active_state_dot(move || connected))
 }
 
 /// Cast Device Picker Sheet (bottom sheet on mobile, popover dialog on desktop).
@@ -60,7 +93,12 @@ pub fn cast_picker_sheet(
         CastSessionState::Connected { device, .. } => {
             format!("Connected to {}", device.name).into()
         }
-        CastSessionState::Error(err) => format!("Cast error: {err}").into(),
+        CastSessionState::Error(err) => format_recoverable_error(
+            "Could not connect to cast device",
+            err,
+            "Make sure the device is on the same Wi-Fi network and try again",
+        )
+        .into(),
     };
 
     let active_device_id = match &session {
@@ -222,14 +260,19 @@ pub fn cast_picker_sheet(
                                 .child(
                                     text(format!("Receiver Volume: {vol_pct}%"))
                                         .text_xs()
+                                        .tabular_nums()
                                         .text_color(move || theme().muted_foreground),
                                 )
                                 .child(
                                     view()
                                         .flex_row()
                                         .gap_2()
-                                        .child(secondary_button("Vol -", move || dec_cb(vol_down)))
-                                        .child(secondary_button("Vol +", move || inc_cb(vol_up))),
+                                        .child(secondary_button("Volume \u{2212}", move || {
+                                            dec_cb(vol_down)
+                                        }))
+                                        .child(secondary_button("Volume +", move || {
+                                            inc_cb(vol_up)
+                                        })),
                                 ),
                         )
                         .child(secondary_button("Disconnect", on_disconnect)),

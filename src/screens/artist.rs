@@ -11,12 +11,12 @@ use resonance_core::palette::palette_for_track;
 
 use crate::ui::controls::{
     artwork_box, back_button, glass_pill_button, hero_pill_button, media_square_card,
-    track_row_view,
+    secondary_button, track_row_view,
 };
 use crate::ui::icons::IconKind;
 use crate::ui::tokens::{
-    MOBILE_MIN_TOUCH_TARGET, ambient_backdrop_color, glass_hairline, is_desktop_layout,
-    pill_glass_surface, radius_card,
+    MOBILE_MIN_TOUCH_TARGET, PROSE_MAX_WIDTH, ambient_backdrop_color, glass_hairline,
+    is_desktop_layout, is_narrow_viewport, pill_glass_surface, radius_card,
 };
 
 #[derive(Clone)]
@@ -109,7 +109,7 @@ pub fn artist_screen_with_detail(
     let show_about = signal(false);
     let palette = palette_for_track(&artist.channel_id, &artist.name);
     let hero_bg = move || ambient_backdrop_color(palette);
-    let art_size = 156.0;
+    let art_size = if is_narrow_viewport() { 128.0 } else { 156.0 };
     let mono = monogram_for(&artist.name);
 
     let top_for_play = artist.top_songs.clone();
@@ -285,6 +285,7 @@ pub fn artist_screen_with_detail(
                             .border_color(glass_hairline)
                             .child(
                                 text(bio_text.clone())
+                                    .max_w(px(PROSE_MAX_WIDTH))
                                     .text_sm()
                                     .text_color(move || theme().muted_foreground),
                             )

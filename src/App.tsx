@@ -7,10 +7,12 @@ import React, { useCallback, useEffect, useReducer, useRef, useState } from 'rea
 import { Download, Monitor, Moon, RefreshCw, Smartphone, Sun } from 'lucide-react';
 import {
   INITIAL_PREVIEW_STATE,
+  formatHostError,
   previewReducer,
   type NshBorderSide,
   type NshNode,
   type NshTreeResponse,
+  type PreviewDevice,
 } from './previewState';
 
 function borderCss(side: NshBorderSide): string | undefined {
@@ -28,6 +30,15 @@ function radiiCss(r: [number, number, number, number]): string | undefined {
 function collectText(node: NshNode): string {
   if (node.text) return node.text;
   return node.children.map(collectText).filter(Boolean).join(' ').trim();
+}
+
+function logicalTextAlign(
+  align: NshNode['textAlign'],
+): React.CSSProperties['textAlign'] {
+  if (align === 'right') return 'end';
+  if (align === 'center') return 'center';
+  if (align === 'justify') return 'justify';
+  return 'start';
 }
 
 interface NodeViewProps {
@@ -66,7 +77,7 @@ function NshNodeView({
 
   const baseStyle: React.CSSProperties = {
     position: isRoot ? 'relative' : 'absolute',
-    left: isRoot ? 0 : node.x,
+    insetInlineStart: isRoot ? 0 : node.x,
     top: isRoot ? 0 : node.y,
     width: node.w,
     height: node.h,
@@ -74,9 +85,9 @@ function NshNodeView({
     backgroundColor: node.bg ?? 'transparent',
     borderRadius: radiiCss(node.radii),
     borderTop: borderCss(node.borders[0]),
-    borderRight: borderCss(node.borders[1]),
+    borderInlineEnd: borderCss(node.borders[1]),
     borderBottom: borderCss(node.borders[2]),
-    borderLeft: borderCss(node.borders[3]),
+    borderInlineStart: borderCss(node.borders[3]),
     opacity: node.opacity,
     backdropFilter:
       node.backdropBlurPx > 0
@@ -97,9 +108,11 @@ function NshNodeView({
   };
 
   if (node.isInput) {
+    const inputFontRem = Math.max(1, (node.inputFontSize || 16) / 16);
     return (
       <input
         type="text"
+        className="nsh-input"
         value={draft}
         placeholder={node.inputPlaceholder}
         aria-label={node.a11yLabel ?? node.inputPlaceholder ?? 'Text input'}
@@ -116,11 +129,10 @@ function NshNodeView({
         }}
         style={{
           ...baseStyle,
-          color: node.inputColor ?? '#f4f5f7',
-          fontSize: `${node.inputFontSize || 14}px`,
-          paddingLeft: Math.max(10, node.contentX),
-          paddingRight: 10,
-          outline: 'none',
+          color: node.inputColor ?? 'var(--host-fg)',
+          fontSize: `${inputFontRem}rem`,
+          paddingInlineStart: Math.max(10, node.contentX),
+          paddingInlineEnd: 10,
         }}
       />
     );
@@ -139,13 +151,31 @@ function NshNodeView({
 
   if (node.kind === 'text') {
     const firstSpan = node.spans[0];
+    const baseFontPx = firstSpan?.fontSize || 14;
+    const computedLineHeight = firstSpan?.lineHeight
+      ? Number(Math.max(1.3, firstSpan.lineHeight / baseFontPx).toFixed(3))
+      : 1.4;
+    const rawText = (node.text ?? '').trim();
+    const isShortControlLabel =
+      insideButton &&
+      node.maxLines === 1 &&
+      rawText.length > 0 &&
+      rawText.length <= 16 &&
+      node.w > 0 &&
+      node.w <= 112 &&
+      !rawText.includes('•');
     const clampStyle: React.CSSProperties =
       node.maxLines === 1
-        ? {
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-          }
+        ? isShortControlLabel
+          ? {
+              whiteSpace: 'nowrap',
+              overflow: 'visible',
+            }
+          : {
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }
         : node.maxLines > 1
           ? {
               display: '-webkit-box',
@@ -171,17 +201,19 @@ function NshNodeView({
               : node.textAlign === 'right'
                 ? 'flex-end'
                 : 'flex-start',
-          textAlign: node.textAlign,
-          lineHeight: firstSpan?.lineHeight ? `${firstSpan.lineHeight}px` : 1.25,
+          textAlign: logicalTextAlign(node.textAlign),
+          lineHeight: computedLineHeight,
           ...clampStyle,
         }}
       >
         {node.spans.length > 0 ? (
           <span
             style={{
-              width: '100%',
-              overflow: node.maxLines >= 1 ? 'hidden' : undefined,
-              textOverflow: node.maxLines === 1 ? 'ellipsis' : undefined,
+              width: isShortControlLabel ? 'auto' : '100%',
+              overflow:
+                node.maxLines >= 1 && !isShortControlLabel ? 'hidden' : 'visible',
+              textOverflow:
+                node.maxLines === 1 && !isShortControlLabel ? 'ellipsis' : undefined,
               whiteSpace: node.maxLines === 1 ? 'nowrap' : undefined,
             }}
           >
@@ -190,7 +222,7 @@ function NshNodeView({
                 key={i}
                 style={{
                   color: s.color ?? 'inherit',
-                  fontSize: `${s.fontSize || 14}px`,
+                  fontSize: `${(s.fontSize || 14) / 16}rem`,
                   fontWeight: s.fontWeight || 400,
                   fontStyle: s.italic ? 'italic' : 'normal',
                   fontVariantNumeric: s.tabularNums ? 'tabular-nums' : undefined,
@@ -240,6 +272,7 @@ function NshNodeView({
           ...baseStyle,
           overflowX: node.scrollHorizontal ? 'auto' : 'hidden',
           overflowY: node.scrollHorizontal ? 'hidden' : 'auto',
+          overscrollBehavior: 'contain',
           WebkitOverflowScrolling: 'touch',
         }}
       >
@@ -261,6 +294,7 @@ function NshNodeView({
     return (
       <button
         type="button"
+        disabled={node.disabled ?? false}
         aria-label={label}
         data-testid={node.testId ?? undefined}
         onClick={(e) => {
@@ -271,27 +305,63 @@ function NshNodeView({
           ...baseStyle,
           padding: 0,
           margin: 0,
-          cursor: 'pointer',
-          textAlign: 'left',
+          cursor: node.disabled ? 'not-allowed' : 'pointer',
+          textAlign: 'start',
           appearance: 'none',
-          transition: 'opacity 110ms ease',
+          transitionProperty: 'opacity',
+          transitionDuration: '120ms',
+          transitionTimingFunction: 'ease',
         }}
-        className="hover:brightness-110 active:opacity-80 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-red-500"
+        className="nsh-pressable host-transition hover:brightness-110 active:opacity-80"
       >
         {renderChildren()}
       </button>
     );
   }
 
+  const isStatusRegion = node.testId === 'global-status-region';
+  const livePoliteness =
+    isStatusRegion
+      ? 'polite'
+      : node.a11yLive === 'polite' || node.a11yLive === 'assertive'
+        ? node.a11yLive
+        : undefined;
+
   return (
     <div
       data-testid={node.testId ?? undefined}
-      aria-label={node.a11yLabel ?? undefined}
+      role={
+        node.pressable
+          ? 'button'
+          : isStatusRegion
+            ? 'status'
+            : (node.a11yRole ?? undefined)
+      }
+      tabIndex={node.pressable ? 0 : undefined}
+      aria-label={
+        node.pressable
+          ? (node.a11yLabel || collectText(node) || `Action ${node.id}`)
+          : (node.a11yLabel ?? undefined)
+      }
+      aria-live={livePoliteness}
+      aria-atomic={isStatusRegion ? true : undefined}
+      className={node.pressable ? 'nsh-pressable' : undefined}
       onClick={
         node.pressable
           ? (e) => {
               e.stopPropagation();
               onPress(node.id);
+            }
+          : undefined
+      }
+      onKeyDown={
+        node.pressable
+          ? (e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                e.stopPropagation();
+                onPress(node.id);
+              }
             }
           : undefined
       }
@@ -305,6 +375,16 @@ function NshNodeView({
   );
 }
 
+const DEVICE_PRESETS: Array<{
+  id: PreviewDevice;
+  label: string;
+  isDesktop: boolean;
+}> = [
+  { id: 'compact', label: 'Compact 320×640', isDesktop: false },
+  { id: 'android', label: 'Android 390×844', isDesktop: false },
+  { id: 'desktop', label: 'Desktop', isDesktop: true },
+];
+
 export default function App() {
   const [preview, dispatch] = useReducer(previewReducer, INITIAL_PREVIEW_STATE);
   const reqSeqRef = useRef(0);
@@ -316,7 +396,12 @@ export default function App() {
       const res = await fetch('/api/nsh/tree');
       if (!res.ok) {
         const msg = await res.text();
-        throw new Error(msg || `HTTP ${res.status}`);
+        dispatch({
+          type: 'request_failed',
+          seq,
+          message: formatHostError(res.status, msg),
+        });
+        return;
       }
       const data: NshTreeResponse = await res.json();
       dispatch({ type: 'tree_received', seq, tree: data });
@@ -324,7 +409,7 @@ export default function App() {
       dispatch({
         type: 'request_failed',
         seq,
-        message: e instanceof Error ? e.message : String(e),
+        message: formatHostError(0, e instanceof Error ? e.message : String(e)),
       });
     }
   }, []);
@@ -367,26 +452,29 @@ export default function App() {
   const tree = preview.tree;
   const error = preview.error;
   const busy = preview.inFlightCount > 0;
-  const device = tree?.device ?? 'android';
+  const device: PreviewDevice = tree?.device ?? 'android';
+  const isPhone = device === 'android' || device === 'compact';
   const scheme = tree?.scheme ?? 'dark';
   const apkMb = tree?.apkSizeBytes
     ? (tree.apkSizeBytes / (1024 * 1024)).toFixed(2)
     : null;
+  const nextThemeLabel = scheme === 'dark' ? 'Light theme' : 'Dark theme';
 
   return (
-    <div className="min-h-screen w-full bg-[#07080a] text-[#f4f5f7] flex flex-col">
+    <div className="min-h-screen w-full bg-[var(--host-bg)] text-[var(--host-fg)] flex flex-col">
       {/* Slim Pure-Rust NSH Host Control Bar */}
-      <header className="w-full border-b border-[#222631] bg-[#0d0f14] px-4 py-2.5 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
+      <header className="w-full border-b border-[var(--host-border)] bg-[var(--host-surface)] px-4 py-2.5 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3 min-w-0">
           <svg
             viewBox="0 0 48 48"
             className="w-7 h-7 shrink-0"
-            aria-label="Raag Logo"
+            aria-hidden="true"
+            focusable="false"
           >
             <defs>
               <linearGradient id="raag-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stopColor="#E12D39" />
-                <stop offset="100%" stopColor="#FF5A36" />
+                <stop offset="0%" stopColor="#a8490b" />
+                <stop offset="100%" stopColor="#eb7a3c" />
               </linearGradient>
             </defs>
             <rect x="2" y="2" width="44" height="44" rx="13" fill="url(#raag-grad)" />
@@ -410,83 +498,84 @@ export default function App() {
             <rect x="15" y="19" width="3.5" height="13" rx="1.75" fill="#FFFFFF" opacity="0.9" />
             <rect x="29.5" y="17" width="3.5" height="15" rx="1.75" fill="#FFFFFF" opacity="0.9" />
           </svg>
-          <div>
-            <div className="text-sm font-semibold leading-tight">
+          <div className="min-w-0">
+            <h1 className="text-sm font-semibold leading-snug text-[var(--host-fg)]">
               Raag — Pure Rust NSH Live Host
-            </div>
-            <div className="text-[11px] text-[#9fa6b2]">
-              {tree?.engine ?? 'Connecting to Rust nsh-engine 0.7.0...'}
+            </h1>
+            <div className="text-xs text-[var(--host-muted-fg)]">
+              {tree?.engine ?? 'Connecting to Rust nsh-engine 0.7.0…'}
             </div>
           </div>
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
-          <div className="flex items-center rounded-lg border border-[#242834] bg-[#13161e] p-0.5">
-            <button
-              type="button"
-              onClick={() => sendAction('/api/nsh/config', { device: 'android' })}
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition cursor-pointer ${
-                device === 'android'
-                  ? 'bg-[#d92638] text-white'
-                  : 'text-[#9fa6b2] hover:text-white'
-              }`}
-            >
-              <Smartphone className="w-3.5 h-3.5" />
-              Android 390×844
-            </button>
-            <button
-              type="button"
-              onClick={() => sendAction('/api/nsh/config', { device: 'desktop' })}
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition cursor-pointer ${
-                device === 'desktop'
-                  ? 'bg-[#d92638] text-white'
-                  : 'text-[#9fa6b2] hover:text-white'
-              }`}
-            >
-              <Monitor className="w-3.5 h-3.5" />
-              Desktop
-            </button>
+          <div
+            role="group"
+            aria-label="Viewport preset"
+            className="flex items-center flex-wrap rounded-lg border border-[var(--host-border)] bg-[var(--host-elevated)] p-0.5"
+          >
+            {DEVICE_PRESETS.map((preset) => {
+              const active = device === preset.id;
+              return (
+                <button
+                  key={preset.id}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => sendAction('/api/nsh/config', { device: preset.id })}
+                  className={`flex items-center gap-1.5 px-2.5 py-2 rounded-md text-xs font-medium tabular-nums host-focus host-transition transition-colors duration-150 cursor-pointer ${
+                    active
+                      ? 'bg-[var(--host-primary)] text-[var(--host-primary-fg)] font-semibold'
+                      : 'text-[var(--host-muted-fg)] hover:text-[var(--host-fg)] hover:bg-[var(--host-elevated-hover)]'
+                  }`}
+                >
+                  {preset.isDesktop ? (
+                    <Monitor className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                  ) : (
+                    <Smartphone className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                  )}
+                  {preset.label}
+                </button>
+              );
+            })}
           </div>
 
           <button
             type="button"
-            aria-label="Toggle Color Scheme"
+            aria-label={`Switch to ${nextThemeLabel}`}
             onClick={() =>
               sendAction('/api/nsh/config', {
                 scheme: scheme === 'dark' ? 'light' : 'dark',
               })
             }
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#242834] bg-[#13161e] text-xs font-medium text-[#e4e7ee] hover:bg-[#1b202b] transition cursor-pointer"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[var(--host-border)] bg-[var(--host-elevated)] text-xs font-medium text-[var(--host-fg)] hover:bg-[var(--host-elevated-hover)] host-focus host-transition transition-colors duration-150 cursor-pointer"
           >
             {scheme === 'dark' ? (
-              <>
-                <Sun className="w-3.5 h-3.5" />
-                Light
-              </>
+              <Sun className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
             ) : (
-              <>
-                <Moon className="w-3.5 h-3.5" />
-                Dark
-              </>
+              <Moon className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
             )}
+            {nextThemeLabel}
           </button>
 
           <button
             type="button"
-            aria-label="Refresh NSH Frame"
+            aria-label="Refresh preview frame"
             onClick={() => void fetchTree()}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-[#242834] bg-[#13161e] text-xs text-[#9fa6b2] hover:text-white transition cursor-pointer"
+            className="flex items-center justify-center p-2 rounded-lg border border-[var(--host-border)] bg-[var(--host-elevated)] text-xs text-[var(--host-muted-fg)] hover:text-[var(--host-fg)] hover:bg-[var(--host-elevated-hover)] host-focus host-transition transition-colors duration-150 cursor-pointer"
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${busy ? 'animate-spin' : ''}`} />
+            <RefreshCw
+              className={`w-3.5 h-3.5 ${busy ? 'animate-spin host-spin' : ''}`}
+              aria-hidden="true"
+            />
           </button>
 
           {tree?.apkAvailable && (
             <a
               href="/raag-arm64-debug.apk"
               download="raag-arm64-debug.apk"
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#d92638] hover:bg-[#e13244] text-white text-xs font-semibold transition"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[var(--host-primary)] hover:bg-[var(--host-primary-hover)] text-[var(--host-primary-fg)] text-xs font-semibold tabular-nums host-focus host-transition transition-colors duration-150"
             >
-              <Download className="w-3.5 h-3.5" />
+              <Download className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
               Download APK {apkMb ? `(${apkMb} MB)` : '(arm64-v8a)'}
             </a>
           )}
@@ -496,15 +585,21 @@ export default function App() {
       {/* Live NSH Native View Surface */}
       <main className="flex-1 flex items-center justify-center p-4 md:p-6 overflow-auto">
         {error ? (
-          <div className="max-w-md rounded-xl border border-[#2b3040] bg-[#13161e] p-5 text-center space-y-3">
-            <div className="text-sm font-semibold text-white">
+          <div
+            role="status"
+            aria-live="polite"
+            className="max-w-md w-full rounded-xl border border-[var(--host-border-strong)] bg-[var(--host-elevated)] p-5 text-center space-y-3"
+          >
+            <h2 className="text-sm font-semibold text-[var(--host-fg)]">
               Waiting for Pure Rust NSH Engine
-            </div>
-            <p className="text-xs text-[#9fa6b2] break-words">{error}</p>
+            </h2>
+            <p className="text-xs leading-relaxed text-[var(--host-muted-fg)] break-words">
+              {error}
+            </p>
             <button
               type="button"
               onClick={() => void fetchTree()}
-              className="px-4 py-2 rounded-lg bg-[#d92638] text-white text-xs font-semibold cursor-pointer"
+              className="px-4 py-2 rounded-lg bg-[var(--host-primary)] hover:bg-[var(--host-primary-hover)] text-[var(--host-primary-fg)] text-xs font-semibold host-focus host-transition transition-colors duration-150 cursor-pointer"
             >
               Retry Connection
             </button>
@@ -513,9 +608,9 @@ export default function App() {
           <div
             data-testid="nsh-viewport-frame"
             className={
-              device === 'android'
-                ? 'rounded-[38px] p-2.5 bg-[#171a22] border border-[#2c3140] shadow-[0_24px_80px_rgba(0,0,0,0.65)]'
-                : 'rounded-2xl p-1.5 bg-[#171a22] border border-[#2c3140] shadow-[0_24px_80px_rgba(0,0,0,0.65)]'
+              isPhone
+                ? 'rounded-[38px] p-2.5 bg-[var(--host-elevated)] border border-[var(--host-border-strong)] shadow-[0_24px_80px_rgba(0,0,0,0.65)]'
+                : 'rounded-2xl p-1.5 bg-[var(--host-elevated)] border border-[var(--host-border-strong)] shadow-[0_24px_80px_rgba(0,0,0,0.65)]'
             }
           >
             <div
@@ -524,16 +619,23 @@ export default function App() {
                 height: tree.height,
                 position: 'relative',
                 overflow: 'hidden',
-                borderRadius: device === 'android' ? '28px' : '12px',
-                backgroundColor: scheme === 'dark' ? '#0a0b0d' : '#f7f8fa',
+                borderRadius: isPhone ? '27px' : '9px',
+                backgroundColor:
+                  scheme === 'dark'
+                    ? 'var(--host-viewport-dark)'
+                    : 'var(--host-viewport-light)',
               }}
             >
-              {/* Android status bar safe-area indicator */}
-              {device === 'android' && (
+              {/* Decorative Android status bar safe-area indicator */}
+              {isPhone && (
                 <div
-                  className="pointer-events-none absolute top-0 left-0 right-0 h-6 z-20 flex items-center justify-between px-5 text-[10px] font-semibold"
+                  aria-hidden="true"
+                  className="pointer-events-none absolute top-0 left-0 right-0 h-6 z-20 flex items-center justify-between px-5 text-xs font-semibold tabular-nums"
                   style={{
-                    color: scheme === 'dark' ? '#9fa6b2' : '#586070',
+                    color:
+                      scheme === 'dark'
+                        ? 'var(--host-status-dark)'
+                        : 'var(--host-status-light)',
                   }}
                 >
                   <span>9:41</span>
@@ -557,16 +659,19 @@ export default function App() {
                 }
               />
 
-              {/* Android gesture pill indicator in bottom safe-area */}
-              {device === 'android' && (
-                <div className="pointer-events-none absolute bottom-1.5 left-0 right-0 z-20 flex justify-center">
+              {/* Decorative Android gesture pill indicator in bottom safe-area */}
+              {isPhone && (
+                <div
+                  aria-hidden="true"
+                  className="pointer-events-none absolute bottom-1.5 left-0 right-0 z-20 flex justify-center"
+                >
                   <div
                     className="w-28 h-1 rounded-full"
                     style={{
                       backgroundColor:
                         scheme === 'dark'
-                          ? 'rgba(255,255,255,0.28)'
-                          : 'rgba(0,0,0,0.25)',
+                          ? 'var(--host-pill-dark)'
+                          : 'var(--host-pill-light)',
                     }}
                   />
                 </div>
@@ -574,8 +679,12 @@ export default function App() {
             </div>
           </div>
         ) : (
-          <div className="text-xs text-[#9fa6b2]">
-            Booting Pure Rust NSH Engine...
+          <div
+            role="status"
+            aria-live="polite"
+            className="text-xs text-[var(--host-muted-fg)]"
+          >
+            Booting Pure Rust NSH Engine…
           </div>
         )}
       </main>

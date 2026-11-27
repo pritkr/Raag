@@ -8,8 +8,8 @@ use resonance_core::offline::{CollectionOfflineProgress, QUOTA_PRESETS_BYTES};
 use crate::ui::controls::primitives::setting_switch;
 use crate::ui::icons::{IconKind, icon};
 use crate::ui::tokens::{
-    MOBILE_MIN_TOUCH_TARGET, color_player_accent, glass_hairline, pill_glass_hover,
-    pill_glass_surface, radius_card, radius_pill,
+    MOBILE_MIN_TOUCH_TARGET, color_player_accent, color_sponsor_badge, glass_hairline,
+    is_desktop_layout, pill_glass_hover, pill_glass_surface, radius_card, radius_pill,
 };
 
 /// 3-state Collection Pin Offline button (`Pin Offline`, `Downloading (4/10)`, `Offline · Tap to Unpin`).
@@ -74,6 +74,7 @@ pub fn collection_pin_button(
         .border_color(glass_hairline)
         .hover(|s| s.bg(pill_glass_hover))
         .active(|s| s.opacity(0.78))
+        .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
         .child(icon(icon_kind, 15.0, move || {
             if is_pinned {
                 color_player_accent()
@@ -176,7 +177,52 @@ pub fn offline_storage_settings_card(props: OfflineStorageSettingsProps) -> impl
                     view()
                         .h_full()
                         .w(percentage(cache_frac))
-                        .bg(move || theme().accent),
+                        .bg(color_sponsor_badge),
+                ),
+        )
+        .child(
+            view()
+                .flex_row()
+                .flex_wrap()
+                .items_center()
+                .gap_3()
+                .child(
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .gap_1p5()
+                        .child(
+                            view()
+                                .w(px(8.0))
+                                .h(px(8.0))
+                                .rounded_full()
+                                .bg(move || theme().primary)
+                                .accessibility_elements_hidden(true),
+                        )
+                        .child(
+                            text("Offline downloads")
+                                .text_xs()
+                                .text_color(move || theme().muted_foreground),
+                        ),
+                )
+                .child(
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .gap_1p5()
+                        .child(
+                            view()
+                                .w(px(8.0))
+                                .h(px(8.0))
+                                .rounded_full()
+                                .bg(color_sponsor_badge)
+                                .accessibility_elements_hidden(true),
+                        )
+                        .child(
+                            text("Stream cache")
+                                .text_xs()
+                                .text_color(move || theme().muted_foreground),
+                        ),
                 ),
         )
         .child(view().flex_row().flex_wrap().gap_1p5().children(
@@ -184,8 +230,13 @@ pub fn offline_storage_settings_card(props: OfflineStorageSettingsProps) -> impl
                 let selected = props.quota_bytes == bytes;
                 let cb = props.on_select_quota.clone();
                 button()
+                    .selected(move || selected)
                     .on_press(move || cb(bytes))
                     .min_h(px(36.0))
+                    .style_when(
+                        || !is_desktop_layout(),
+                        |s| s.min_h(px(MOBILE_MIN_TOUCH_TARGET)),
+                    )
                     .px_3()
                     .items_center()
                     .justify_center()
@@ -199,6 +250,8 @@ pub fn offline_storage_settings_card(props: OfflineStorageSettingsProps) -> impl
                     })
                     .border_1()
                     .border_color(glass_hairline)
+                    .hover(|s| s.opacity(0.92))
+                    .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                     .child(
                         text(label)
                             .text_xs()
@@ -239,6 +292,8 @@ pub fn offline_storage_settings_card(props: OfflineStorageSettingsProps) -> impl
                         .bg(pill_glass_surface)
                         .border_1()
                         .border_color(glass_hairline)
+                        .hover(|s| s.bg(pill_glass_hover))
+                        .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                         .child(
                             text(format!("Audio Quality: {}", props.quality_label))
                                 .text_xs()
@@ -258,6 +313,8 @@ pub fn offline_storage_settings_card(props: OfflineStorageSettingsProps) -> impl
                         .bg(pill_glass_surface)
                         .border_1()
                         .border_color(glass_hairline)
+                        .hover(|s| s.bg(pill_glass_hover))
+                        .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                         .child(
                             text("Verify Offline Files")
                                 .text_xs()

@@ -12,17 +12,19 @@ use resonance_contract::{DownloadStatus, LyricSyncKind, RepeatMode, format_durat
 
 use crate::store::{self, AppTab, NowPlayingTab};
 use crate::ui::controls::{
-    ambient_shader_backdrop, animated_like_heart, animated_play_pause_icon, artwork_box,
-    open_sleep_timer_sheet, open_speed_sheet, secondary_button, seek_slider, setting_switch,
-    sleep_timer_badge_label, speed_badge_label, status_card, svg_icon_button, volume_slider,
+    active_state_dot, ambient_shader_backdrop, animated_like_heart, animated_play_pause_icon,
+    artwork_box, confirm_destructive, open_sleep_timer_sheet, open_speed_sheet, secondary_button,
+    seek_slider, setting_switch, sleep_timer_badge_label, speed_badge_label, status_card,
+    svg_icon_button, volume_slider,
 };
 use crate::ui::icons::{IconKind, icon, reactive_icon};
 use crate::ui::tokens::{
     MOBILE_MIN_TOUCH_TARGET, ambient_accent_color, color_control, color_control_fg, color_liked,
-    color_lyric_active, color_lyric_inactive, color_player_accent, color_sponsor_badge,
-    cover_gradient_pair, frosted_card_surface, glass_hairline, glass_specular_hairline,
-    is_desktop_layout, motion, pill_glass_hover, pill_glass_surface, radius_card, radius_panel,
-    radius_pill, sidebar_active_surface,
+    color_lyric_active, color_lyric_inactive, color_on_cover, color_player_accent,
+    color_sponsor_badge, color_status_ok, cover_gradient_pair, frosted_card_surface,
+    glass_hairline, glass_specular_hairline, is_desktop_layout, is_narrow_viewport, motion,
+    pill_glass_hover, pill_glass_surface, radius_card, radius_panel, radius_panel_inner,
+    radius_pill, radius_tab_inner, sidebar_active_surface,
 };
 
 fn np_transition_ms() -> f32 {
@@ -206,36 +208,68 @@ fn top_header_bar(desktop: bool) -> impl IntoElement {
                         || store::set_tab(AppTab::Queue),
                     ))
                 })
-                .child(svg_icon_button(
-                    IconKind::Moon,
-                    16.0,
-                    btn_box,
-                    "Sleep Timer",
-                    true,
-                    move || {
-                        if sleep_timer_badge_label().is_some() {
-                            color_player_accent()
-                        } else {
-                            theme().foreground
-                        }
-                    },
-                    open_sleep_timer_sheet,
-                ))
-                .child(svg_icon_button(
-                    IconKind::Gauge,
-                    16.0,
-                    btn_box,
-                    "Playback Speed",
-                    true,
-                    move || {
-                        if speed_badge_label().is_some() {
-                            color_player_accent()
-                        } else {
-                            theme().foreground
-                        }
-                    },
-                    open_speed_sheet,
-                ))
+                .child(
+                    button()
+                        .selected(|| sleep_timer_badge_label().is_some())
+                        .accessibility_label("Sleep Timer")
+                        .w(px(btn_box))
+                        .h(px(btn_box))
+                        .flex_col()
+                        .items_center()
+                        .justify_center()
+                        .gap_0p5()
+                        .rounded_full()
+                        .style_when(
+                            || sleep_timer_badge_label().is_some(),
+                            |s| s.bg(pill_glass_surface),
+                        )
+                        .transition()
+                        .duration(np_transition_ms)
+                        .ease_out()
+                        .hover(|s| s.bg(pill_glass_hover))
+                        .active(|s| s.scale(np_press_scale))
+                        .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
+                        .on_press(open_sleep_timer_sheet)
+                        .child(icon(IconKind::Moon, 16.0, move || {
+                            if sleep_timer_badge_label().is_some() {
+                                color_player_accent()
+                            } else {
+                                theme().foreground
+                            }
+                        }))
+                        .child(active_state_dot(|| sleep_timer_badge_label().is_some())),
+                )
+                .child(
+                    button()
+                        .selected(|| speed_badge_label().is_some())
+                        .accessibility_label("Playback Speed")
+                        .w(px(btn_box))
+                        .h(px(btn_box))
+                        .flex_col()
+                        .items_center()
+                        .justify_center()
+                        .gap_0p5()
+                        .rounded_full()
+                        .style_when(
+                            || speed_badge_label().is_some(),
+                            |s| s.bg(pill_glass_surface),
+                        )
+                        .transition()
+                        .duration(np_transition_ms)
+                        .ease_out()
+                        .hover(|s| s.bg(pill_glass_hover))
+                        .active(|s| s.scale(np_press_scale))
+                        .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
+                        .on_press(open_speed_sheet)
+                        .child(icon(IconKind::Gauge, 16.0, move || {
+                            if speed_badge_label().is_some() {
+                                color_player_accent()
+                            } else {
+                                theme().foreground
+                            }
+                        }))
+                        .child(active_state_dot(|| speed_badge_label().is_some())),
+                )
                 .child(svg_icon_button(
                     IconKind::MoreVertical,
                     16.0,
@@ -281,7 +315,7 @@ fn focal_artwork(size_px: f32) -> impl IntoElement {
                 .relative()
                 .w(px(size_px))
                 .h(px(size_px))
-                .rounded(radius_card)
+                .rounded(radius_panel_inner)
                 .shadow_xl()
                 .bg_linear_to_br()
                 .gradient_from(move || {
@@ -326,7 +360,7 @@ fn focal_artwork(size_px: f32) -> impl IntoElement {
                         })
                         .size(px(size_px))
                         .object_fit(ResizeMode::Cover)
-                        .rounded(radius_card)
+                        .rounded(radius_panel_inner)
                     })
                     .otherwise(|| {
                         text(move || {
@@ -340,7 +374,7 @@ fn focal_artwork(size_px: f32) -> impl IntoElement {
                         .test_id("now-playing-artwork-monogram")
                         .text_4xl()
                         .font_weight(FontWeight::BOLD)
-                        .text_color(move || theme().primary_foreground)
+                        .text_color(color_on_cover)
                     }),
                 ),
         )
@@ -429,7 +463,26 @@ fn track_info_and_actions() -> impl IntoElement {
                 .child(
                     button()
                         .test_id("now-playing-download-btn")
-                        .accessibility_label("Download Current Track")
+                        .accessibility_label(|| {
+                            let Some(track) = store::player_snapshot().current_track else {
+                                return Some(SharedString::from("Download Current Track"));
+                            };
+                            Some(SharedString::from(
+                                match store::download_record(&track.id).map(|r| r.status) {
+                                    None => "Download Current Track",
+                                    Some(
+                                        DownloadStatus::Queued
+                                        | DownloadStatus::Downloading
+                                        | DownloadStatus::Tagging,
+                                    ) => "Pause Download",
+                                    Some(DownloadStatus::Paused) => "Resume Download",
+                                    Some(DownloadStatus::Completed) => "Offline (Remove Download)",
+                                    Some(DownloadStatus::Failed | DownloadStatus::Cancelled) => {
+                                        "Retry Download"
+                                    }
+                                },
+                            ))
+                        })
                         .min_w(px(MOBILE_MIN_TOUCH_TARGET))
                         .h(px(MOBILE_MIN_TOUCH_TARGET))
                         .px_2p5()
@@ -461,7 +514,16 @@ fn track_info_and_actions() -> impl IntoElement {
                                         store::enqueue_download(track)
                                     }
                                     DownloadStatus::Completed => {
-                                        store::delete_download(&rec.video_id)
+                                        let id = rec.video_id.clone();
+                                        let title = track.title.clone();
+                                        confirm_destructive(
+                                            "Remove offline download?",
+                                            format!(
+                                                "Remove “{title}” from offline downloads on this device?"
+                                            ),
+                                            "Remove Download",
+                                            move || store::delete_download(&id),
+                                        );
                                     }
                                 },
                             }
@@ -482,7 +544,7 @@ fn track_info_and_actions() -> impl IntoElement {
                                     return theme().foreground;
                                 };
                                 match store::download_record(&track.id).map(|r| r.status) {
-                                    Some(DownloadStatus::Completed) => theme().primary,
+                                    Some(DownloadStatus::Completed) => color_status_ok(),
                                     Some(DownloadStatus::Failed | DownloadStatus::Cancelled) => {
                                         theme().destructive
                                     }
@@ -550,15 +612,24 @@ fn track_info_and_actions() -> impl IntoElement {
                 )
                 .child(
                     button()
+                        .selected(is_disliked)
                         .accessibility_label("Dislike")
                         .w(px(MOBILE_MIN_TOUCH_TARGET))
                         .h(px(MOBILE_MIN_TOUCH_TARGET))
+                        .flex_col()
                         .items_center()
                         .justify_center()
+                        .gap_0p5()
                         .rounded_full()
                         .bg(pill_glass_surface)
                         .border_1()
-                        .border_color(glass_hairline)
+                        .border_color(move || {
+                            if is_disliked() {
+                                color_player_accent()
+                            } else {
+                                glass_hairline()
+                            }
+                        })
                         .hover(|s| s.bg(pill_glass_hover))
                         .active(|s| s.opacity(0.75))
                         .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
@@ -569,7 +640,8 @@ fn track_info_and_actions() -> impl IntoElement {
                             } else {
                                 theme().muted_foreground
                             }
-                        })),
+                        }))
+                        .child(active_state_dot(is_disliked)),
                 ),
         )
 }
@@ -638,7 +710,7 @@ fn seek_section(mobile: bool) -> impl IntoElement {
                         .flex_row()
                         .items_center()
                         .gap_2()
-                        .child(step_seek_pill("-15s", pill_min, || {
+                        .child(step_seek_pill("\u{2212}15s", pill_min, || {
                             let pos = store::player_snapshot().position_ms;
                             store::seek_ms(pos.saturating_sub(15_000));
                         }))
@@ -669,12 +741,16 @@ fn transport_bar() -> impl IntoElement {
         .justify_between()
         .child(
             button()
+                .selected(is_shuffle)
                 .accessibility_label("Toggle Shuffle")
                 .w(px(MOBILE_MIN_TOUCH_TARGET))
                 .h(px(MOBILE_MIN_TOUCH_TARGET))
+                .flex_col()
                 .items_center()
                 .justify_center()
+                .gap_0p5()
                 .rounded_full()
+                .style_when(is_shuffle, |s| s.bg(pill_glass_surface))
                 .hover(|s| s.bg(pill_glass_hover))
                 .active(|s| s.opacity(0.72))
                 .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
@@ -685,7 +761,8 @@ fn transport_bar() -> impl IntoElement {
                     } else {
                         theme().muted_foreground
                     }
-                })),
+                }))
+                .child(active_state_dot(is_shuffle)),
         )
         .child(svg_icon_button(
             IconKind::SkipBack,
@@ -730,13 +807,19 @@ fn transport_bar() -> impl IntoElement {
         ))
         .child(
             button()
+                .selected(|| store::player_snapshot().queue.repeat != RepeatMode::None)
                 .accessibility_label("Cycle Repeat Mode")
                 .w(px(MOBILE_MIN_TOUCH_TARGET))
                 .h(px(MOBILE_MIN_TOUCH_TARGET))
+                .flex_col()
                 .items_center()
                 .justify_center()
                 .gap_0p5()
                 .rounded_full()
+                .style_when(
+                    || store::player_snapshot().queue.repeat != RepeatMode::None,
+                    |s| s.bg(pill_glass_surface),
+                )
                 .hover(|s| s.bg(pill_glass_hover))
                 .active(|s| s.opacity(0.72))
                 .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
@@ -755,16 +838,9 @@ fn transport_bar() -> impl IntoElement {
                         }
                     },
                 ))
-                .child(when(
-                    || store::player_snapshot().queue.repeat == RepeatMode::One,
-                    || {
-                        view()
-                            .w(px(4.0))
-                            .h(px(4.0))
-                            .rounded_full()
-                            .bg(color_player_accent)
-                    },
-                )),
+                .child(active_state_dot(|| {
+                    store::player_snapshot().queue.repeat != RepeatMode::None
+                })),
         )
 }
 
@@ -940,7 +1016,7 @@ fn now_playing_tab_bar() -> impl IntoElement {
         .indicator_style(|s| {
             s.top_1()
                 .bottom_1()
-                .rounded(move || theme().radius)
+                .rounded(radius_tab_inner)
                 .bg(move || theme().primary)
         })
         .accessibility_label("Now Playing panels")
@@ -953,7 +1029,7 @@ fn now_playing_tab_bar() -> impl IntoElement {
                 .min_h(px(40.0))
                 .items_center()
                 .justify_center()
-                .rounded(move || theme().radius)
+                .rounded(radius_tab_inner)
                 .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                 .child(
                     text("Up Next")
@@ -979,7 +1055,7 @@ fn now_playing_tab_bar() -> impl IntoElement {
                 .min_h(px(40.0))
                 .items_center()
                 .justify_center()
-                .rounded(move || theme().radius)
+                .rounded(radius_tab_inner)
                 .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                 .child(
                     text("Lyrics")
@@ -1005,7 +1081,7 @@ fn now_playing_tab_bar() -> impl IntoElement {
                 .min_h(px(40.0))
                 .items_center()
                 .justify_center()
-                .rounded(move || theme().radius)
+                .rounded(radius_tab_inner)
                 .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                 .child(
                     text("Related")
@@ -1177,7 +1253,6 @@ fn now_playing_lyrics_body() -> impl IntoElement {
                             .py_2p5()
                             .rounded(radius_card)
                             .style_when(is_active, |s| s.bg(pill_glass_surface))
-                            .style_when(move || !is_active(), |s| s.opacity(0.62))
                             .hover(|s| s.bg(pill_glass_hover))
                             .active(|s| s.opacity(0.85))
                             .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
@@ -1464,9 +1539,6 @@ fn mobile_now_playing_tabs_card() -> impl IntoElement {
                                     ),
                             )
                     }))
-                    .child(secondary_button("Up Next Queue", || {
-                        store::set_tab(AppTab::Queue)
-                    }))
                     .into_element()
             }
             NowPlayingTab::Lyrics => {
@@ -1549,6 +1621,7 @@ fn mobile_now_playing_tabs_card() -> impl IntoElement {
 }
 
 fn mobile_now_playing() -> impl IntoElement {
+    let art_size = if is_narrow_viewport() { 236.0 } else { 268.0 };
     scroll().flex_1().child(
         view()
             .w_full()
@@ -1557,7 +1630,7 @@ fn mobile_now_playing() -> impl IntoElement {
             .items_center()
             .pb_safe_area_plus(px(16.0))
             .child(top_header_bar(false))
-            .child(focal_artwork(268.0))
+            .child(focal_artwork(art_size))
             .child(track_info_and_actions())
             .child(now_playing_control_dock(false))
             .child(sponsorblock_badge())

@@ -55,20 +55,54 @@ export interface NshNode {
   inputFontSize: number;
   testId: string | null;
   a11yLabel: string | null;
+  a11yRole?: string | null;
+  a11yLive?: string | null;
+  disabled?: boolean;
   pointerNone: boolean;
   children: NshNode[];
 }
 
+export type PreviewDevice = 'compact' | 'android' | 'desktop';
+
 export interface NshTreeResponse {
   version: number;
   engine: string;
-  device: 'android' | 'desktop';
+  device: PreviewDevice;
   scheme: 'dark' | 'light';
   width: number;
   height: number;
   apkAvailable: boolean;
   apkSizeBytes: number;
   root: NshNode | null;
+}
+
+/**
+ * Formats HTTP or network errors from the NSH preview proxy into clean,
+ * recoverable human-readable copy without exposing raw JSON or HTML payloads.
+ */
+export function formatHostError(status: number, rawBody: string): string {
+  const trimmed = rawBody.trim();
+  if (trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed) as { error?: string; detail?: string };
+      if (status === 503) {
+        return 'The Pure Rust NSH preview engine is still starting up. Wait a moment or select Retry Connection.';
+      }
+      if (parsed.error && typeof parsed.error === 'string') {
+        const clean = parsed.error.trim().replace(/\.+$/, '');
+        return `${clean}. Select Retry Connection to try again.`;
+      }
+    } catch {
+      // Fall through to status-based messaging
+    }
+  }
+  if (status === 503) {
+    return 'The Pure Rust NSH preview engine is still starting up. Wait a moment or select Retry Connection.';
+  }
+  if (status >= 400) {
+    return `Preview engine returned HTTP ${status}. Check that nsh_preview is running and select Retry Connection.`;
+  }
+  return 'Could not reach the Pure Rust NSH preview engine. Wait a moment or select Retry Connection.';
 }
 
 /**

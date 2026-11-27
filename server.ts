@@ -9,7 +9,35 @@ import path from 'node:path';
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 
-const PORT = Number(process.env.PORT ?? 3000);
+function parseArg(flag: string): string | undefined {
+  const idx = process.argv.indexOf(flag);
+  if (idx !== -1 && idx + 1 < process.argv.length) {
+    return process.argv[idx + 1];
+  }
+  const prefix = `${flag}=`;
+  const hit = process.argv.find((arg) => arg.startsWith(prefix));
+  return hit ? hit.slice(prefix.length) : undefined;
+}
+
+function resolvePort(): number {
+  const cliPort = parseArg('--port') ?? parseArg('-p');
+  if (cliPort && /^\d+$/.test(cliPort)) {
+    return Number(cliPort);
+  }
+  const envPort = process.env.PORT;
+  const nginxPort = process.env.NGINX_PORT;
+  if (envPort && /^\d+$/.test(envPort) && envPort !== nginxPort) {
+    return Number(envPort);
+  }
+  const defaultAppPort = process.env.DEFAULT_APP_PORT;
+  if (defaultAppPort && /^\d+$/.test(defaultAppPort)) {
+    return Number(defaultAppPort);
+  }
+  return 3000;
+}
+
+const PORT = resolvePort();
+const HOST = parseArg('--host') ?? '0.0.0.0';
 const NSH_PORT = Number(process.env.NSH_PREVIEW_PORT ?? 3001);
 const NSH_ORIGIN = `http://127.0.0.1:${NSH_PORT}`;
 
@@ -113,10 +141,10 @@ async function main(): Promise<void> {
         .status(upstream.status)
         .type(upstream.headers.get('content-type') ?? 'application/json')
         .send(text);
-    } catch (err) {
+    } catch {
       res.status(503).json({
         error: 'Pure Rust NSH Preview Engine is starting up',
-        detail: err instanceof Error ? err.message : String(err),
+        detail: 'Waiting for the local Pure Rust preview binary on port ' + NSH_PORT,
       });
     }
   });
@@ -161,8 +189,8 @@ async function main(): Promise<void> {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Raag NSH Host listening on http://0.0.0.0:${PORT}`);
+  app.listen(PORT, HOST, () => {
+    console.log(`Raag NSH Host listening on http://${HOST}:${PORT}`);
   });
 }
 

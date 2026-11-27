@@ -10,9 +10,9 @@ use crate::store;
 use crate::ui::controls::primitives::{artwork_box, primary_button};
 use crate::ui::icons::{IconKind, icon};
 use crate::ui::tokens::{
-    MOBILE_MIN_TOUCH_TARGET, card_title_label, color_hero_pill_bg, color_hero_pill_fg,
-    color_sponsor_badge, color_status_ok, frosted_bar_surface, glass_hairline, is_desktop_layout,
-    motion, muted_caption_label, pill_glass_hover, pill_glass_surface, radius_card,
+    MOBILE_MIN_TOUCH_TARGET, color_hero_pill_bg, color_hero_pill_fg, color_sponsor_badge,
+    color_status_ok, frosted_bar_surface, glass_hairline, is_desktop_layout, motion,
+    muted_caption_label, pill_glass_hover, pill_glass_surface, radius_card,
 };
 
 fn card_transition_ms() -> f32 {
@@ -193,7 +193,13 @@ pub fn media_square_card(
                 .active(|s| s.opacity(0.78))
                 .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                 .on_press(move || on_open_meta())
-                .child(card_title_label(title))
+                .child(
+                    text(title)
+                        .number_of_lines(2)
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(move || theme().foreground),
+                )
                 .child(muted_caption_label(subtitle)),
         )
 }

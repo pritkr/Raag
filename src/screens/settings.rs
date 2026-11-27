@@ -2,16 +2,20 @@
 
 use std::rc::Rc;
 
-use nsh_base::{button, input, theme};
+use nsh_base::{button, theme};
 use nsh_core::prelude::*;
 use resonance_contract::{CredentialBackendKind, PoTokenHealthStatus};
 
 use crate::screens::settings_updater_card::{UpdaterCardProps, settings_updater_card};
 use crate::store::{self, ThemeChoice};
-use crate::ui::controls::{diagnostics_badge, secondary_button, setting_switch};
+use crate::ui::controls::{
+    confirm_destructive, destructive_button, diagnostics_badge, labeled_input, secondary_button,
+    setting_switch,
+};
 use crate::ui::icons::{IconKind, icon};
+use crate::ui::text_format::pluralize;
 use crate::ui::tokens::{
-    MOBILE_MIN_TOUCH_TARGET, color_status_ok, glass_hairline, is_desktop_layout,
+    MOBILE_MIN_TOUCH_TARGET, PROSE_MAX_WIDTH, color_status_ok, glass_hairline, is_desktop_layout,
     pill_glass_surface, radius_card,
 };
 
@@ -131,6 +135,7 @@ fn account_card(cookie_draft: Signal<String>) -> impl IntoElement {
                     )
                 }
             })
+            .max_w(px(PROSE_MAX_WIDTH))
             .text_xs()
             .text_color(move || theme().muted_foreground),
         )
@@ -177,25 +182,13 @@ fn account_card(cookie_draft: Signal<String>) -> impl IntoElement {
                             move || {
                                 view()
                                     .gap_2()
-                                    .child(
-                                        input()
-                                            .test_id("desktop-cookie-input")
-                                            .value(move || cookie_draft.get())
-                                            .on_change(move |v: &str| {
-                                                cookie_draft.set(v.to_owned())
-                                            })
-                                            .placeholder("Paste Cookie header (SAPISID=...; __Secure-3PAPISID=...)")
-                                            .placeholder_color(|| color(theme().muted_foreground))
-                                            .caret_color(|| color(theme().primary))
-                                            .min_h(px(MOBILE_MIN_TOUCH_TARGET))
-                                            .px_3()
-                                            .text_sm()
-                                            .text_color(move || theme().foreground)
-                                            .bg(move || theme().background)
-                                            .rounded(move || theme().radius)
-                                            .border_1()
-                                            .border_color(move || theme().input),
-                                    )
+                                    .child(labeled_input(
+                                        "Browser Cookie Header",
+                                        "desktop-cookie-input",
+                                        "Paste Cookie header (SAPISID=…; __Secure-3PAPISID=…)",
+                                        move || cookie_draft.get(),
+                                        move |v: &str| cookie_draft.set(v.to_owned()),
+                                    ))
                                     .child(
                                         button()
                                             .test_id("desktop-signin-btn")
@@ -233,8 +226,15 @@ fn account_card(cookie_draft: Signal<String>) -> impl IntoElement {
                 button()
                     .test_id("desktop-signout-btn")
                     .on_press(move || {
-                        cookie_draft.set(String::new());
-                        store::sign_out();
+                        confirm_destructive(
+                            "Sign out of YouTube Music?",
+                            "Your saved credentials will be removed from this device and you will return to anonymous mode.",
+                            "Sign Out",
+                            move || {
+                                cookie_draft.set(String::new());
+                                store::sign_out();
+                            },
+                        );
                     })
                     .min_h(px(MOBILE_MIN_TOUCH_TARGET))
                     .px_4()
@@ -385,11 +385,11 @@ fn cache_card() -> impl IntoElement {
             text(move || {
                 let s = store::cache_stats();
                 SharedString::from(format!(
-                    "Audio chunks: {} ({} chunks) • Artwork: {} • Metadata: {} rows",
+                    "Audio chunks: {} ({}) • Artwork: {} • Metadata: {}",
                     format_mb(s.audio_chunk_bytes),
-                    s.audio_chunk_count,
+                    pluralize(s.audio_chunk_count as usize, "chunk", "chunks"),
                     format_mb(s.artwork_bytes),
-                    s.metadata_entries
+                    pluralize(s.metadata_entries as usize, "row", "rows")
                 ))
             })
             .test_id("cache-stats-readout")
@@ -397,7 +397,14 @@ fn cache_card() -> impl IntoElement {
             .tabular_nums()
             .text_color(move || theme().muted_foreground),
         )
-        .child(secondary_button("Clear Cache", store::clear_caches))
+        .child(destructive_button("Clear Cache", || {
+            confirm_destructive(
+                "Clear offline cache?",
+                "Remove cached audio chunks, artwork, and metadata from disk? Pinned downloads stay intact.",
+                "Clear Cache",
+                store::clear_caches,
+            );
+        }))
 }
 
 fn stream_diagnostics_card() -> impl IntoElement {
@@ -525,6 +532,7 @@ fn stream_diagnostics_card() -> impl IntoElement {
                                 })
                                 .test_id("remote-config-status-detail")
                                 .text_xs()
+                                .tabular_nums()
                                 .text_color(move || theme().muted_foreground),
                             )
                             .child(secondary_button(

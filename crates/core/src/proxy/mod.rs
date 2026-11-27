@@ -202,6 +202,10 @@ impl LoopbackProxy {
         self.addr
     }
 
+    pub fn base_url(&self) -> String {
+        format!("http://{}", self.addr)
+    }
+
     pub fn set_local_media_store(&self, store: Arc<LocalMediaStore>) {
         *self.state.local_store.write().unwrap() = Some(store);
     }

@@ -1125,7 +1125,7 @@ impl AppEngine {
                                     duration_ms: t.duration_ms,
                                     artwork_url: t.artwork_url.clone(),
                                 }),
-                                queue: player_snap.queue.tracks.iter().take(25).map(|t| RoomTrackRef {
+                                queue: player_snap.queue.items.iter().take(25).map(|t| RoomTrackRef {
                                     video_id: t.id.clone(),
                                     title: t.title.clone(),
                                     artist: t.artist_display(),

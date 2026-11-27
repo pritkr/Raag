@@ -10,11 +10,12 @@ use nsh_base::{button, theme};
 use nsh_core::prelude::*;
 use resonance_contract::{LyricSyncKind, format_duration_ms};
 
-use crate::store;
+use crate::store::{self, AppTab};
 use crate::ui::controls::{
     ambient_shader_backdrop, secondary_button, status_card, svg_icon_button,
 };
 use crate::ui::icons::IconKind;
+use crate::ui::text_format::pluralize;
 use crate::ui::tokens::{
     MOBILE_MIN_TOUCH_TARGET, color_lyric_active, color_lyric_inactive, color_player_accent,
     frosted_card_surface, glass_hairline, pill_glass_hover, pill_glass_surface, radius_card,
@@ -144,13 +145,6 @@ pub fn lyrics_screen() -> impl IntoElement {
                                         .and_then(|d| d.active_line_index(pos))
                                         == Some(at.index())
                                 };
-                                let is_past = move || {
-                                    let pos = store::player_snapshot().position_ms;
-                                    store::current_lyrics()
-                                        .and_then(|d| d.active_line_index(pos))
-                                        .is_some_and(|active| at.index() < active)
-                                };
-
                                 // Performance rule: ZERO blur inside virtual_list rows.
                                 button()
                                     .w_full()
@@ -163,11 +157,6 @@ pub fn lyrics_screen() -> impl IntoElement {
                                             .border_1()
                                             .border_color(color_player_accent)
                                     })
-                                    .style_when(is_past, |s| s.opacity(0.55))
-                                    .style_when(
-                                        move || !is_active() && !is_past(),
-                                        |s| s.opacity(0.72),
-                                    )
                                     .hover(|s| s.bg(pill_glass_hover))
                                     .active(|s| s.opacity(0.85))
                                     .focus_visible(|s| {
@@ -246,8 +235,12 @@ pub fn lyrics_screen() -> impl IntoElement {
                                                     } else {
                                                         text(l.text)
                                                             .flex_1()
-                                                            .text_xl()
-                                                            .font_weight(FontWeight::BOLD)
+                                                            .text_base()
+                                                            .font_weight(FontWeight::MEDIUM)
+                                                            .style_when(is_active, |s| {
+                                                                s.text_xl()
+                                                                    .font_weight(FontWeight::BOLD)
+                                                            })
                                                             .text_color(move || {
                                                                 if is_active() {
                                                                     color_lyric_active()
@@ -296,8 +289,8 @@ pub fn lyrics_screen() -> impl IntoElement {
                         view().flex_1().justify_center().child(status_card(
                             "No lyrics available",
                             "Start playing a track to load synced karaoke lyrics from YTM, LRCLIB, or Better Lyrics.",
-                            None,
-                            None,
+                            Some("Open Search"),
+                            Some(Box::new(|| store::set_tab(AppTab::Search))),
                         ))
                     }),
                 )
@@ -456,9 +449,9 @@ fn lyrics_header(has_lyrics: impl Fn() -> bool + Copy + 'static) -> impl IntoEle
                                 match d.active_line_index(pos) {
                                     Some(i) => format!("Line {} / {}", i + 1, total),
                                     None if d.sync_kind == LyricSyncKind::Plain => {
-                                        format!("{total} lines")
+                                        pluralize(total, "line", "lines")
                                     }
-                                    None => format!("{total} timed lines"),
+                                    None => pluralize(total, "timed line", "timed lines"),
                                 }
                             })
                             .unwrap_or_default();
@@ -481,7 +474,7 @@ fn lyrics_header(has_lyrics: impl Fn() -> bool + Copy + 'static) -> impl IntoEle
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(move || theme().muted_foreground),
                         )
-                        .child(secondary_button("-5s", || {
+                        .child(secondary_button("\u{2212}5s", || {
                             let pos = store::player_snapshot().position_ms;
                             store::seek_ms(pos.saturating_sub(5_000));
                         }))

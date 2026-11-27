@@ -6,7 +6,7 @@ use nsh_core::prelude::*;
 use resonance_contract::{DownloadStatus, Track, format_duration_ms};
 
 use crate::store::{self, AppTab};
-use crate::ui::controls::primitives::artwork_box;
+use crate::ui::controls::primitives::{artwork_box, confirm_destructive};
 use crate::ui::icons::{IconKind, icon};
 use crate::ui::tokens::{
     MOBILE_MIN_TOUCH_TARGET, color_liked, glass_hairline, pill_glass_hover, radius_card,
@@ -112,6 +112,7 @@ pub fn track_context_menu(track: Track, context: TrackMenuContext) -> impl IntoE
         .rounded_full()
         .hover(|s| s.bg(pill_glass_hover))
         .active(|s| s.opacity(0.7))
+        .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
         .child(icon(IconKind::MoreVertical, 16.0, move || {
             theme().muted_foreground
         }));
@@ -157,15 +158,25 @@ pub fn track_context_menu(track: Track, context: TrackMenuContext) -> impl IntoE
         .child(desktop_menu_row(like_label, false, move || {
             store::toggle_like_track(t_like.clone());
         }))
-        .child(desktop_menu_row("Add to Playlist...", false, move || {
+        .child(desktop_menu_row("Add to Playlist…", false, move || {
             store::open_add_to_playlist_sheet(t_playlist.clone());
         }));
 
     if let TrackMenuContext::Playlist { playlist_id, .. } = &context {
         let pid = playlist_id.clone();
         let vid = track.id.clone();
+        let title = track.title.clone();
         m = m.child(desktop_menu_row("Remove from Playlist", true, move || {
-            store::remove_track_from_playlist(pid.clone(), vid.clone());
+            let pid_c = pid.clone();
+            let vid_c = vid.clone();
+            confirm_destructive(
+                "Remove from playlist?",
+                format!("Remove “{title}” from this playlist?"),
+                "Remove",
+                move || {
+                    store::remove_track_from_playlist(pid_c, vid_c);
+                },
+            );
         }));
     }
 
@@ -187,7 +198,16 @@ pub fn track_context_menu(track: Track, context: TrackMenuContext) -> impl IntoE
                 DownloadStatus::Queued | DownloadStatus::Downloading | DownloadStatus::Tagging,
             ) => store::pause_download(&vid_dl),
             Some(DownloadStatus::Paused) => store::resume_download(&vid_dl),
-            Some(DownloadStatus::Completed) => store::delete_download(&vid_dl),
+            Some(DownloadStatus::Completed) => {
+                let id = vid_dl.clone();
+                let title = t_dl.title.clone();
+                confirm_destructive(
+                    "Remove offline download?",
+                    format!("Remove “{title}” from offline downloads on this device?"),
+                    "Remove Download",
+                    move || store::delete_download(&id),
+                );
+            }
         },
     ));
 

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use nsh_base::{button, theme};
 use nsh_core::prelude::*;
-use resonance_contract::{AlbumDetail, Track, format_duration_ms};
+use resonance_contract::{AlbumDetail, Track};
 use resonance_core::offline::CollectionOfflineProgress;
 use resonance_core::palette::palette_for_track;
 
@@ -15,9 +15,10 @@ use crate::ui::controls::{
     track_row_view,
 };
 use crate::ui::icons::IconKind;
+use crate::ui::text_format::pluralize;
 use crate::ui::tokens::{
     MOBILE_MIN_TOUCH_TARGET, ambient_backdrop_color, glass_hairline, is_desktop_layout,
-    pill_glass_surface, radius_card, radius_pill,
+    is_narrow_viewport, pill_glass_surface, radius_card, radius_pill,
 };
 
 #[derive(Clone)]
@@ -68,9 +69,10 @@ fn format_album_stats(album: &AlbumDetail) -> String {
         album.tracks.iter().map(|t| t.duration_ms).sum()
     };
     let mins = (total_ms / 60_000).max(if total_ms > 0 { 1 } else { 0 });
+    let songs_str = pluralize(count, "song", "songs");
     match album.release_year.as_deref() {
-        Some(year) if !year.is_empty() => format!("{year} • {count} songs • {mins} min"),
-        _ => format!("{count} songs • {mins} min"),
+        Some(year) if !year.is_empty() => format!("{year} • {songs_str} • {mins} min"),
+        _ => format!("{songs_str} • {mins} min"),
     }
 }
 
@@ -88,7 +90,13 @@ pub fn album_screen_with_detail(
     cb: AlbumScreenCallbacks,
 ) -> impl IntoElement {
     let desktop = is_desktop_layout();
-    let art_size = if desktop { 220.0 } else { 184.0 };
+    let art_size = if desktop {
+        220.0
+    } else if is_narrow_viewport() {
+        148.0
+    } else {
+        184.0
+    };
     let palette = palette_for_track(&album.browse_id, &album.title);
     let hero_bg = move || ambient_backdrop_color(palette);
     let mono = monogram_for(&album.title);
@@ -280,7 +288,6 @@ pub fn album_screen_with_detail(
                                 let t2 = track.clone();
                                 let c1 = Arc::clone(&cb_track);
                                 let c2 = Arc::clone(&cb_next);
-                                let dur = format_duration_ms(track.duration_ms);
                                 view()
                                     .flex_row()
                                     .items_center()
@@ -298,12 +305,6 @@ pub fn album_screen_with_detail(
                                         move || c1(t1.clone()),
                                         move || c2(t2.clone()),
                                     )))
-                                    .child(
-                                        text(dur)
-                                            .text_xs()
-                                            .tabular_nums()
-                                            .text_color(move || theme().muted_foreground),
-                                    )
                             }),
                     ),
             )

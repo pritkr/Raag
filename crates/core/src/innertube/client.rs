@@ -582,7 +582,8 @@ impl InnerTubeClient {
         signature_cipher: &str,
         required: bool,
     ) -> CoreResult<String> {
-        if let Some((hash, js)) = self.player_solver_js.read().unwrap().clone() {
+        let cached_solver = self.player_solver_js.read().unwrap().clone();
+        if let Some((hash, js)) = cached_solver {
             return self
                 .solver
                 .solve_cipher_url(&hash, &js, signature_cipher)

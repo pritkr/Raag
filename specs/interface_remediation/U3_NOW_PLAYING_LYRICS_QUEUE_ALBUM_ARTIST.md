@@ -10,6 +10,7 @@
 > - `src/screens/artist.rs`
 >
 > **HARD RULE:** Zero `rgb(`, `rgba(`, or `0xFF` anywhere in these 5 files (not even in comments!). Preserve `"Opus 251 • Proxy"` absence in `now_playing.rs` (`tests/w1a_ui_craft_test.rs:261`).
+> **12:41 Sync Baseline:** Preserve `ambient_shader_backdrop()`, `animated_play_pause_icon()`, `animated_like_heart()`, `live_equalizer_indicator()`, `eyebrow_label()`, `back_button()`, and `"Autoplay Radio"` added at 12:41. Focus on remaining defects: 320px narrow-viewport artwork & queue row reflow, concentric radii, `color_on_cover`, `color_status_ok`, `confirm_destructive`, active state dots/labels, removing opacity-dimming on inactive lyrics, removing duplicate duration in `album.rs` and duplicate `"Up Next Queue"` in `now_playing.rs`, `PROSE_MAX_WIDTH` in `artist.rs`, pluralization, and empty-state CTAs.
 
 ---
 

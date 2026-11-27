@@ -8,8 +8,8 @@ use nsh_core::keymap::When;
 use nsh_core::prelude::*;
 
 use crate::store::{self, AppTab};
-use crate::ui::controls::sleep_timer_sheet::close_sleep_timer_sheet;
-use crate::ui::controls::speed_sheet::close_speed_sheet;
+use crate::ui::controls::sleep_timer_sheet::{close_sleep_timer_sheet, is_sleep_timer_sheet_open};
+use crate::ui::controls::speed_sheet::{close_speed_sheet, is_speed_sheet_open};
 use crate::ui::icons::{IconKind, icon};
 use crate::ui::tokens::{
     MOBILE_MIN_TOUCH_TARGET, frosted_bar_surface, glass_hairline, pill_glass_hover,
@@ -34,6 +34,7 @@ pub fn nav_pill_button(
     on_press: impl Fn() + 'static,
 ) -> impl IntoElement {
     button()
+        .selected(active)
         .on_press(on_press)
         .min_h(px(MOBILE_MIN_TOUCH_TARGET))
         .px_3()
@@ -50,6 +51,7 @@ pub fn nav_pill_button(
         })
         .hover(|s| s.bg(pill_glass_hover))
         .active(|s| s.opacity(0.82))
+        .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
         .child(icon(kind, 18.0, move || {
             if active() {
                 theme().foreground
@@ -170,8 +172,22 @@ pub fn dispatch_global_shortcut(key: &str, input_focused: bool) -> bool {
                 store::close_track_sheet();
                 return true;
             }
-            close_sleep_timer_sheet();
-            close_speed_sheet();
+            if is_sleep_timer_sheet_open() {
+                close_sleep_timer_sheet();
+                return true;
+            }
+            if is_speed_sheet_open() {
+                close_speed_sheet();
+                return true;
+            }
+            if store::auth_sheet_open() {
+                store::close_auth_sheet();
+                return true;
+            }
+            if store::cast_sheet_open() {
+                store::set_cast_sheet_open(false);
+                return true;
+            }
             if store::active_tab() == AppTab::NowPlaying {
                 store::go_back();
             }

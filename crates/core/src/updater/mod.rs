@@ -154,7 +154,7 @@ impl UpdaterService {
         let target = self
             .target_override
             .as_deref()
-            .unwrap_or_else(current_platform_target);
+            .unwrap_or(current_platform_target());
 
         let Some(info) = select_update_for_target(
             &manifest,

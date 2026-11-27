@@ -344,9 +344,8 @@ impl PlaybackController {
             let (dur, bitrate, sample_rate, codec) = match local_record.as_ref() {
                 Some(rec) => {
                     let codec = match rec.mime_type.as_str() {
-                        "audio/mp4" => AudioCodec::Aac,
-                        "audio/ogg" => AudioCodec::Opus,
-                        _ => AudioCodec::Unknown,
+                        "audio/ogg" | "audio/webm" => AudioCodec::Opus,
+                        _ => AudioCodec::Aac,
                     };
                     (
                         rec.track.duration_ms.max(track.duration_ms),
@@ -355,14 +354,10 @@ impl PlaybackController {
                         codec,
                     )
                 }
-                None => (track.duration_ms, 0, None, AudioCodec::Unknown),
+                None => (track.duration_ms, 0, None, AudioCodec::Aac),
             };
             (
-                format!(
-                    "{}/local/{}?gen={proxy_gen}",
-                    self.proxy.base_url(),
-                    track.id
-                ),
+                format!("{}?gen={proxy_gen}", self.proxy.local_url(&track.id)),
                 dur,
                 true,
                 Some(CodecBadgeInfo {

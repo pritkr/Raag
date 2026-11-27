@@ -576,12 +576,15 @@ pub fn create_listen_room(relay_url: String, display_name: String) {
     let current_ref = snap
         .current_track
         .filter(|t| !resonance_core::rooms::is_local_track(&t.id))
-        .map(|t| RoomTrackRef {
-            video_id: t.id,
-            title: t.title,
-            artist: t.artist_display(),
-            duration_ms: t.duration_ms,
-            artwork_url: t.artwork_url,
+        .map(|t| {
+            let artist = t.artist_display();
+            RoomTrackRef {
+                video_id: t.id,
+                title: t.title,
+                artist,
+                duration_ms: t.duration_ms,
+                artwork_url: t.artwork_url,
+            }
         });
     let room = RoomStateSnapshot {
         room_code: code.clone(),
@@ -983,7 +986,11 @@ pub fn select_cast_device(device: CastDevice) {
         set_status_banner(format!("Casting to {name} (fixture preview)"));
         return;
     }
-    cast_signal().update(|c| c.session = CastSessionState::Connecting(device.clone()));
+    cast_signal().update(|c| {
+        c.session = CastSessionState::Connecting {
+            device_name: name.clone(),
+        };
+    });
     live_engine::dispatch(EngineCommand::ConnectCastDevice(device));
     set_status_banner(format!("Connecting to {name}…"));
 }

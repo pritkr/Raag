@@ -8,15 +8,16 @@
 
 use std::sync::Arc;
 
-use nsh_base::{button, input, theme};
+use nsh_base::{button, theme};
 use nsh_core::prelude::*;
 
 use crate::ui::controls::{
-    glass_pill_button, modal_panel_container, primary_button, secondary_button,
+    labeled_input, modal_panel_container, primary_button, secondary_button,
 };
-use crate::ui::icons::IconKind;
+use crate::ui::icons::{IconKind, icon};
 use crate::ui::tokens::{
-    MOBILE_MIN_TOUCH_TARGET, frosted_bar_surface, glass_hairline, pill_glass_surface, radius_card,
+    MOBILE_MIN_TOUCH_TARGET, glass_hairline, overlay_scrim, pill_glass_hover, pill_glass_surface,
+    radius_card, radius_pill,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -74,7 +75,7 @@ pub fn auth_sign_in_sheet(
                 .test_id("auth-sign-in-sheet")
                 .absolute()
                 .inset_0()
-                .bg(frosted_bar_surface)
+                .bg(overlay_scrim)
                 .items_center()
                 .justify_center()
                 .p_4()
@@ -82,31 +83,100 @@ pub fn auth_sign_in_sheet(
                     "Sign in to YouTube Music",
                     "Credentials are stored only in OS Keychain / Keystore.",
                     view()
-                        .w(px(480.0))
+                        .w_full()
                         .gap_3()
                         .child(
                             view()
                                 .flex_row()
+                                .flex_wrap()
                                 .gap_2()
                                 .child(
-                                    view()
+                                    button()
+                                        .selected(move || active_tab.get() == AuthSheetTab::TvOAuth)
+                                        .on_press(move || active_tab.set(AuthSheetTab::TvOAuth))
                                         .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                                        .px_4()
+                                        .flex_row()
+                                        .items_center()
                                         .justify_center()
-                                        .child(glass_pill_button(
-                                            "TV Code (Recommended)",
-                                            Some(IconKind::Radio),
-                                            move || active_tab.set(AuthSheetTab::TvOAuth),
-                                        )),
+                                        .gap_2()
+                                        .rounded(radius_pill)
+                                        .bg(move || {
+                                            if active_tab.get() == AuthSheetTab::TvOAuth {
+                                                theme().primary
+                                            } else {
+                                                pill_glass_surface()
+                                            }
+                                        })
+                                        .border_1()
+                                        .border_color(glass_hairline)
+                                        .hover(|s| s.opacity(0.92))
+                                        .focus_visible(|s| {
+                                            s.outline(px(2.0)).outline_color(move || theme().ring)
+                                        })
+                                        .child(icon(IconKind::Radio, 15.0, move || {
+                                            if active_tab.get() == AuthSheetTab::TvOAuth {
+                                                theme().primary_foreground
+                                            } else {
+                                                theme().foreground
+                                            }
+                                        }))
+                                        .child(
+                                            text("TV Code (Recommended)")
+                                                .text_sm()
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(move || {
+                                                    if active_tab.get() == AuthSheetTab::TvOAuth {
+                                                        theme().primary_foreground
+                                                    } else {
+                                                        theme().foreground
+                                                    }
+                                                }),
+                                        ),
                                 )
                                 .child(
-                                    view()
+                                    button()
+                                        .selected(move || active_tab.get() == AuthSheetTab::WebView)
+                                        .on_press(move || active_tab.set(AuthSheetTab::WebView))
                                         .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                                        .px_4()
+                                        .flex_row()
+                                        .items_center()
                                         .justify_center()
-                                        .child(glass_pill_button(
-                                            "Android WebView",
-                                            Some(IconKind::Home),
-                                            move || active_tab.set(AuthSheetTab::WebView),
-                                        )),
+                                        .gap_2()
+                                        .rounded(radius_pill)
+                                        .bg(move || {
+                                            if active_tab.get() == AuthSheetTab::WebView {
+                                                theme().primary
+                                            } else {
+                                                pill_glass_surface()
+                                            }
+                                        })
+                                        .border_1()
+                                        .border_color(glass_hairline)
+                                        .hover(|s| s.opacity(0.92))
+                                        .focus_visible(|s| {
+                                            s.outline(px(2.0)).outline_color(move || theme().ring)
+                                        })
+                                        .child(icon(IconKind::Home, 15.0, move || {
+                                            if active_tab.get() == AuthSheetTab::WebView {
+                                                theme().primary_foreground
+                                            } else {
+                                                theme().foreground
+                                            }
+                                        }))
+                                        .child(
+                                            text("Android WebView")
+                                                .text_sm()
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(move || {
+                                                    if active_tab.get() == AuthSheetTab::WebView {
+                                                        theme().primary_foreground
+                                                    } else {
+                                                        theme().foreground
+                                                    }
+                                                }),
+                                        ),
                                 ),
                         )
                         .child(when(
@@ -279,6 +349,12 @@ pub fn auth_sign_in_sheet(
                                 .px_3()
                                 .rounded(radius_card)
                                 .bg(pill_glass_surface)
+                                .border_1()
+                                .border_color(glass_hairline)
+                                .hover(|s| s.bg(pill_glass_hover))
+                                .focus_visible(|s| {
+                                    s.outline(px(2.0)).outline_color(move || theme().ring)
+                                })
                                 .on_press(move || {
                                     show_advanced_cookies.set(!show_advanced_cookies.get())
                                 })
@@ -295,13 +371,13 @@ pub fn auth_sign_in_sheet(
                                 let cb_sub = Arc::clone(&cb_cookies);
                                 view()
                                     .gap_2()
-                                    .child(
-                                        input()
-                                            .value(move || cookie_draft.get())
-                                            .on_change(move |v: &str| cookie_draft.set(v.to_owned()))
-                                            .placeholder("SAPISID=...; __Secure-3PAPISID=...; SID=...")
-                                            .min_h(px(MOBILE_MIN_TOUCH_TARGET)),
-                                    )
+                                    .child(labeled_input(
+                                        "Cookie header",
+                                        "auth-cookie-input",
+                                        "SAPISID=...; __Secure-3PAPISID=...; SID=...",
+                                        move || cookie_draft.get(),
+                                        move |v| cookie_draft.set(v.to_owned()),
+                                    ))
                                     .child(primary_button("Sign In with Cookies", move || {
                                         cb_sub(cookie_draft.get());
                                     }))

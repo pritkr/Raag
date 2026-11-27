@@ -78,6 +78,7 @@ pub fn speed_badge_label() -> Option<String> {
 fn speed_chip(val: f32, label: &'static str) -> impl IntoElement {
     let is_selected = move || (current_speed_config().speed - val).abs() < 0.025;
     button()
+        .selected(is_selected)
         .on_press(move || set_playback_speed(val))
         .min_h(px(MOBILE_MIN_TOUCH_TARGET))
         .px_3p5()
@@ -178,124 +179,133 @@ pub fn speed_sheet() -> impl IntoElement {
                             ),
                     )
                     .child(
-                        view()
-                            .flex_row()
-                            .items_center()
-                            .justify_between()
-                            .p_3()
-                            .rounded(radius_card)
-                            .bg(move || theme().card)
-                            .border_1()
-                            .border_color(glass_hairline)
-                            .child(
-                                button()
-                                    .accessibility_label("Decrease Speed")
-                                    .w(px(MOBILE_MIN_TOUCH_TARGET))
-                                    .h(px(MOBILE_MIN_TOUCH_TARGET))
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded_full()
-                                    .bg(pill_glass_surface)
-                                    .transition()
-                                    .duration(speed_transition_ms)
-                                    .ease_out()
-                                    .hover(|s| s.bg(pill_glass_hover))
-                                    .active(|s| s.scale(speed_press_scale))
-                                    .focus_visible(|s| {
-                                        s.outline(px(2.0)).outline_color(move || theme().ring)
-                                    })
-                                    .on_press(|| step_playback_speed(-0.05))
-                                    .child(
-                                        text("−0.05")
-                                            .text_xs()
+                        scroll().max_h(px(460.0)).child(
+                            view()
+                                .gap_4()
+                                .child(
+                                    view()
+                                        .flex_row()
+                                        .items_center()
+                                        .justify_between()
+                                        .p_3()
+                                        .rounded(radius_card)
+                                        .bg(move || theme().card)
+                                        .border_1()
+                                        .border_color(glass_hairline)
+                                        .child(
+                                            button()
+                                                .accessibility_label("Decrease Speed")
+                                                .w(px(MOBILE_MIN_TOUCH_TARGET))
+                                                .h(px(MOBILE_MIN_TOUCH_TARGET))
+                                                .items_center()
+                                                .justify_center()
+                                                .rounded_full()
+                                                .bg(pill_glass_surface)
+                                                .transition()
+                                                .duration(speed_transition_ms)
+                                                .ease_out()
+                                                .hover(|s| s.bg(pill_glass_hover))
+                                                .active(|s| s.scale(speed_press_scale))
+                                                .focus_visible(|s| {
+                                                    s.outline(px(2.0))
+                                                        .outline_color(move || theme().ring)
+                                                })
+                                                .on_press(|| step_playback_speed(-0.05))
+                                                .child(
+                                                    text("−0.05")
+                                                        .text_xs()
+                                                        .tabular_nums()
+                                                        .font_weight(FontWeight::SEMIBOLD)
+                                                        .text_color(move || theme().foreground),
+                                                ),
+                                        )
+                                        .child(
+                                            text(move || {
+                                                SharedString::from(format!(
+                                                    "{:.2}×",
+                                                    current_speed_config().speed
+                                                ))
+                                            })
+                                            .test_id("speed-readout")
+                                            .text_2xl()
                                             .tabular_nums()
-                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .font_weight(FontWeight::BOLD)
                                             .text_color(move || theme().foreground),
-                                    ),
-                            )
-                            .child(
-                                text(move || {
-                                    SharedString::from(format!(
-                                        "{:.2}×",
-                                        current_speed_config().speed
-                                    ))
-                                })
-                                .test_id("speed-readout")
-                                .text_2xl()
-                                .tabular_nums()
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(move || theme().foreground),
-                            )
-                            .child(
-                                button()
-                                    .accessibility_label("Increase Speed")
-                                    .w(px(MOBILE_MIN_TOUCH_TARGET))
-                                    .h(px(MOBILE_MIN_TOUCH_TARGET))
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded_full()
-                                    .bg(pill_glass_surface)
-                                    .transition()
-                                    .duration(speed_transition_ms)
-                                    .ease_out()
-                                    .hover(|s| s.bg(pill_glass_hover))
-                                    .active(|s| s.scale(speed_press_scale))
-                                    .focus_visible(|s| {
-                                        s.outline(px(2.0)).outline_color(move || theme().ring)
-                                    })
-                                    .on_press(|| step_playback_speed(0.05))
-                                    .child(
-                                        text("+0.05")
-                                            .text_xs()
-                                            .tabular_nums()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(move || theme().foreground),
-                                    ),
-                            ),
-                    )
-                    .child(
-                        view()
-                            .flex_row()
-                            .flex_wrap()
-                            .items_center()
-                            .justify_center()
-                            .gap_2()
-                            .child(speed_chip(0.75, "0.75×"))
-                            .child(speed_chip(1.00, "1.0×"))
-                            .child(speed_chip(1.25, "1.25×"))
-                            .child(speed_chip(1.50, "1.5×"))
-                            .child(speed_chip(2.00, "2.0×")),
-                    )
-                    .child(setting_switch(
-                        "Preserve Pitch",
-                        || current_speed_config().preserve_pitch,
-                        set_preserve_pitch,
-                    ))
-                    .child(
-                        button()
-                            .on_press(reset_playback_speed)
-                            .min_h(px(MOBILE_MIN_TOUCH_TARGET))
-                            .px_4()
-                            .items_center()
-                            .justify_center()
-                            .rounded(radius_pill)
-                            .bg(pill_glass_surface)
-                            .border_1()
-                            .border_color(glass_hairline)
-                            .transition()
-                            .duration(speed_transition_ms)
-                            .ease_out()
-                            .hover(|s| s.bg(pill_glass_hover))
-                            .active(|s| s.scale(speed_press_scale))
-                            .focus_visible(|s| {
-                                s.outline(px(2.0)).outline_color(move || theme().ring)
-                            })
-                            .child(
-                                text("Reset to 1.0×")
-                                    .text_sm()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(move || theme().foreground),
-                            ),
+                                        )
+                                        .child(
+                                            button()
+                                                .accessibility_label("Increase Speed")
+                                                .w(px(MOBILE_MIN_TOUCH_TARGET))
+                                                .h(px(MOBILE_MIN_TOUCH_TARGET))
+                                                .items_center()
+                                                .justify_center()
+                                                .rounded_full()
+                                                .bg(pill_glass_surface)
+                                                .transition()
+                                                .duration(speed_transition_ms)
+                                                .ease_out()
+                                                .hover(|s| s.bg(pill_glass_hover))
+                                                .active(|s| s.scale(speed_press_scale))
+                                                .focus_visible(|s| {
+                                                    s.outline(px(2.0))
+                                                        .outline_color(move || theme().ring)
+                                                })
+                                                .on_press(|| step_playback_speed(0.05))
+                                                .child(
+                                                    text("+0.05")
+                                                        .text_xs()
+                                                        .tabular_nums()
+                                                        .font_weight(FontWeight::SEMIBOLD)
+                                                        .text_color(move || theme().foreground),
+                                                ),
+                                        ),
+                                )
+                                .child(
+                                    view()
+                                        .flex_row()
+                                        .flex_wrap()
+                                        .items_center()
+                                        .justify_center()
+                                        .gap_2()
+                                        .child(speed_chip(0.75, "0.75×"))
+                                        .child(speed_chip(1.00, "1.0×"))
+                                        .child(speed_chip(1.25, "1.25×"))
+                                        .child(speed_chip(1.50, "1.5×"))
+                                        .child(speed_chip(2.00, "2.0×")),
+                                )
+                                .child(setting_switch(
+                                    "Preserve Pitch",
+                                    || current_speed_config().preserve_pitch,
+                                    set_preserve_pitch,
+                                ))
+                                .child(
+                                    button()
+                                        .on_press(reset_playback_speed)
+                                        .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                                        .px_4()
+                                        .items_center()
+                                        .justify_center()
+                                        .rounded(radius_pill)
+                                        .bg(pill_glass_surface)
+                                        .border_1()
+                                        .border_color(glass_hairline)
+                                        .transition()
+                                        .duration(speed_transition_ms)
+                                        .ease_out()
+                                        .hover(|s| s.bg(pill_glass_hover))
+                                        .active(|s| s.scale(speed_press_scale))
+                                        .focus_visible(|s| {
+                                            s.outline(px(2.0))
+                                                .outline_color(move || theme().ring)
+                                        })
+                                        .child(
+                                            text("Reset to 1.0×")
+                                                .text_sm()
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(move || theme().foreground),
+                                        ),
+                                ),
+                        ),
                     ),
             )
     })

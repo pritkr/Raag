@@ -100,7 +100,7 @@ impl CastManager {
         // Tear down any prior session first
         let _ = self.disconnect().await;
 
-        let relay = if self.allow_loopback_relay_for_test {
+        let mut relay = if self.allow_loopback_relay_for_test {
             LanCastRelay::start_for_test(
                 device.address,
                 self.loopback_proxy_addr,

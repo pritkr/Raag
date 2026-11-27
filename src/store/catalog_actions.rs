@@ -890,7 +890,7 @@ pub fn create_playlist(title: &str, privacy: &str) {
 pub fn save_queue_as_playlist() {
     let tracks = playback_signal().with(|p| p.player.queue.items.clone());
     if tracks.is_empty() {
-        set_status_banner("Queue is empty");
+        ui_signal().update(|u| u.set_status_banner("Queue is empty"));
         return;
     }
     let live = !is_fixture_mode();
@@ -910,7 +910,7 @@ pub fn save_queue_as_playlist() {
             created_id = created.browse_id.clone();
             created_title = created.title.clone();
             if let Some(pl) = l.playlists.first_mut() {
-                pl.track_count = Some(track_count);
+                pl.track_count = Some(track_count as u32);
             }
             if live && signed_in {
                 m.pending_mutations += 1;

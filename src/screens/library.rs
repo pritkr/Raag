@@ -15,10 +15,11 @@ use crate::screens::local_files::{LocalFilesProps, local_files_screen};
 use crate::store::library_slice::matches_query;
 use crate::store::{self, AppTab, LibraryFilter};
 use crate::ui::controls::{
-    artwork_box, glass_pill_button, hero_pill_button, set_text_input_focused, status_card,
-    track_row_view,
+    artwork_box, confirm_destructive, glass_pill_button, hero_pill_button, set_text_input_focused,
+    status_card, track_row_view,
 };
 use crate::ui::icons::{IconKind, icon, liked_music_tile_svg};
+use crate::ui::text_format::{format_recoverable_error, pluralize};
 use crate::ui::tokens::{
     MOBILE_MIN_TOUCH_TARGET, color_hero_pill_bg, color_hero_pill_fg, glass_hairline,
     is_desktop_layout, pill_glass_hover, pill_glass_surface, radius_card, radius_pill,
@@ -58,6 +59,7 @@ fn filter_pill(filter: LibraryFilter) -> impl IntoElement {
     button()
         .test_id(test_id)
         .accessibility_label(filter.label())
+        .selected(selected)
         .on_press(move || store::set_library_filter(filter))
         .min_h(px(MOBILE_MIN_TOUCH_TARGET))
         .px_4()
@@ -150,14 +152,19 @@ fn render_track_list_view(
                         .text_color(move || theme().foreground),
                 )
                 .child(
-                    text(format!("{count} tracks"))
+                    text(pluralize(count, "track", "tracks"))
                         .text_xs()
                         .tabular_nums()
                         .text_color(move || theme().muted_foreground),
                 ),
         )
         .when(tracks.is_empty(), |v| {
-            v.child(status_card(empty_title, empty_subtitle, None, None))
+            v.child(status_card(
+                empty_title,
+                empty_subtitle,
+                Some("Open Search"),
+                Some(Box::new(|| store::set_tab(AppTab::Search))),
+            ))
         })
         .when(!tracks.is_empty(), move |v| {
             v.child(track_table_header())
@@ -187,11 +194,11 @@ fn download_status_label(rec: &DownloadRecord) -> String {
             {
                 format!("Downloading {}%", pct.min(100))
             } else {
-                "Downloading...".to_owned()
+                "Downloading…".to_owned()
             }
         }
         DownloadStatus::Paused => "Paused".to_owned(),
-        DownloadStatus::Tagging => "Tagging...".to_owned(),
+        DownloadStatus::Tagging => "Tagging…".to_owned(),
         DownloadStatus::Completed => {
             let mb = rec.total_bytes as f64 / (1024.0 * 1024.0);
             format!("Offline • {mb:.1} MB")
@@ -199,9 +206,17 @@ fn download_status_label(rec: &DownloadRecord) -> String {
         DownloadStatus::Failed => rec
             .error_message
             .as_deref()
-            .map(|e| format!("Failed: {e}"))
-            .unwrap_or_else(|| "Failed".to_owned()),
-        DownloadStatus::Cancelled => "Cancelled".to_owned(),
+            .map(|e| {
+                format_recoverable_error(
+                    "Download failed",
+                    e,
+                    "Check your connection and select Retry.",
+                )
+            })
+            .unwrap_or_else(|| {
+                "Download failed. Check your connection and select Retry.".to_owned()
+            }),
+        DownloadStatus::Cancelled => "Canceled".to_owned(),
     }
 }
 
@@ -290,6 +305,7 @@ fn render_downloads_view(query: &str, sort_asc: bool, current_id: Option<String>
                                     .gap_2()
                                     .child(
                                         button()
+                                            .accessibility_label("Play Offline")
                                             .min_h(px(MOBILE_MIN_TOUCH_TARGET))
                                             .px_3()
                                             .items_center()
@@ -299,6 +315,10 @@ fn render_downloads_view(query: &str, sort_asc: bool, current_id: Option<String>
                                             .border_1()
                                             .border_color(glass_hairline)
                                             .hover(|s| s.bg(pill_glass_hover))
+                                            .focus_visible(|s| {
+                                                s.outline(px(2.0))
+                                                    .outline_color(move || theme().ring)
+                                            })
                                             .on_press(move || {
                                                 if !col_tracks.is_empty() {
                                                     store::play_queue(col_tracks.clone(), 0);
@@ -313,6 +333,7 @@ fn render_downloads_view(query: &str, sort_asc: bool, current_id: Option<String>
                                     )
                                     .child(
                                         button()
+                                            .accessibility_label("Unpin collection")
                                             .min_h(px(MOBILE_MIN_TOUCH_TARGET))
                                             .px_3()
                                             .items_center()
@@ -322,6 +343,10 @@ fn render_downloads_view(query: &str, sort_asc: bool, current_id: Option<String>
                                             .border_1()
                                             .border_color(glass_hairline)
                                             .hover(|s| s.bg(pill_glass_hover))
+                                            .focus_visible(|s| {
+                                                s.outline(px(2.0))
+                                                    .outline_color(move || theme().ring)
+                                            })
                                             .on_press(move || store::unpin_collection(&col_id))
                                             .child(
                                                 text("Unpin")
@@ -347,7 +372,7 @@ fn render_downloads_view(query: &str, sort_asc: bool, current_id: Option<String>
                         .text_color(move || theme().foreground),
                 )
                 .child(
-                    text(format!("{count} items"))
+                    text(pluralize(count, "item", "items"))
                         .text_xs()
                         .tabular_nums()
                         .text_color(move || theme().muted_foreground),
@@ -357,8 +382,8 @@ fn render_downloads_view(query: &str, sort_asc: bool, current_id: Option<String>
             v.child(status_card(
                 "No offline downloads yet",
                 "Download tracks to play them locally from disk with zero network usage.",
-                None,
-                None,
+                Some("Open Search"),
+                Some(Box::new(|| store::set_tab(AppTab::Search))),
             ))
         })
         .when(!records.is_empty(), move |v| {
@@ -368,9 +393,11 @@ fn render_downloads_view(query: &str, sort_asc: bool, current_id: Option<String>
                 let vid_pause = rec.video_id.clone();
                 let vid_resume = rec.video_id.clone();
                 let vid_delete = rec.video_id.clone();
+                let title_delete = rec.track.title.clone();
                 let track_play = rec.track.clone();
                 let track_next = rec.track.clone();
                 let is_completed = rec.status == DownloadStatus::Completed;
+                let is_failed = rec.status == DownloadStatus::Failed;
                 let is_active = matches!(
                     rec.status,
                     DownloadStatus::Queued | DownloadStatus::Downloading
@@ -417,9 +444,15 @@ fn render_downloads_view(query: &str, sort_asc: bool, current_id: Option<String>
                                                 "{} • {status_label}",
                                                 rec.track.artist_display()
                                             ))
-                                            .number_of_lines(1)
+                                            .number_of_lines(if is_failed { 3 } else { 1 })
                                             .text_xs()
-                                            .text_color(move || theme().muted_foreground),
+                                            .text_color(move || {
+                                                if is_failed {
+                                                    theme().destructive
+                                                } else {
+                                                    theme().muted_foreground
+                                                }
+                                            }),
                                         ),
                                 )
                                 .child(
@@ -456,9 +489,16 @@ fn render_downloads_view(query: &str, sort_asc: bool, current_id: Option<String>
                                             )
                                         })
                                         .when(is_resumable, |row| {
+                                            let action_label =
+                                                if is_failed { "Retry" } else { "Resume" };
+                                            let a11y_label = if is_failed {
+                                                "Retry download"
+                                            } else {
+                                                "Resume download"
+                                            };
                                             row.child(
                                                 button()
-                                                    .accessibility_label("Resume download")
+                                                    .accessibility_label(a11y_label)
                                                     .on_press(move || {
                                                         store::resume_download(&vid_resume)
                                                     })
@@ -476,7 +516,7 @@ fn render_downloads_view(query: &str, sort_asc: bool, current_id: Option<String>
                                                             .outline_color(move || theme().ring)
                                                     })
                                                     .child(
-                                                        text("Resume")
+                                                        text(action_label)
                                                             .text_xs()
                                                             .font_weight(FontWeight::MEDIUM)
                                                             .text_color(move || theme().foreground),
@@ -487,7 +527,16 @@ fn render_downloads_view(query: &str, sort_asc: bool, current_id: Option<String>
                                             button()
                                                 .accessibility_label("Delete download")
                                                 .on_press(move || {
-                                                    store::delete_download(&vid_delete)
+                                                    let vid = vid_delete.clone();
+                                                    let title = title_delete.clone();
+                                                    confirm_destructive(
+                                                        "Delete offline download?",
+                                                        format!(
+                                                            "Remove \"{title}\" from offline storage?"
+                                                        ),
+                                                        "Remove",
+                                                        move || store::delete_download(&vid),
+                                                    );
                                                 })
                                                 .min_h(px(MOBILE_MIN_TOUCH_TARGET))
                                                 .px_3()
@@ -506,7 +555,7 @@ fn render_downloads_view(query: &str, sort_asc: bool, current_id: Option<String>
                                                     text("Remove")
                                                         .text_xs()
                                                         .font_weight(FontWeight::MEDIUM)
-                                                        .text_color(move || theme().foreground),
+                                                        .text_color(move || theme().destructive),
                                                 ),
                                         ),
                                 ),
@@ -545,7 +594,7 @@ fn render_playlists_view(query: &str, sort_asc: bool) -> AnyElement {
                         .text_color(move || theme().foreground),
                 )
                 .child(
-                    text(format!("{count} playlists"))
+                    text(pluralize(count, "playlist", "playlists"))
                         .text_xs()
                         .tabular_nums()
                         .text_color(move || theme().muted_foreground),
@@ -565,14 +614,15 @@ fn render_playlists_view(query: &str, sort_asc: bool) -> AnyElement {
                         .rounded(radius_card)
                         .bg(move || theme().card)
                         .border_1()
-                        .border_color(glass_hairline)
+                        .border_color(move || theme().input)
+                        .focus(|s| s.border_color(move || theme().ring))
                         .text_sm()
                         .text_color(move || theme().foreground)
                         .placeholder("New playlist title…")
-                        .value(move || SharedString::from(new_pl_title.get()))
+                        .value(move || new_pl_title.get())
                         .on_focus(|| set_text_input_focused(true))
                         .on_blur(|| set_text_input_focused(false))
-                        .on_change(move |v| new_pl_title.set(v.to_string())),
+                        .on_change(move |v: &str| new_pl_title.set(v.to_owned())),
                 )
                 .child(hero_pill_button("+ New Playlist", None, move || {
                     let draft = new_pl_title.get();
@@ -601,6 +651,7 @@ fn render_playlists_view(query: &str, sort_asc: bool) -> AnyElement {
             let pid = pl.id.clone();
             let pid_delete = pl.id.clone();
             let ptitle = pl.title.clone();
+            let ptitle_del = pl.title.clone();
             let psub = pl.subtitle.clone();
             let part = pl.artwork_url.clone();
 
@@ -618,6 +669,7 @@ fn render_playlists_view(query: &str, sort_asc: bool) -> AnyElement {
                 .border_color(glass_hairline)
                 .child(
                     button()
+                        .accessibility_label(ptitle.clone())
                         .flex_1()
                         .min_h(px(MOBILE_MIN_TOUCH_TARGET))
                         .flex_row()
@@ -626,6 +678,9 @@ fn render_playlists_view(query: &str, sort_asc: bool) -> AnyElement {
                         .rounded(radius_card)
                         .hover(|s| s.bg(pill_glass_hover))
                         .active(|s| s.opacity(0.8))
+                        .focus_visible(|s| {
+                            s.outline(px(2.0)).outline_color(move || theme().ring)
+                        })
                         .on_press(move || {
                             if is_liked {
                                 store::set_library_filter(LibraryFilter::LikedSongs);
@@ -668,8 +723,11 @@ fn render_playlists_view(query: &str, sort_asc: bool) -> AnyElement {
                 )
                 .when(!is_liked, move |row| {
                     let pid_del = pid_delete.clone();
+                    let ptitle_a11y = ptitle_del.clone();
+                    let ptitle_dialog = ptitle_del.clone();
                     row.child(
                         button()
+                            .accessibility_label(format!("Delete playlist {ptitle_a11y}"))
                             .min_w(px(MOBILE_MIN_TOUCH_TARGET))
                             .min_h(px(MOBILE_MIN_TOUCH_TARGET))
                             .items_center()
@@ -677,10 +735,22 @@ fn render_playlists_view(query: &str, sort_asc: bool) -> AnyElement {
                             .rounded(radius_pill)
                             .hover(|s| s.bg(pill_glass_hover))
                             .active(|s| s.opacity(0.75))
-                            .on_press(move || store::delete_playlist(pid_del.clone()))
-                            .child(icon(IconKind::Trash, 16.0, move || {
-                                theme().muted_foreground
-                            })),
+                            .focus_visible(|s| {
+                                s.outline(px(2.0)).outline_color(move || theme().ring)
+                            })
+                            .on_press(move || {
+                                let id = pid_del.clone();
+                                let title = ptitle_dialog.clone();
+                                confirm_destructive(
+                                    "Delete playlist?",
+                                    format!(
+                                        "Permanently delete \"{title}\"? This cannot be undone."
+                                    ),
+                                    "Delete",
+                                    move || store::delete_playlist(id),
+                                );
+                            })
+                            .child(icon(IconKind::Trash, 16.0, move || theme().destructive)),
                     )
                 })
         }))
@@ -744,7 +814,7 @@ fn render_albums_view(query: &str, sort_asc: bool) -> AnyElement {
                         .text_color(move || theme().foreground),
                 )
                 .child(
-                    text(format!("{count} albums"))
+                    text(pluralize(count, "album", "albums"))
                         .text_xs()
                         .tabular_nums()
                         .text_color(move || theme().muted_foreground),
@@ -754,8 +824,8 @@ fn render_albums_view(query: &str, sort_asc: bool) -> AnyElement {
             v.child(status_card(
                 "No albums found",
                 "Try another filter or search YouTube Music for albums.",
-                None,
-                None,
+                Some("Open Search"),
+                Some(Box::new(|| store::set_tab(AppTab::Search))),
             ))
         })
         .children(albums.into_iter().map(|(browse_id, title, subtitle, art)| {
@@ -769,6 +839,7 @@ fn render_albums_view(query: &str, sort_asc: bool) -> AnyElement {
             let art_for_press = art.clone();
 
             button()
+                .accessibility_label(title.clone())
                 .w_full()
                 .min_h(px(62.0))
                 .flex_row()
@@ -782,6 +853,7 @@ fn render_albums_view(query: &str, sort_asc: bool) -> AnyElement {
                 .border_color(glass_hairline)
                 .hover(|s| s.bg(pill_glass_hover))
                 .active(|s| s.opacity(0.8))
+                .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                 .on_press(move || {
                     if let Some(id) = browse_id.clone() {
                         if id.starts_with("MPRE") {
@@ -870,7 +942,7 @@ fn render_artists_view(query: &str, sort_asc: bool) -> AnyElement {
                         .text_color(move || theme().foreground),
                 )
                 .child(
-                    text(format!("{count} artists"))
+                    text(pluralize(count, "artist", "artists"))
                         .text_xs()
                         .tabular_nums()
                         .text_color(move || theme().muted_foreground),
@@ -880,8 +952,8 @@ fn render_artists_view(query: &str, sort_asc: bool) -> AnyElement {
             v.child(status_card(
                 "No artists in library yet",
                 "Play or like tracks to populate your artist directory.",
-                None,
-                None,
+                Some("Open Search"),
+                Some(Box::new(|| store::set_tab(AppTab::Search))),
             ))
         })
         .children(artists.into_iter().map(|(name, track_count, artist_id)| {
@@ -891,13 +963,10 @@ fn render_artists_view(query: &str, sort_asc: bool) -> AnyElement {
                 .map(|c| c.to_uppercase().to_string())
                 .unwrap_or_else(|| "♪".into());
             let name_for_search = name.clone();
-            let sub = if track_count == 1 {
-                "1 track in library".to_owned()
-            } else {
-                format!("{track_count} tracks in library")
-            };
+            let sub = format!("{} in library", pluralize(track_count, "track", "tracks"));
 
             button()
+                .accessibility_label(name.clone())
                 .w_full()
                 .min_h(px(62.0))
                 .flex_row()
@@ -911,6 +980,7 @@ fn render_artists_view(query: &str, sort_asc: bool) -> AnyElement {
                 .border_color(glass_hairline)
                 .hover(|s| s.bg(pill_glass_hover))
                 .active(|s| s.opacity(0.8))
+                .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                 .on_press(move || {
                     if let Some(cid) = artist_id.clone() {
                         store::open_artist_entity(cid);
@@ -991,7 +1061,9 @@ fn action_toolbar(search_query: Signal<String>) -> impl IntoElement {
                 ))
                 .child(
                     view()
-                        .w(px(230.0))
+                        .flex_1()
+                        .min_w(px(180.0))
+                        .max_w(px(280.0))
                         .min_h(px(MOBILE_MIN_TOUCH_TARGET))
                         .flex_row()
                         .items_center()
@@ -1000,7 +1072,7 @@ fn action_toolbar(search_query: Signal<String>) -> impl IntoElement {
                         .rounded(radius_pill)
                         .bg(pill_glass_surface)
                         .border_1()
-                        .border_color(glass_hairline)
+                        .border_color(move || theme().input)
                         .child(icon(IconKind::Search, 14.0, move || {
                             theme().muted_foreground
                         }))
@@ -1014,7 +1086,7 @@ fn action_toolbar(search_query: Signal<String>) -> impl IntoElement {
                                 })
                                 .on_focus(|| set_text_input_focused(true))
                                 .on_blur(|| set_text_input_focused(false))
-                                .placeholder("Find in this list")
+                                .placeholder("Filter this list…")
                                 .placeholder_color(|| color(theme().muted_foreground))
                                 .caret_color(|| color(theme().primary))
                                 .flex_1()
@@ -1027,17 +1099,20 @@ fn action_toolbar(search_query: Signal<String>) -> impl IntoElement {
                             move || {
                                 button()
                                     .accessibility_label("Clear list filter")
-                                    .w(px(28.0))
-                                    .h(px(28.0))
+                                    .w(px(MOBILE_MIN_TOUCH_TARGET))
+                                    .h(px(MOBILE_MIN_TOUCH_TARGET))
                                     .items_center()
                                     .justify_center()
                                     .rounded_full()
                                     .hover(|s| s.bg(pill_glass_hover))
+                                    .focus_visible(|s| {
+                                        s.outline(px(2.0)).outline_color(move || theme().ring)
+                                    })
                                     .on_press(move || {
                                         search_query.set(String::new());
                                         store::set_library_search_query("");
                                     })
-                                    .child(icon(IconKind::Close, 12.0, move || {
+                                    .child(icon(IconKind::Close, 14.0, move || {
                                         theme().muted_foreground
                                     }))
                             },
@@ -1094,19 +1169,22 @@ pub fn library_screen() -> impl IntoElement {
                             .border_color(glass_hairline)
                             .hover(|s| s.bg(pill_glass_hover))
                             .active(|s| s.opacity(0.75))
+                            .focus_visible(|s| {
+                                s.outline(px(2.0)).outline_color(move || theme().ring)
+                            })
                             .on_press(|| store::set_tab(AppTab::Settings))
                             .child(icon(IconKind::Settings, 18.0, move || theme().foreground)),
                     ),
             )
-            // Horizontal Filter Pills Row (ref_5.jpg)
+            // Wrapping Filter Pills Row (all categories visible without hidden scrollbar clipping)
             .child(
-                scroll().horizontal().scrollbar(false).child(
-                    view()
-                        .flex_row()
-                        .items_center()
-                        .gap_2()
-                        .children(LibraryFilter::all().iter().copied().map(filter_pill)),
-                ),
+                view()
+                    .w_full()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .children(LibraryFilter::all().iter().copied().map(filter_pill)),
             )
             // Music Action Toolbar & Filtered Content (or full Local Library Manager)
             .child(
@@ -1200,8 +1278,10 @@ pub fn library_screen() -> impl IntoElement {
                                             .children(pinned.into_iter().map(|p| {
                                                 let pid = p.id.clone();
                                                 let title = p.title.clone();
-                                                let sub = format!("{} tracks", p.tracks.len());
+                                                let sub =
+                                                    pluralize(p.tracks.len(), "track", "tracks");
                                                 button()
+                                                    .accessibility_label(title.clone())
                                                     .w_full()
                                                     .min_h(px(MOBILE_MIN_TOUCH_TARGET))
                                                     .px_3()
@@ -1213,6 +1293,10 @@ pub fn library_screen() -> impl IntoElement {
                                                     .bg(move || theme().card)
                                                     .border_1()
                                                     .border_color(glass_hairline)
+                                                    .focus_visible(|s| {
+                                                        s.outline(px(2.0))
+                                                            .outline_color(move || theme().ring)
+                                                    })
                                                     .on_press(move || {
                                                         store::open_collection(
                                                             pid.clone(),

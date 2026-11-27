@@ -8,7 +8,7 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use nsh_base::{avatar, button, input, popover, tab, tabs, theme};
+use nsh_base::{button, input, popover, tab, tabs, theme};
 use nsh_core::element::ImageSrc;
 use nsh_core::prelude::*;
 use resonance_core::offline::PinnedCollectionKind;
@@ -26,17 +26,18 @@ use crate::store::{
     self, AppTab, DesktopSidePanel, EntityRoute, LibraryFilter, SidebarPlaylist,
 };
 use crate::ui::controls::{
-    add_to_playlist_sheet, artwork_box, back_button, cast_picker_sheet, desktop_player_bar,
-    live_equalizer_indicator, mini_player_bar, sleep_timer_sheet, speed_sheet, svg_icon_button,
-    track_action_sheet,
+    active_state_dot, add_to_playlist_sheet, artwork_box, back_button, cast_picker_sheet,
+    desktop_player_bar, live_equalizer_indicator, mini_player_bar, sleep_timer_sheet, speed_sheet,
+    svg_icon_button, track_action_sheet,
 };
 use crate::ui::icons::{IconKind, icon, liked_music_tile_svg, raag_brand_icon};
 use crate::ui::tokens::{
-    MOBILE_MIN_TOUCH_TARGET, color_ambient_warm, color_sidebar_border, color_sidebar_surface,
-    cover_gradient_pair, eyebrow_label, frosted_bar_surface, frosted_card_surface,
-    frosted_header_surface, glass_hairline, glass_specular_hairline, is_desktop_layout,
-    is_desktop_panel_visible, motion, overlay_scrim, pill_glass_hover, pill_glass_surface,
-    radius_card, radius_panel, radius_pill, sidebar_active_surface,
+    MOBILE_MIN_TOUCH_TARGET, color_ambient_warm, color_lyric_inactive, color_on_cover,
+    color_sidebar_border, color_sidebar_surface, cover_gradient_pair, eyebrow_label,
+    frosted_bar_surface, frosted_card_surface, frosted_header_surface, glass_hairline,
+    glass_specular_hairline, is_desktop_layout, is_desktop_panel_visible, motion, overlay_scrim,
+    pill_glass_hover, pill_glass_surface, radius_card, radius_panel, radius_pill, radius_tab_inner,
+    sidebar_active_surface,
 };
 
 fn shell_transition_ms() -> f32 {
@@ -54,7 +55,7 @@ fn shell_press_scale() -> f32 {
 fn trigger_shell_layout_animation() {
     if !store::reduced_motion() {
         let _ = std::panic::catch_unwind(|| {
-            animate_layout(LayoutAnimation::EASE_IN_EASE_OUT);
+            animate_layout(nsh_core::LayoutAnimation::EASE_IN_EASE_OUT);
         });
     }
 }
@@ -89,6 +90,14 @@ fn side_panel_queue_artwork(
         .w(px(38.0))
         .h(px(38.0))
         .rounded(px(6.0))
+        .bg(move || {
+            let seed = track.with(|t| {
+                t.as_ref()
+                    .map(|x| x.id.clone())
+                    .unwrap_or_else(|| "q".into())
+            });
+            cover_gradient_pair(&seed).0
+        })
         .bg_linear_to_br()
         .gradient_from(move || {
             let seed = track.with(|t| {
@@ -133,7 +142,7 @@ fn side_panel_queue_artwork(
                 })
                 .text_xs()
                 .font_weight(FontWeight::BOLD)
-                .text_color(move || theme().primary_foreground)
+                .text_color(color_on_cover)
             }),
         )
         .child(when(is_active, || {
@@ -492,7 +501,7 @@ fn active_screen() -> impl IntoElement {
 }
 
 fn status_toast() -> impl IntoElement {
-    when(
+    view().test_id("global-status-region").w_full().child(when(
         || store::status_banner().is_some(),
         || {
             view()
@@ -509,7 +518,7 @@ fn status_toast() -> impl IntoElement {
                     text(move || SharedString::from(store::status_banner().unwrap_or_default()))
                         .test_id("global-status-toast")
                         .flex_1()
-                        .number_of_lines(1)
+                        .number_of_lines(3)
                         .text_xs()
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(move || theme().accent_foreground),
@@ -531,7 +540,7 @@ fn status_toast() -> impl IntoElement {
                         })),
                 )
         },
-    )
+    ))
 }
 
 fn persistent_mini_player() -> impl IntoElement {
@@ -696,7 +705,6 @@ fn keyboard_shortcuts_popover() -> impl IntoElement {
         .popup_style(|s| {
             s.rounded(radius_panel)
                 .backdrop_blur(px(28.0))
-                .backdrop_material(BackdropMaterial::Thick)
                 .bg(frosted_card_surface)
                 .border_1()
                 .border_color(glass_hairline)
@@ -1057,7 +1065,7 @@ fn desktop_top_header() -> impl IntoElement {
                                 .rounded(radius_pill)
                                 .bg(pill_glass_surface)
                                 .border_1()
-                                .border_color(glass_hairline)
+                                .border_color(move || theme().input)
                                 .child(
                                     button()
                                         .test_id("nav-search")
@@ -1168,24 +1176,43 @@ fn desktop_top_header() -> impl IntoElement {
                                 })
                                 .on_press(|| store::set_tab(AppTab::Settings))
                                 .child(
-                                    avatar()
-                                        .name(move || {
-                                            let (signed_in, acct) = store::auth_info();
-                                            if signed_in {
-                                                SharedString::from(
-                                                    acct.unwrap_or_else(|| "Raag User".into()),
-                                                )
-                                            } else {
-                                                SharedString::from("Raag")
-                                            }
-                                        })
-                                        .accessibility_label("")
-                                        .fallback_class("size-9 rounded-full items-center justify-center bg-secondary text-foreground text-xs font-bold")
-                                        .size_9()
+                                    view()
+                                        .w(px(36.0))
+                                        .h(px(36.0))
                                         .rounded_full()
-                                        .overflow_hidden()
+                                        .bg(move || theme().secondary)
                                         .border_1()
-                                        .border_color(glass_hairline),
+                                        .border_color(glass_hairline)
+                                        .items_center()
+                                        .justify_center()
+                                        .overflow_hidden()
+                                        .child(
+                                            text(move || {
+                                                let (signed_in, acct) = store::auth_info();
+                                                let source = if signed_in {
+                                                    acct.unwrap_or_else(|| "Raag User".into())
+                                                } else {
+                                                    "Raag".into()
+                                                };
+                                                let mut chars = source
+                                                    .chars()
+                                                    .filter(|c| c.is_alphanumeric());
+                                                let initials: String = chars
+                                                    .by_ref()
+                                                    .take(2)
+                                                    .flat_map(|c| c.to_uppercase())
+                                                    .collect();
+                                                SharedString::from(if initials.is_empty() {
+                                                    "RA".to_owned()
+                                                } else {
+                                                    initials
+                                                })
+                                            })
+                                            .number_of_lines(1)
+                                            .text_xs()
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(move || theme().foreground),
+                                        ),
                                 ),
                         ),
                 )
@@ -1209,7 +1236,7 @@ fn desktop_side_panel() -> impl IntoElement {
     when(show_panel, move || {
         view()
             .test_id("desktop-side-panel")
-            .w(px(320.0))
+            .w(px(336.0))
             .h_full()
             .p_3()
             .gap_3()
@@ -1234,7 +1261,7 @@ fn desktop_side_panel() -> impl IntoElement {
                             .indicator_style(|s| {
                                 s.top_1()
                                     .bottom_1()
-                                    .rounded(move || theme().radius)
+                                    .rounded(radius_tab_inner)
                                     .bg(move || theme().primary)
                             })
                             .accessibility_label("Side panel sections")
@@ -1247,14 +1274,16 @@ fn desktop_side_panel() -> impl IntoElement {
                                     })
                                     .flex_1()
                                     .min_h(px(36.0))
+                                    .px_1()
                                     .items_center()
                                     .justify_center()
-                                    .rounded(move || theme().radius)
+                                    .rounded(radius_tab_inner)
                                     .focus_visible(|s| {
                                         s.outline(px(2.0)).outline_color(move || theme().ring)
                                     })
                                     .child(
                                         text("Up Next")
+                                            .number_of_lines(1)
                                             .text_xs()
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .text_color(move || {
@@ -1273,16 +1302,18 @@ fn desktop_side_panel() -> impl IntoElement {
                                     .on_press(|| {
                                         store::set_desktop_side_panel(DesktopSidePanel::Lyrics)
                                     })
-                                    .flex_1()
+                                    .flex_grow(1.45)
                                     .min_h(px(36.0))
+                                    .px_1()
                                     .items_center()
                                     .justify_center()
-                                    .rounded(move || theme().radius)
+                                    .rounded(radius_tab_inner)
                                     .focus_visible(|s| {
                                         s.outline(px(2.0)).outline_color(move || theme().ring)
                                     })
                                     .child(
                                         text("Synced Lyrics")
+                                            .number_of_lines(1)
                                             .text_xs()
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .text_color(move || {
@@ -1303,14 +1334,16 @@ fn desktop_side_panel() -> impl IntoElement {
                                     })
                                     .flex_1()
                                     .min_h(px(36.0))
+                                    .px_1()
                                     .items_center()
                                     .justify_center()
-                                    .rounded(move || theme().radius)
+                                    .rounded(radius_tab_inner)
                                     .focus_visible(|s| {
                                         s.outline(px(2.0)).outline_color(move || theme().ring)
                                     })
                                     .child(
                                         text("Related")
+                                            .number_of_lines(1)
                                             .text_xs()
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .text_color(move || {
@@ -1431,7 +1464,6 @@ fn desktop_side_panel() -> impl IntoElement {
                                     .py_1p5()
                                     .rounded(radius_card)
                                     .style_when(active, |s| s.bg(sidebar_active_surface))
-                                    .style_when(move || !active(), |s| s.opacity(0.68))
                                     .hover(|s| s.bg(pill_glass_hover))
                                     .focus_visible(|s| {
                                         s.outline(px(2.0)).outline_color(move || theme().ring)
@@ -1459,7 +1491,7 @@ fn desktop_side_panel() -> impl IntoElement {
                                             if active() {
                                                 theme().foreground
                                             } else {
-                                                theme().muted_foreground
+                                                color_lyric_inactive()
                                             }
                                         }),
                                     )
@@ -1615,12 +1647,19 @@ fn mobile_top_header() -> impl IntoElement {
                         .child(
                             button()
                                 .test_id("nav-rooms")
+                                .selected(move || store::active_tab() == AppTab::ListenTogether)
                                 .accessibility_label("Radio & Rooms")
                                 .w(px(MOBILE_MIN_TOUCH_TARGET))
                                 .h(px(MOBILE_MIN_TOUCH_TARGET))
+                                .flex_col()
                                 .items_center()
                                 .justify_center()
+                                .gap_0p5()
                                 .rounded_full()
+                                .style_when(
+                                    move || store::active_tab() == AppTab::ListenTogether,
+                                    |s| s.bg(sidebar_active_surface),
+                                )
                                 .hover(|s| s.bg(pill_glass_hover))
                                 .focus_visible(|s| {
                                     s.outline(px(2.0)).outline_color(move || theme().ring)
@@ -1632,17 +1671,27 @@ fn mobile_top_header() -> impl IntoElement {
                                     } else {
                                         theme().foreground
                                     }
+                                }))
+                                .child(active_state_dot(move || {
+                                    store::active_tab() == AppTab::ListenTogether
                                 })),
                         )
                         .child(
                             button()
                                 .test_id("nav-queue")
+                                .selected(move || store::active_tab() == AppTab::Queue)
                                 .accessibility_label("Queue")
                                 .w(px(MOBILE_MIN_TOUCH_TARGET))
                                 .h(px(MOBILE_MIN_TOUCH_TARGET))
+                                .flex_col()
                                 .items_center()
                                 .justify_center()
+                                .gap_0p5()
                                 .rounded_full()
+                                .style_when(
+                                    move || store::active_tab() == AppTab::Queue,
+                                    |s| s.bg(sidebar_active_surface),
+                                )
                                 .hover(|s| s.bg(pill_glass_hover))
                                 .focus_visible(|s| {
                                     s.outline(px(2.0)).outline_color(move || theme().ring)
@@ -1654,17 +1703,27 @@ fn mobile_top_header() -> impl IntoElement {
                                     } else {
                                         theme().foreground
                                     }
+                                }))
+                                .child(active_state_dot(move || {
+                                    store::active_tab() == AppTab::Queue
                                 })),
                         )
                         .child(
                             button()
                                 .test_id("nav-settings")
+                                .selected(move || store::active_tab() == AppTab::Settings)
                                 .accessibility_label("Settings")
                                 .w(px(MOBILE_MIN_TOUCH_TARGET))
                                 .h(px(MOBILE_MIN_TOUCH_TARGET))
+                                .flex_col()
                                 .items_center()
                                 .justify_center()
+                                .gap_0p5()
                                 .rounded_full()
+                                .style_when(
+                                    move || store::active_tab() == AppTab::Settings,
+                                    |s| s.bg(sidebar_active_surface),
+                                )
                                 .hover(|s| s.bg(pill_glass_hover))
                                 .focus_visible(|s| {
                                     s.outline(px(2.0)).outline_color(move || theme().ring)
@@ -1676,6 +1735,9 @@ fn mobile_top_header() -> impl IntoElement {
                                     } else {
                                         theme().foreground
                                     }
+                                }))
+                                .child(active_state_dot(move || {
+                                    store::active_tab() == AppTab::Settings
                                 })),
                         ),
                 )

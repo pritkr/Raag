@@ -9,7 +9,7 @@ use nsh_core::prelude::*;
 use nsh_core::shader::{Shader, UniformValue};
 
 use crate::store;
-use crate::ui::icons::{IconKind, icon};
+use crate::ui::icons::IconKind;
 use crate::ui::tokens::{
     ambient_backdrop_color, ambient_shader_palette_triple, color_player_accent, motion,
 };
@@ -249,54 +249,48 @@ pub fn live_equalizer_indicator(
         )
 }
 
-/// Cross-fading and gently scaling Play <-> Pause icon swap (240ms ease-out, reduced-motion gated).
+/// Tactile scaling Play <-> Pause icon swap (240ms ease-out, reduced-motion gated).
 pub fn animated_play_pause_icon(
     is_playing: impl Fn() -> bool + 'static,
     size_px: f32,
     color_fn: impl Fn() -> AdaptiveColor + Copy + 'static,
 ) -> impl IntoElement {
-    let progress = animated_value(if is_playing() { 1.0 } else { 0.0 });
-    let progress_effect = progress.clone();
+    let is_playing = std::rc::Rc::new(is_playing);
+    let scale = animated_value(1.0);
+    let was_playing = signal(is_playing());
+    let scale_effect = scale.clone();
+    let is_playing_effect = is_playing.clone();
     effect(move || {
-        let target = if is_playing() { 1.0 } else { 0.0 };
-        if store::reduced_motion() {
-            progress_effect.set(target);
-        } else {
-            progress_effect.timing(target, motion::SWAP_MS, Easing::EaseOut);
+        let now = is_playing_effect();
+        let prev = was_playing.get_untracked();
+        if now != prev {
+            was_playing.set(now);
+            if !store::reduced_motion() {
+                scale_effect.set(0.82);
+                scale_effect.timing(1.0, motion::SWAP_MS, Easing::EaseOut);
+            } else {
+                scale_effect.set(1.0);
+            }
         }
     });
 
-    let play_opacity = progress.interpolate(&[0.0, 1.0], &[1.0, 0.0]);
-    let play_scale = progress.interpolate(&[0.0, 1.0], &[1.0, 0.72]);
-    let pause_opacity = progress.interpolate(&[0.0, 1.0], &[0.0, 1.0]);
-    let pause_scale = progress.interpolate(&[0.0, 1.0], &[0.72, 1.0]);
-
     view()
-        .relative()
         .w(px(size_px))
         .h(px(size_px))
         .items_center()
         .justify_center()
-        .child(
-            view()
-                .absolute()
-                .inset_0()
-                .items_center()
-                .justify_center()
-                .bind_opacity(&play_opacity)
-                .bind_scale(&play_scale)
-                .child(icon(IconKind::Play, size_px, color_fn)),
-        )
-        .child(
-            view()
-                .absolute()
-                .inset_0()
-                .items_center()
-                .justify_center()
-                .bind_opacity(&pause_opacity)
-                .bind_scale(&pause_scale)
-                .child(icon(IconKind::Pause, size_px, color_fn)),
-        )
+        .bind_scale(&scale)
+        .child(crate::ui::icons::reactive_icon(
+            move || {
+                if is_playing() {
+                    IconKind::Pause
+                } else {
+                    IconKind::Play
+                }
+            },
+            size_px,
+            color_fn,
+        ))
 }
 
 /// Heart icon with a subtle tactile spring pop when transitioning to Liked (reduced-motion gated).

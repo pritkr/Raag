@@ -14,9 +14,11 @@ use crate::ui::controls::{
     svg_icon_button, track_row_view,
 };
 use crate::ui::icons::{IconKind, icon};
+use crate::ui::text_format::format_recoverable_error;
 use crate::ui::tokens::{
     MOBILE_MIN_TOUCH_TARGET, color_ambient_warm, cover_gradient_pair, genre_card_tint,
-    glass_hairline, is_desktop_layout, pill_glass_hover, pill_glass_surface, radius_card,
+    glass_hairline, is_desktop_layout, is_narrow_viewport, pill_glass_hover, pill_glass_surface,
+    radius_card,
 };
 
 const QUICK_CATEGORIES: [(&str, IconKind); 3] = [
@@ -110,7 +112,13 @@ fn explore_section_header(
         MOBILE_MIN_TOUCH_TARGET
     };
     let sec_prev = section_id.clone();
-    let sec_next = section_id;
+    let sec_next = section_id.clone();
+    let sec_label = section_id;
+    let total_pages = if page_size > 0 {
+        total_items.div_ceil(page_size).max(1)
+    } else {
+        1
+    };
 
     view()
         .flex_row()
@@ -119,6 +127,8 @@ fn explore_section_header(
         .gap_3()
         .child(
             text(title)
+                .flex_1()
+                .min_w(px(0.0))
                 .number_of_lines(1)
                 .when(desktop, |t| t.text_xl())
                 .when(!desktop, |t| t.text_lg())
@@ -130,6 +140,18 @@ fn explore_section_header(
                 .flex_row()
                 .items_center()
                 .gap_1p5()
+                .when(total_pages > 1, move |row| {
+                    let sec_label = sec_label.clone();
+                    row.child(
+                        text(move || {
+                            let cur = (store::section_page(&sec_label) % total_pages) + 1;
+                            SharedString::from(format!("Page {cur} / {total_pages}"))
+                        })
+                        .text_xs()
+                        .tabular_nums()
+                        .text_color(move || theme().muted_foreground),
+                    )
+                })
                 .child(svg_icon_button(
                     IconKind::ChevronLeft,
                     16.0,
@@ -181,6 +203,7 @@ fn new_releases_section(current_id_memo: Memo<Option<String>>, desktop: bool) ->
         let page = store::section_page(SECTION_ID);
         let slice = paginated_slice(&all_releases, page, PAGE_SIZE);
         let active_id = current_id_memo.get();
+        let card_w = if is_narrow_viewport() { 144.0 } else { 168.0 };
 
         view()
             .gap_3()
@@ -212,7 +235,7 @@ fn new_releases_section(current_id_memo: Memo<Option<String>>, desktop: bool) ->
                                     mono,
                                     title,
                                     sub,
-                                    168.0,
+                                    card_w,
                                     is_active,
                                     move || store::play_track(t_open.clone()),
                                     Some(Box::new(move || store::play_next(t_next.clone()))),
@@ -239,7 +262,7 @@ fn new_releases_section(current_id_memo: Memo<Option<String>>, desktop: bool) ->
                                     mono,
                                     title,
                                     subtitle,
-                                    168.0,
+                                    card_w,
                                     false,
                                     move || {
                                         open_explore_collection(
@@ -368,6 +391,7 @@ fn charts_section(current_id_memo: Memo<Option<String>>, desktop: bool) -> impl 
                 let page_size = 8;
                 let page = store::section_page(&sec_key);
                 let slice = paginated_slice(&collections, page, page_size);
+                let card_w = if is_narrow_viewport() { 144.0 } else { 168.0 };
                 rendered.push(
                     view()
                         .gap_3()
@@ -380,7 +404,7 @@ fn charts_section(current_id_memo: Memo<Option<String>>, desktop: bool) -> impl 
                         ))
                         .child(scroll().horizontal().w_full().child(
                             view().flex_row().items_start().gap_4().py_1().children(
-                                slice.into_iter().map(|(id, title, sub, art)| {
+                                slice.into_iter().map(move |(id, title, sub, art)| {
                                     let mono = title
                                         .chars()
                                         .find(|c| c.is_alphanumeric())
@@ -395,7 +419,7 @@ fn charts_section(current_id_memo: Memo<Option<String>>, desktop: bool) -> impl 
                                         mono,
                                         title,
                                         sub,
-                                        168.0,
+                                        card_w,
                                         false,
                                         move || {
                                             open_explore_collection(
@@ -448,6 +472,7 @@ fn moods_and_genres_section(desktop: bool) -> impl IntoElement {
         let playlists = mood_playlists_memo.get();
         let active_mood = store::selected_mood();
 
+        let active_mood_cards = active_mood.clone();
         let mut root = view()
             .gap_3()
             .child(
@@ -469,10 +494,12 @@ fn moods_and_genres_section(desktop: bool) -> impl IntoElement {
                                 let genre_label = genre.clone();
                                 let genre_click = genre.clone();
                                 let params_click = params.clone();
-                                let is_selected = active_mood.as_deref() == Some(genre.as_str());
+                                let is_selected =
+                                    active_mood_cards.as_deref() == Some(genre.as_str());
                                 cells.push(
                                     button()
                                         .accessibility_label(genre_label.clone())
+                                        .selected(move || is_selected)
                                         .flex_1()
                                         .min_w(px(0.0))
                                         .min_h(px(56.0))
@@ -545,9 +572,10 @@ fn moods_and_genres_section(desktop: bool) -> impl IntoElement {
                             )
                             .child(secondary_button("Clear", store::clear_mood_playlists)),
                     )
-                    .child(scroll().horizontal().w_full().child(
+                    .child(scroll().horizontal().w_full().child({
+                        let card_w = if is_narrow_viewport() { 144.0 } else { 168.0 };
                         view().flex_row().items_start().gap_4().py_1().children(
-                            playlists.into_iter().map(|pl| {
+                            playlists.into_iter().map(move |pl| {
                                 let mono = pl
                                     .title
                                     .chars()
@@ -563,7 +591,7 @@ fn moods_and_genres_section(desktop: bool) -> impl IntoElement {
                                     mono,
                                     pl.title,
                                     pl.subtitle,
-                                    168.0,
+                                    card_w,
                                     false,
                                     move || {
                                         open_explore_collection(
@@ -576,8 +604,8 @@ fn moods_and_genres_section(desktop: bool) -> impl IntoElement {
                                     None,
                                 )
                             }),
-                        ),
-                    )),
+                        )
+                    })),
             );
         }
 
@@ -638,6 +666,7 @@ pub fn explore_screen() -> impl IntoElement {
                                     let is_active = active_cat == Some(cat);
                                     button()
                                         .accessibility_label(cat)
+                                        .selected(move || is_active)
                                         .flex_1()
                                         .min_w(px(140.0))
                                         .min_h(px(54.0))
@@ -658,6 +687,9 @@ pub fn explore_screen() -> impl IntoElement {
                                         .border_color(glass_hairline)
                                         .hover(|s| s.bg(pill_glass_hover))
                                         .active(|s| s.opacity(0.8))
+                                        .focus_visible(|s| {
+                                            s.outline(px(2.0)).outline_color(move || theme().ring)
+                                        })
                                         .on_press(move || {
                                             if selected_cat.get_untracked() == Some(cat) {
                                                 selected_cat.set(None);
@@ -703,7 +735,13 @@ pub fn explore_screen() -> impl IntoElement {
                     || {
                         status_card(
                             "Unable to load Explore",
-                            move || SharedString::from(store::explore_error().unwrap_or_default()),
+                            move || {
+                                SharedString::from(format_recoverable_error(
+                                    "Could not load Explore feed",
+                                    &store::explore_error().unwrap_or_default(),
+                                    "Check your internet connection and select Retry.",
+                                ))
+                            },
                             Some("Retry"),
                             Some(Box::new(store::refresh_explore)),
                         )

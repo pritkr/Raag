@@ -563,7 +563,7 @@ mod host {
             loop {
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 let timeout = if got_any {
-                    Duration::from_millis(8)
+                    Duration::from_millis(25)
                 } else {
                     remaining
                 };
@@ -579,8 +579,9 @@ mod host {
 
         fn snapshot(&mut self) -> TreeResponse {
             self.drain_batches(Duration::from_millis(2));
-            let apk_path = Path::new("public/resonance-arm64-debug.apk");
-            let apk_meta = std::fs::metadata(apk_path).ok();
+            let apk_meta = std::fs::metadata(Path::new("public/raag-arm64-debug.apk"))
+                .or_else(|_| std::fs::metadata(Path::new("public/resonance-arm64-debug.apk")))
+                .ok();
             TreeResponse {
                 version: self.scene.version,
                 engine: "Pure Rust NSH 0.7.0 (nsh-engine + nsh-core + nsh-base)",
@@ -617,6 +618,8 @@ mod host {
     struct ConfigReq {
         device: Option<String>,
         scheme: Option<String>,
+        width: Option<f32>,
+        height: Option<f32>,
     }
 
     fn json_response<T: Serialize>(status: StatusCode, body: &T) -> Response<Full<Bytes>> {
@@ -638,21 +641,42 @@ mod host {
             ColorScheme::Dark
         };
         if device == "desktop" {
+            let size = Size::new(Points(1180.0), Points(780.0));
             (
-                Size::new(Points(1180.0), Points(780.0)),
+                size,
                 Environment {
                     color_scheme,
                     os: Os::Linux,
+                    window: size,
                     safe_area: EdgeInsets::default(),
                     ..Environment::default()
                 },
             )
-        } else {
+        } else if device == "compact" {
+            let size = Size::new(Points(320.0), Points(640.0));
             (
-                Size::new(Points(390.0), Points(844.0)),
+                size,
                 Environment {
                     color_scheme,
                     os: Os::Android,
+                    window: size,
+                    safe_area: EdgeInsets {
+                        top: Points(24.0),
+                        right: Points(0.0),
+                        bottom: Points(14.0),
+                        left: Points(0.0),
+                    },
+                    ..Environment::default()
+                },
+            )
+        } else {
+            let size = Size::new(Points(390.0), Points(844.0));
+            (
+                size,
+                Environment {
+                    color_scheme,
+                    os: Os::Android,
+                    window: size,
                     safe_area: EdgeInsets {
                         top: Points(24.0),
                         right: Points(0.0),
@@ -795,7 +819,14 @@ mod host {
                     if let Some(s) = cfg.scheme {
                         st.scene.scheme = s;
                     }
-                    let (size, env) = make_environment(&st.scene.device, &st.scene.scheme);
+                    let (mut size, mut env) = make_environment(&st.scene.device, &st.scene.scheme);
+                    if let Some(w) = cfg.width {
+                        size.width = Points(w.clamp(300.0, 2560.0));
+                    }
+                    if let Some(h) = cfg.height {
+                        size.height = Points(h.clamp(480.0, 1600.0));
+                    }
+                    env.window = size;
                     st.scene.width = size.width.0;
                     st.scene.height = size.height.0;
                     if let Some(root) = st.scene.nodes.get_mut(&ROOT_ID) {
@@ -803,7 +834,7 @@ mod host {
                     }
                     st.control.set_environment(env);
                     st.control.resize(size);
-                    st.drain_batches(Duration::from_millis(100));
+                    st.drain_batches(Duration::from_millis(160));
                     json_response(StatusCode::OK, &st.snapshot())
                 } else {
                     json_response(

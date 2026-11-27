@@ -9,15 +9,17 @@ use nsh_core::element::ImageSrc;
 use nsh_core::prelude::*;
 use resonance_contract::{RepeatMode, format_duration_ms};
 
-use crate::store;
+use crate::store::{self, AppTab};
 use crate::ui::controls::{
-    artwork_box, live_equalizer_indicator, secondary_button, setting_switch, status_card,
+    artwork_box, confirm_destructive, live_equalizer_indicator, secondary_button, setting_switch,
+    status_card,
 };
 use crate::ui::icons::{IconKind, icon, reactive_icon};
+use crate::ui::text_format::pluralize;
 use crate::ui::tokens::{
-    MOBILE_MIN_TOUCH_TARGET, color_player_accent, cover_gradient_pair, eyebrow_label,
-    frosted_bar_surface, frosted_card_surface, glass_hairline, pill_glass_hover,
-    pill_glass_surface, radius_card,
+    MOBILE_MIN_TOUCH_TARGET, color_on_cover, color_player_accent, cover_gradient_pair,
+    eyebrow_label, frosted_bar_surface, frosted_card_surface, glass_hairline, is_narrow_viewport,
+    pill_glass_hover, pill_glass_surface, radius_card,
 };
 
 pub fn queue_screen() -> impl IntoElement {
@@ -42,10 +44,12 @@ pub fn queue_screen() -> impl IntoElement {
                     .justify_between()
                     .child(eyebrow_label("Up Next"))
                     .child(
-                        text(move || SharedString::from(format!("{} tracks", store::queue_len())))
-                            .text_xs()
-                            .tabular_nums()
-                            .text_color(move || theme().muted_foreground),
+                        text(move || {
+                            SharedString::from(pluralize(store::queue_len(), "track", "tracks"))
+                        })
+                        .text_xs()
+                        .tabular_nums()
+                        .text_color(move || theme().muted_foreground),
                     ),
             )
             .child(
@@ -58,6 +62,7 @@ pub fn queue_screen() -> impl IntoElement {
                     view()
                         .flex_row()
                         .items_center()
+                        .style_when(is_narrow_viewport, |s| s.flex_col().items_stretch())
                         .gap_2()
                         .px_3()
                         .py_2()
@@ -165,42 +170,49 @@ pub fn queue_screen() -> impl IntoElement {
                                         ),
                                 ),
                         )
-                        .child(queue_action_button(
-                            IconKind::ArrowUp,
-                            "Move Up",
-                            move || theme().foreground,
-                            move || {
-                                let idx = at.index();
-                                if idx > 0 {
-                                    store::move_queue_item(idx, idx - 1);
-                                }
-                            },
-                        ))
-                        .child(queue_action_button(
-                            IconKind::ArrowDown,
-                            "Move Down",
-                            move || theme().foreground,
-                            move || {
-                                let idx = at.index();
-                                if idx + 1 < store::queue_len() {
-                                    store::move_queue_item(idx, idx + 1);
-                                }
-                            },
-                        ))
-                        .child(queue_action_button(
-                            IconKind::Close,
-                            "Remove from Queue",
-                            move || theme().destructive,
-                            move || store::remove_queue_item(at.index()),
-                        ))
+                        .child(
+                            view()
+                                .flex_row()
+                                .items_center()
+                                .justify_end()
+                                .flex_shrink_0()
+                                .child(queue_action_button(
+                                    IconKind::ArrowUp,
+                                    "Move Up",
+                                    move || theme().foreground,
+                                    move || {
+                                        let idx = at.index();
+                                        if idx > 0 {
+                                            store::move_queue_item(idx, idx - 1);
+                                        }
+                                    },
+                                ))
+                                .child(queue_action_button(
+                                    IconKind::ArrowDown,
+                                    "Move Down",
+                                    move || theme().foreground,
+                                    move || {
+                                        let idx = at.index();
+                                        if idx + 1 < store::queue_len() {
+                                            store::move_queue_item(idx, idx + 1);
+                                        }
+                                    },
+                                ))
+                                .child(queue_action_button(
+                                    IconKind::Close,
+                                    "Remove from Queue",
+                                    move || theme().destructive,
+                                    move || store::remove_queue_item(at.index()),
+                                )),
+                        )
                 })
                 .keys(store::queue_ids)
                 .estimated_item_size(px(64.0))
                 .empty(status_card(
                     "Queue is empty",
                     "Play any song from Home or Search to populate your persistent queue.",
-                    None,
-                    None,
+                    Some("Open Search"),
+                    Some(Box::new(|| store::set_tab(AppTab::Search))),
                 ))
                 .flex_1(),
             ),
@@ -241,7 +253,8 @@ fn queue_header() -> impl IntoElement {
                                 let count = store::queue_len();
                                 let total = format_duration_ms(store::total_queue_duration_ms());
                                 SharedString::from(format!(
-                                    "{count} tracks in queue • {total} total"
+                                    "{} in queue • {total} total",
+                                    pluralize(count, "track", "tracks")
                                 ))
                             })
                             .test_id("queue-summary")
@@ -253,22 +266,32 @@ fn queue_header() -> impl IntoElement {
                 .child(
                     view()
                         .flex_row()
+                        .flex_wrap()
                         .items_center()
                         .gap_2()
                         .child(secondary_button(
                             "Save Queue",
                             store::save_queue_as_playlist,
                         ))
-                        .child(secondary_button("Clear Up Next", store::clear_up_next)),
+                        .child(secondary_button("Clear Up Next", || {
+                            confirm_destructive(
+                                "Clear upcoming tracks?",
+                                "Remove all tracks after the currently playing song from your queue?",
+                                "Clear Up Next",
+                                store::clear_up_next,
+                            );
+                        })),
                 ),
         )
         .child(
             view()
                 .flex_row()
+                .flex_wrap()
                 .items_center()
                 .gap_2()
                 .child(
                     button()
+                        .selected(is_shuffle)
                         .on_press(store::toggle_shuffle)
                         .min_h(px(MOBILE_MIN_TOUCH_TARGET))
                         .px_4()
@@ -311,6 +334,7 @@ fn queue_header() -> impl IntoElement {
                 )
                 .child(
                     button()
+                        .selected(|| store::player_snapshot().queue.repeat != RepeatMode::None)
                         .on_press(store::cycle_repeat)
                         .min_h(px(MOBILE_MIN_TOUCH_TARGET))
                         .px_4()
@@ -500,7 +524,7 @@ fn queue_row_artwork(
                 })
                 .text_sm()
                 .font_weight(FontWeight::BOLD)
-                .text_color(move || theme().primary_foreground)
+                .text_color(color_on_cover)
             }),
         )
         .child(when(is_active, || {

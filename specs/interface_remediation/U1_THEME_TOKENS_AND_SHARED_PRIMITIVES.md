@@ -29,17 +29,17 @@
    - All remaining 19 sites sit genuinely on `theme().primary` fills, so keeping them on `theme().primary_foreground` automatically gives **5.80:1** (Light) and **6.95:1** (Dark)!
 3. **Unused Tokens (`F-14`):**
    - `grep` across `src/`, `crates/`, and `tests/` confirmed **zero consumers** of `chart-1`..`chart-5`. Delete all 10 unused tokens from `theme.json`.
-4. **Hardcoded Surfaces in `src/ui/tokens.rs` (`F-14`, `F-06`):**
-   - `frosted_bar_surface`, `frosted_card_surface`, `pill_glass_surface`, `pill_glass_hover`, `sidebar_active_surface`, `glass_hairline`, and `color_hero_pill_bg/fg` hardcode `rgb(0x...)` instead of deriving from `theme().card`, `theme().foreground`, `theme().background`.
-   - Light-mode `cover_gradient_pair` stops (`#f5a855`, `#48c4a2`, `#4aa6eb`, `#eb6b76`, `#a870eb`, `#6e7ee8`) fail white monogram contrast (`1.98:1`–`3.61:1`). Darkening all 6 light gradient pairs lifts every stop to **`5.63:1`–`11.01:1`** against `#ffffff`!
+4. **12:41 Sync Baseline (`theme.json`, `src/ui/tokens.rs`, `src/ui/controls/primitives.rs`):**
+   - The 12:41 polish pass already migrated `glass-bar`, `glass-card`, `glass-header`, `glass-pill`, `glass-hairline`, `glass-specular`, `overlay-scrim`, `hero-pill`, `hero-pill-foreground`, `cover-1-from`..`cover-6-to`, and `genre-1`..`genre-6` into `theme.json`, added `motion::PRESS_MS`/`SWAP_MS`/`LAYOUT_MS`/`PALETTE_FADE_MS`/`PRESS_SCALE`, `radius_inset()`, `eyebrow_label()`, `ambient_shader_palette_triple()`, and `back_button()`, and added `.focus_visible(...)` + mobile `48dp` targets to existing buttons in `primitives.rs`.
+   - **Remaining gaps resolved in U1:** Preserve ALL 12:41 keys & helpers while: (a) calibrating `primary`/`destructive`/`liked`/`input`/`lyric-inactive`/`sponsor-badge`/`status-ok` + adding `destructive-foreground`, `on-cover`, `radius-inset`, (b) removing unused `chart-1`..`chart-5`, (c) darkening Light `cover-1-from`..`cover-6-from` stops so every cover stop passes `>= 4.5:1` (`5.63:1`–`11.01:1`) against `#ffffff` `on-cover`, (d) adding `focusable_button`, `destructive_button`, `confirm_destructive`, `active_state_dot`, `labeled_input`, `text_format.rs`, and optical stroke-width scaling in `icons.rs`.
 
 ---
 
 ## 2. Exact Implementation Plan
 
-### Step 1: Replace `theme.json` with Mathematically Proven Palette
+### Step 1: Calibrate `theme.json` (Preserving All 12:41 Glass, Cover, Genre & Hero-Pill Tokens)
 
-Replace `theme.json` verbatim with the following calibrated token set (**0 failures** across all 66 WCAG 2.1 pairs and 6 OKLCH hue separations):
+Update `theme.json` with the calibrated Saffron-Copper token set while keeping every 12:41 `glass-*`, `overlay-scrim`, `hero-pill*`, `cover-*-*` (with WCAG AA calibrated light stops), and `genre-*` key (**0 failures** across all 66 WCAG 2.1 pairs and 6 OKLCH hue separations):
 
 ```json
 {

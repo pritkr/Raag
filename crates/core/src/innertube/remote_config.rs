@@ -15,7 +15,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 pub use ed25519_dalek;
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, VerifyingKey};
 use resonance_contract::{CacheStore, CoreError, CoreResult, ProviderError, RemoteConfigStatus};
 use serde::{Deserialize, Serialize};
 use url::Url;

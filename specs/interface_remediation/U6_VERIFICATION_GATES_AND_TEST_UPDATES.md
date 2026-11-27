@@ -19,10 +19,7 @@
 Because Wave 2 upgraded destructive actions to require native `alert_dialog()` confirmation and harmonized casing/punctuation, update these exact lines in existing integration tests:
 
 ### 1.1 `tests/headless_ui.rs`
-- **Line 99 (`AUTOPLAY RADIO`):** If `U3` updated `queue.rs:31` to `"Autoplay Radio"`, update:
-  ```rust
-  app.wait_for("Autoplay Radio")?;
-  ```
+- *(Already synced at 12:41: `:58` presses `"Back"`, `:99` waits for `"Autoplay Radio"`, `:77,97` press `"Open Lyrics"` / `"Up Next Queue"` — all remain GREEN!)*
 - **Lines 112–115 (`Clear Cache` confirmation dialog `F-05`):**
   Insert `app.on_dialog(...)` immediately before `app.press("Clear Cache")?` so the test verifies the new confirmation dialog path (remember `nsh_testing::Headless` defaults to pressing Cancel when `on_dialog` is unset!):
   ```rust
@@ -38,9 +35,9 @@ Because Wave 2 upgraded destructive actions to require native `alert_dialog()` c
   app.press("Clear Cache")?;
   app.wait_for("Audio chunks: 0.0 MB (0 chunks) • Artwork: 0.0 MB • Metadata: 0 rows")?;
   ```
-- *(Note: `tests/headless_ui.rs:58` `app.press("← Back")?` and `:77,97` `app.press("Open Lyrics")?` / `app.press("Up Next Queue")?` remain unchanged and GREEN!)*
 
 ### 1.2 `tests/phase5_polish_and_ergonomics.rs`
+- *(Already synced at 12:41: `:144` presses `"id:shortcuts-help-btn"` and waits for `"Keyboard Shortcuts"` — remains GREEN!)*
 - **Line 80 (`-5s` -> `−5s`):** Update `app.press("-5s")?;` to `app.press("\u{2212}5s")?;` to match `U3`'s typographic minus update in `lyrics.rs`.
 
 ### 1.3 `tests/w2c_auth_local_media_test.rs` & `tests/w2d_listen_together_rooms_test.rs`
