@@ -585,7 +585,11 @@ impl NshAudioBackend {
     }
 
     fn emit_control(&self, cmd: NshAudioControl) {
-        let _ = self.control_tx.send(cmd.clone());
+        // Only buffer into the per-instance observer channel once a caller/test has taken
+        // `control_rx`; otherwise production playback leaks unbounded messages in RAM.
+        if self.control_rx.lock().unwrap().is_none() {
+            let _ = self.control_tx.send(cmd.clone());
+        }
         nsh_audio_bus().send_control(cmd);
     }
 }

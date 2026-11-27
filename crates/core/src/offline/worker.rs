@@ -154,6 +154,13 @@ impl DownloadManager {
     pub async fn enqueue(&self, track: Track) -> CoreResult<DownloadRecord> {
         validate_video_id(&track.id)?;
         let root = self.offline.downloads_root();
+        let mut jobs = self.active_jobs.lock().await;
+
+        if jobs.contains_key(&track.id)
+            && let Some(existing) = self.offline.get_download(&track.id)?
+        {
+            return Ok(existing);
+        }
 
         if let Some(existing) = self.offline.get_download(&track.id)? {
             match existing.status {
@@ -206,7 +213,7 @@ impl DownloadManager {
         self.offline.upsert_download(&record)?;
         self.bus.publish(AppEvent::DownloadUpdated(record.clone()));
 
-        self.spawn_worker(record.clone()).await;
+        self.spawn_worker_locked(&mut jobs, record.clone());
         Ok(record)
     }
 
@@ -248,11 +255,16 @@ impl DownloadManager {
     /// Resumes a paused or failed download from its existing `.part` byte offset.
     pub async fn resume(&self, video_id: &str) -> CoreResult<DownloadRecord> {
         validate_video_id(video_id)?;
+        let mut jobs = self.active_jobs.lock().await;
         let Some(existing) = self.offline.get_download(video_id)? else {
             return Err(CoreError::OfflineStorage(OfflineStorageError::NotFound {
                 video_id: video_id.to_owned(),
             }));
         };
+
+        if jobs.contains_key(video_id) {
+            return Ok(existing);
+        }
 
         if existing.status == DownloadStatus::Completed {
             return Ok(existing);
@@ -288,7 +300,7 @@ impl DownloadManager {
             .unwrap_or_else(|| existing.clone());
         self.bus.publish(AppEvent::DownloadUpdated(updated.clone()));
 
-        self.spawn_worker(updated.clone()).await;
+        self.spawn_worker_locked(&mut jobs, updated.clone());
         Ok(updated)
     }
 
@@ -362,9 +374,12 @@ impl DownloadManager {
         }
     }
 
-    async fn spawn_worker(&self, initial_record: DownloadRecord) {
+    fn spawn_worker_locked(
+        &self,
+        jobs: &mut HashMap<String, JobHandle>,
+        initial_record: DownloadRecord,
+    ) {
         let video_id = initial_record.video_id.clone();
-        let mut jobs = self.active_jobs.lock().await;
         if jobs.contains_key(&video_id) {
             return;
         }
@@ -467,181 +482,226 @@ impl DownloadManager {
             }
         }
 
-        // Persist resolved stream metadata (never StreamInfo.url).
-        record.itag = stream.itag;
-        record.codec = stream.codec;
-        record.mime_type = stream.mime_type.clone();
-        record.total_bytes = stream.content_length;
-        record.status = DownloadStatus::Downloading;
-        record.updated_at_unix_secs = unix_secs();
-        record.error_message = None;
-        let _ = self.offline.upsert_download(&record);
-        self.bus.publish(AppEvent::DownloadUpdated(record.clone()));
-
         let root = self.offline.downloads_root();
-        let Ok(final_name) =
-            final_filename(&video_id, stream.itag, stream.codec, &stream.mime_type)
-        else {
-            self.mark_failed_and_emit(&video_id, DownloadStatus::Failed, Some("invalid video id"));
-            return;
-        };
-        let part_name = part_filename(&final_name);
-        let Ok(final_path) = resolve_confined_path(&root, &final_name) else {
-            self.mark_failed_and_emit(&video_id, DownloadStatus::Failed, Some("invalid path"));
-            return;
-        };
-        let Ok(part_path) = resolve_confined_path(&root, &part_name) else {
-            self.mark_failed_and_emit(&video_id, DownloadStatus::Failed, Some("invalid part path"));
-            return;
-        };
+        let mut final_name;
+        let mut final_path;
+        let mut part_path;
+        let mut total_bytes;
+        let mut offset;
 
-        // 4. Open .part file and align resume offset to CHUNK_SIZE.
-        let mut file = match OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(&part_path)
-        {
-            Ok(f) => f,
-            Err(e) => {
-                let msg = redact_error_message(&e.to_string());
-                self.mark_failed_and_emit(&video_id, DownloadStatus::Failed, Some(&msg));
+        let mut restart_count = 0u8;
+        'download_attempt: loop {
+            // Persist resolved stream metadata (never StreamInfo.url).
+            record.itag = stream.itag;
+            record.codec = stream.codec;
+            record.mime_type = stream.mime_type.clone();
+            record.total_bytes = stream.content_length;
+            record.status = DownloadStatus::Downloading;
+            record.updated_at_unix_secs = unix_secs();
+            record.error_message = None;
+            let _ = self.offline.upsert_download(&record);
+            self.bus.publish(AppEvent::DownloadUpdated(record.clone()));
+
+            let Ok(fname) =
+                final_filename(&video_id, stream.itag, stream.codec, &stream.mime_type)
+            else {
+                self.mark_failed_and_emit(
+                    &video_id,
+                    DownloadStatus::Failed,
+                    Some("invalid video id"),
+                );
                 return;
-            }
-        };
-
-        let mut total_bytes = stream.content_length;
-        let part_len = file.metadata().map(|m| m.len()).unwrap_or(0);
-        let capped_len = if total_bytes > 0 {
-            part_len.min(total_bytes)
-        } else {
-            part_len
-        };
-        let aligned_offset = (capped_len / CHUNK_SIZE) * CHUNK_SIZE;
-        if let Err(e) = file
-            .set_len(aligned_offset)
-            .and_then(|_| file.seek(SeekFrom::Start(aligned_offset)).map(|_| ()))
-        {
-            let msg = redact_error_message(&e.to_string());
-            self.mark_failed_and_emit(&video_id, DownloadStatus::Failed, Some(&msg));
-            return;
-        }
-
-        let mut offset = aligned_offset;
-        let mut chunk_idx = aligned_offset / CHUNK_SIZE;
-        let mut last_reported_bytes = offset;
-        let mut last_report_time = Instant::now();
-
-        // 5. Chunked download loop.
-        while total_bytes == 0 || offset < total_bytes {
-            let mode = *cancel_rx.borrow();
-            if mode != MODE_RUNNING {
-                drop(file);
-                self.handle_abort(&record, mode, Some(&part_path)).await;
+            };
+            final_name = fname;
+            let part_name = part_filename(&final_name);
+            let Ok(fpath) = resolve_confined_path(&root, &final_name) else {
+                self.mark_failed_and_emit(&video_id, DownloadStatus::Failed, Some("invalid path"));
                 return;
-            }
+            };
+            final_path = fpath;
+            let Ok(ppath) = resolve_confined_path(&root, &part_name) else {
+                self.mark_failed_and_emit(
+                    &video_id,
+                    DownloadStatus::Failed,
+                    Some("invalid part path"),
+                );
+                return;
+            };
+            part_path = ppath;
 
-            // Tier 1 ChunkCache reuse (zero network I/O).
-            if let Ok(Some((bytes, chunk_total))) =
-                self.chunks.read_chunk(&video_id, stream.itag, chunk_idx)
+            // 4. Open .part file and align resume offset to CHUNK_SIZE.
+            let mut file = match OpenOptions::new()
+                .create(true)
+                .truncate(restart_count > 0)
+                .read(true)
+                .write(true)
+                .open(&part_path)
             {
-                if total_bytes == 0 && chunk_total > 0 {
-                    total_bytes = chunk_total;
-                }
-                if let Err(e) = file.write_all(&bytes) {
+                Ok(f) => f,
+                Err(e) => {
                     let msg = redact_error_message(&e.to_string());
                     self.mark_failed_and_emit(&video_id, DownloadStatus::Failed, Some(&msg));
                     return;
                 }
-                offset += bytes.len() as u64;
+            };
+
+            total_bytes = stream.content_length;
+            let part_len = file.metadata().map(|m| m.len()).unwrap_or(0);
+            let capped_len = if total_bytes > 0 {
+                part_len.min(total_bytes)
+            } else {
+                part_len
+            };
+            let aligned_offset = (capped_len / CHUNK_SIZE) * CHUNK_SIZE;
+            if let Err(e) = file
+                .set_len(aligned_offset)
+                .and_then(|_| file.seek(SeekFrom::Start(aligned_offset)).map(|_| ()))
+            {
+                let msg = redact_error_message(&e.to_string());
+                self.mark_failed_and_emit(&video_id, DownloadStatus::Failed, Some(&msg));
+                return;
+            }
+
+            offset = aligned_offset;
+            let mut chunk_idx = aligned_offset / CHUNK_SIZE;
+            let mut last_reported_bytes = offset;
+            let mut last_report_time = Instant::now();
+
+            // 5. Chunked download loop.
+            while total_bytes == 0 || offset < total_bytes {
+                let mode = *cancel_rx.borrow();
+                if mode != MODE_RUNNING {
+                    drop(file);
+                    self.handle_abort(&record, mode, Some(&part_path)).await;
+                    return;
+                }
+
+                // Tier 1 ChunkCache reuse (zero network I/O).
+                if let Ok(Some((bytes, chunk_total))) =
+                    self.chunks.read_chunk(&video_id, stream.itag, chunk_idx)
+                {
+                    if total_bytes == 0 && chunk_total > 0 {
+                        total_bytes = chunk_total;
+                    }
+                    if let Err(e) = file.write_all(&bytes) {
+                        let msg = redact_error_message(&e.to_string());
+                        self.mark_failed_and_emit(&video_id, DownloadStatus::Failed, Some(&msg));
+                        return;
+                    }
+                    offset += bytes.len() as u64;
+                    chunk_idx += 1;
+                    record.bytes_downloaded = offset;
+                    record.total_bytes = total_bytes;
+                    self.maybe_report_progress(
+                        &mut record,
+                        &mut last_reported_bytes,
+                        &mut last_report_time,
+                    );
+                    continue;
+                }
+
+                // Upstream Range fetch with 403 re-resolve (max 2) and 429 backoff (max 4).
+                let chunk_bytes = match self
+                    .fetch_chunk_with_recovery(
+                        &video_id,
+                        &mut stream,
+                        chunk_idx,
+                        &mut total_bytes,
+                        &mut cancel_rx,
+                    )
+                    .await
+                {
+                    ChunkFetch::Data(b) => b,
+                    ChunkFetch::StreamChanged(new_stream) => {
+                        drop(file);
+                        let _ = fs::remove_file(&part_path);
+                        if restart_count >= 1 {
+                            self.mark_failed_and_emit(
+                                &video_id,
+                                DownloadStatus::Failed,
+                                Some("stream format changed repeatedly during download"),
+                            );
+                            return;
+                        }
+                        restart_count += 1;
+                        stream = new_stream;
+                        record.bytes_downloaded = 0;
+                        continue 'download_attempt;
+                    }
+                    ChunkFetch::Aborted(mode) => {
+                        drop(file);
+                        self.handle_abort(&record, mode, Some(&part_path)).await;
+                        return;
+                    }
+                    ChunkFetch::Paused(err_msg) => {
+                        let _ = file.flush();
+                        let _ = file.sync_all();
+                        drop(file);
+                        record.bytes_downloaded = offset;
+                        record.total_bytes = total_bytes;
+                        let _ = self.offline.update_download_progress(
+                            &video_id,
+                            DownloadStatus::Paused,
+                            offset,
+                            total_bytes,
+                            unix_secs(),
+                        );
+                        self.mark_failed_and_emit(
+                            &video_id,
+                            DownloadStatus::Paused,
+                            Some(&err_msg),
+                        );
+                        return;
+                    }
+                    ChunkFetch::Failed(err_msg) => {
+                        drop(file);
+                        self.mark_failed_and_emit(
+                            &video_id,
+                            DownloadStatus::Failed,
+                            Some(&err_msg),
+                        );
+                        return;
+                    }
+                };
+
+                if chunk_bytes.is_empty() {
+                    if total_bytes == 0 {
+                        total_bytes = offset;
+                    }
+                    break;
+                }
+
+                if let Err(e) = file.write_all(&chunk_bytes) {
+                    let msg = redact_error_message(&e.to_string());
+                    self.mark_failed_and_emit(&video_id, DownloadStatus::Failed, Some(&msg));
+                    return;
+                }
+                offset += chunk_bytes.len() as u64;
                 chunk_idx += 1;
                 record.bytes_downloaded = offset;
                 record.total_bytes = total_bytes;
+
+                if total_bytes == 0 && (chunk_bytes.len() as u64) < CHUNK_SIZE {
+                    total_bytes = offset;
+                    record.total_bytes = total_bytes;
+                }
+
                 self.maybe_report_progress(
                     &mut record,
                     &mut last_reported_bytes,
                     &mut last_report_time,
                 );
-                continue;
             }
 
-            // Upstream Range fetch with 403 re-resolve (max 2) and 429 backoff (max 4).
-            let chunk_bytes = match self
-                .fetch_chunk_with_recovery(
-                    &video_id,
-                    &mut stream,
-                    chunk_idx,
-                    &mut total_bytes,
-                    &mut cancel_rx,
-                )
-                .await
-            {
-                ChunkFetch::Data(b) => b,
-                ChunkFetch::Aborted(mode) => {
-                    drop(file);
-                    self.handle_abort(&record, mode, Some(&part_path)).await;
-                    return;
-                }
-                ChunkFetch::Paused(err_msg) => {
-                    let _ = file.flush();
-                    let _ = file.sync_all();
-                    drop(file);
-                    record.bytes_downloaded = offset;
-                    record.total_bytes = total_bytes;
-                    let _ = self.offline.update_download_progress(
-                        &video_id,
-                        DownloadStatus::Paused,
-                        offset,
-                        total_bytes,
-                        unix_secs(),
-                    );
-                    self.mark_failed_and_emit(&video_id, DownloadStatus::Paused, Some(&err_msg));
-                    return;
-                }
-                ChunkFetch::Failed(err_msg) => {
-                    drop(file);
-                    self.mark_failed_and_emit(&video_id, DownloadStatus::Failed, Some(&err_msg));
-                    return;
-                }
-            };
-
-            if chunk_bytes.is_empty() {
-                if total_bytes == 0 {
-                    total_bytes = offset;
-                }
-                break;
-            }
-
-            if let Err(e) = file.write_all(&chunk_bytes) {
+            // 6. Flush + sync_all and close .part handle.
+            if let Err(e) = file.flush().and_then(|_| file.sync_all()) {
                 let msg = redact_error_message(&e.to_string());
                 self.mark_failed_and_emit(&video_id, DownloadStatus::Failed, Some(&msg));
                 return;
             }
-            offset += chunk_bytes.len() as u64;
-            chunk_idx += 1;
-            record.bytes_downloaded = offset;
-            record.total_bytes = total_bytes;
-
-            if total_bytes == 0 && (chunk_bytes.len() as u64) < CHUNK_SIZE {
-                total_bytes = offset;
-                record.total_bytes = total_bytes;
-            }
-
-            self.maybe_report_progress(
-                &mut record,
-                &mut last_reported_bytes,
-                &mut last_report_time,
-            );
+            drop(file);
+            break;
         }
-
-        // 6. Flush + sync_all and close .part handle.
-        if let Err(e) = file.flush().and_then(|_| file.sync_all()) {
-            let msg = redact_error_message(&e.to_string());
-            self.mark_failed_and_emit(&video_id, DownloadStatus::Failed, Some(&msg));
-            return;
-        }
-        drop(file);
 
         // 7. Transition to Tagging.
         let now = unix_secs();
@@ -807,6 +867,13 @@ impl DownloadManager {
                     };
                     match fresh {
                         Ok(s) => {
+                            if s.itag != stream.itag
+                                || (*total_bytes > 0
+                                    && s.content_length > 0
+                                    && s.content_length != *total_bytes)
+                            {
+                                return ChunkFetch::StreamChanged(s);
+                            }
                             *stream = s;
                             continue;
                         }
@@ -962,6 +1029,7 @@ impl DownloadManager {
 
 enum ChunkFetch {
     Data(Vec<u8>),
+    StreamChanged(StreamInfo),
     Aborted(u8),
     Paused(String),
     Failed(String),

@@ -123,6 +123,8 @@ pub struct CatalogSlice {
     pub search_continuation: Option<String>,
     pub search_plays: HashMap<String, String>,
     pub search_generation: u64,
+    pub collection_generation: u64,
+    pub mood_generation: u64,
     pub search_loading: bool,
     pub search_error: Option<String>,
     pub selected_collection: Option<Playlist>,
@@ -176,6 +178,8 @@ impl CatalogSlice {
             search_continuation: None,
             search_plays: HashMap::new(),
             search_generation: 0,
+            collection_generation: 0,
+            mood_generation: 0,
             search_loading: false,
             search_error: None,
             selected_collection: None,
@@ -225,6 +229,18 @@ impl CatalogSlice {
         mood: Option<String>,
         res: Result<Vec<LibraryCollectionRef>, String>,
     ) {
+        self.apply_mood_playlists_gen(self.mood_generation, mood, res);
+    }
+
+    pub fn apply_mood_playlists_gen(
+        &mut self,
+        generation: u64,
+        mood: Option<String>,
+        res: Result<Vec<LibraryCollectionRef>, String>,
+    ) {
+        if self.mood_generation != generation {
+            return;
+        }
         self.selected_mood = mood;
         if let Ok(playlists) = res {
             self.mood_playlists = playlists;
@@ -267,7 +283,17 @@ impl CatalogSlice {
         result: Result<SearchResults, String>,
         plays: HashMap<String, String>,
     ) {
-        if self.search_query != query {
+        self.apply_search_loaded_gen(self.search_generation, query, result, plays);
+    }
+
+    pub fn apply_search_loaded_gen(
+        &mut self,
+        generation: u64,
+        query: &str,
+        result: Result<SearchResults, String>,
+        plays: HashMap<String, String>,
+    ) {
+        if self.search_generation != generation || self.search_query != query {
             return;
         }
         self.search_loading = false;
@@ -288,7 +314,16 @@ impl CatalogSlice {
     }
 
     pub fn append_search_page(&mut self, query: &str, result: Result<SearchResults, String>) {
-        if self.search_query != query {
+        self.append_search_page_gen(self.search_generation, query, result);
+    }
+
+    pub fn append_search_page_gen(
+        &mut self,
+        generation: u64,
+        query: &str,
+        result: Result<SearchResults, String>,
+    ) {
+        if self.search_generation != generation || self.search_query != query {
             return;
         }
         self.search_loading = false;
@@ -419,6 +454,7 @@ impl CatalogSlice {
         subtitle: String,
         artwork_url: Option<String>,
     ) {
+        self.collection_generation = self.collection_generation.wrapping_add(1);
         self.collection_search_query.clear();
         self.collection_sort_asc = false;
         self.selected_collection = Some(Playlist {
@@ -434,7 +470,16 @@ impl CatalogSlice {
         });
     }
 
+    pub fn apply_collection_loaded_gen(&mut self, generation: u64, playlist: Playlist) -> bool {
+        if self.collection_generation != generation || self.selected_collection.is_none() {
+            return false;
+        }
+        self.selected_collection = Some(playlist);
+        true
+    }
+
     pub fn close_collection(&mut self) {
+        self.collection_generation = self.collection_generation.wrapping_add(1);
         self.selected_collection = None;
         self.collection_search_query.clear();
     }

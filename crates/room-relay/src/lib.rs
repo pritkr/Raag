@@ -72,7 +72,7 @@ fn gen_peer_id() -> String {
 struct RoomState {
     room_code: String,
     host_peer_id: String,
-    host_secret: String,
+    host_secret: Option<String>,
     queue_permission: QueuePermission,
     participants: Vec<RoomParticipant>,
     playback: AuthoritativePlaybackState,
@@ -118,6 +118,16 @@ impl RoomState {
         let _ = self.tx.send(self.snapshot_msg());
     }
 
+    fn is_authorized_host(&self, peer_id: &str, provided_secret: Option<&str>) -> bool {
+        if peer_id != self.host_peer_id {
+            return false;
+        }
+        match self.host_secret.as_deref() {
+            Some(expected) => provided_secret == Some(expected),
+            None => provided_secret.is_none(),
+        }
+    }
+
     fn promote_oldest_guest(&mut self) -> bool {
         if let Some(next_host) = self
             .participants
@@ -134,6 +144,8 @@ impl RoomState {
                 };
             }
             self.host_peer_id = new_host_id;
+            // Revoke the departed host's secret so the promoted guest is not locked out.
+            self.host_secret = None;
             self.host_disconnected_at = None;
             self.playback.revision = self.playback.revision.saturating_add(1);
             self.broadcast_snapshot();
@@ -331,7 +343,7 @@ async fn handle_http(
         let room = RoomState {
             room_code: room_code.clone(),
             host_peer_id: host_peer_id.clone(),
-            host_secret: host_secret.clone(),
+            host_secret: Some(host_secret.clone()),
             queue_permission: parsed.queue_permission,
             participants: vec![RoomParticipant {
                 peer_id: host_peer_id.clone(),
@@ -558,7 +570,7 @@ async fn handle_http(
             };
             let secret = parsed.host_secret.as_deref().or(header_secret.as_deref());
             let mut room = room_arc.write().await;
-            if parsed.peer_id != room.host_peer_id || secret != Some(room.host_secret.as_str()) {
+            if !room.is_authorized_host(&parsed.peer_id, secret) {
                 return Ok(text_resp(StatusCode::FORBIDDEN, "host auth required"));
             }
             if parsed.target_peer_id != room.host_peer_id {
@@ -662,7 +674,7 @@ fn apply_room_message(
             }))
         }
         RoomWireMessage::HostSyncState { mut playback } => {
-            if peer_id != room.host_peer_id || host_secret != Some(room.host_secret.as_str()) {
+            if !room.is_authorized_host(peer_id, host_secret) {
                 return Err((StatusCode::FORBIDDEN, "host auth required"));
             }
             if playback
@@ -686,15 +698,17 @@ fn apply_room_message(
             Ok(None)
         }
         RoomWireMessage::TransferHost { new_host_peer_id } => {
-            if peer_id != room.host_peer_id || host_secret != Some(room.host_secret.as_str()) {
+            if !room.is_authorized_host(peer_id, host_secret) {
                 return Err((StatusCode::FORBIDDEN, "host auth required"));
             }
-            if room
-                .participants
-                .iter()
-                .any(|p| p.peer_id == new_host_peer_id)
+            if new_host_peer_id != room.host_peer_id
+                && room
+                    .participants
+                    .iter()
+                    .any(|p| p.peer_id == new_host_peer_id)
             {
                 room.host_peer_id = new_host_peer_id;
+                room.host_secret = None;
                 for p in &mut room.participants {
                     p.role = if p.peer_id == room.host_peer_id {
                         RoomRole::Host

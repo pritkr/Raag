@@ -1,11 +1,12 @@
 //! Typed [`EngineCommand`] dispatch handlers executed on [`AppEngine`]'s Tokio runtime.
 
 use std::collections::HashMap;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use resonance_contract::{
-    AuthSession, CacheStore, CatalogExtProvider, LIBRARY_SNAPSHOT_METADATA_KEY, LibrarySnapshot,
-    MusicProvider, MutationCommand,
+    AppEvent, AuthSession, CacheStore, CatalogExtProvider, LIBRARY_SNAPSHOT_METADATA_KEY,
+    LibrarySnapshot, MusicProvider, MutationCommand,
 };
 use resonance_core::innertube::auth::redact_secrets;
 use resonance_core::playback::PlaybackController;
@@ -42,7 +43,10 @@ impl AppEngine {
             | EngineCommand::SetVolume(_)
             | EngineCommand::SetShuffle(_)
             | EngineCommand::SetRepeatMode(_)
-            | EngineCommand::SetAutoplayRadio(_) => self.dispatch_playback(cmd),
+            | EngineCommand::SetAutoplayRadio(_)
+            | EngineCommand::SetSponsorBlock(_)
+            | EngineCommand::SetSleepTimer(_)
+            | EngineCommand::SetPlaybackSpeed { .. } => self.dispatch_playback(cmd),
 
             // Auth, Config, Cache, Settings & Optimistic Mutations
             EngineCommand::SignIn(_)
@@ -50,6 +54,7 @@ impl AppEngine {
             | EngineCommand::RefreshRemoteConfig
             | EngineCommand::ClearCaches
             | EngineCommand::PersistSettings { .. }
+            | EngineCommand::SetAtrSync(_)
             | EngineCommand::SetLike { .. }
             | EngineCommand::EditPlaylist { .. }
             | EngineCommand::ReportAtr(_) => self.dispatch_account_and_system(cmd),
@@ -83,20 +88,33 @@ impl AppEngine {
                     let _ = tx.send(LiveUpdate::ExplorePageLoaded(res));
                 });
             }
-            EngineCommand::LoadMoodPlaylists { mood, params } => {
+            EngineCommand::LoadMoodPlaylists {
+                generation,
+                mood,
+                params,
+            } => {
                 self.rt.spawn(async move {
                     let res = provider
                         .mood_playlists(&params)
                         .await
                         .map_err(|e| e.to_string());
-                    let _ = tx.send(LiveUpdate::MoodPlaylistsLoaded { mood, result: res });
+                    let _ = tx.send(LiveUpdate::MoodPlaylistsLoaded {
+                        generation,
+                        mood,
+                        result: res,
+                    });
                 });
             }
-            EngineCommand::Search { query, params } => {
+            EngineCommand::Search {
+                generation,
+                query,
+                params,
+            } => {
                 self.rt.spawn(async move {
                     match provider.search_with_params_and_plays(&query, params).await {
                         Ok((res, plays)) => {
                             let _ = tx.send(LiveUpdate::SearchLoaded {
+                                generation,
                                 query,
                                 result: Ok(res),
                                 plays,
@@ -104,6 +122,7 @@ impl AppEngine {
                         }
                         Err(e) => {
                             let _ = tx.send(LiveUpdate::SearchLoaded {
+                                generation,
                                 query,
                                 result: Err(e.to_string()),
                                 plays: HashMap::new(),
@@ -126,6 +145,7 @@ impl AppEngine {
                 });
             }
             EngineCommand::SearchContinuation {
+                generation,
                 query,
                 category,
                 continuation,
@@ -135,16 +155,26 @@ impl AppEngine {
                         .search_categorized(&query, category, Some(&continuation))
                         .await
                         .map_err(|e| e.to_string());
-                    let _ = tx.send(LiveUpdate::SearchContinuationLoaded { query, result: res });
+                    let _ = tx.send(LiveUpdate::SearchContinuationLoaded {
+                        generation,
+                        query,
+                        result: res,
+                    });
                 });
             }
-            EngineCommand::BrowseCollection { browse_id } => {
+            EngineCommand::BrowseCollection {
+                generation,
+                browse_id,
+            } => {
                 self.rt.spawn(async move {
                     let res = provider
                         .browse_collection(&browse_id)
                         .await
                         .map_err(|e| e.to_string());
-                    let _ = tx.send(LiveUpdate::CollectionLoaded(res));
+                    let _ = tx.send(LiveUpdate::CollectionLoaded {
+                        generation,
+                        result: res,
+                    });
                 });
             }
             _ => unreachable!("non-catalog command routed to dispatch_catalog"),
@@ -288,6 +318,36 @@ impl AppEngine {
                     controller.set_autoplay_radio(enabled).await;
                 });
             }
+            EngineCommand::SetSponsorBlock(enabled) => {
+                self.rt.spawn(async move {
+                    controller.set_sponsorblock_enabled(enabled).await;
+                });
+            }
+            EngineCommand::SetSleepTimer(state) => {
+                self.rt.spawn(async move {
+                    controller.set_sleep_timer(state).await;
+                });
+            }
+            EngineCommand::SetPlaybackSpeed {
+                speed,
+                preserve_pitch,
+            } => {
+                let clamped = speed.clamp(0.25, 3.0);
+                #[cfg(not(target_os = "android"))]
+                {
+                    let _ = preserve_pitch;
+                    crate::platform::nsh_audio::nsh_audio_bus().send_control(
+                        crate::platform::nsh_audio::NshAudioControl::SetPlaybackSpeed(clamped),
+                    );
+                }
+                #[cfg(target_os = "android")]
+                {
+                    let bridge = self.android_bridge.clone();
+                    self.rt.spawn(async move {
+                        let _ = bridge.set_playback_speed(clamped, preserve_pitch).await;
+                    });
+                }
+            }
             _ => unreachable!("non-playback command routed to dispatch_playback"),
         }
     }
@@ -297,6 +357,9 @@ impl AppEngine {
             EngineCommand::SignIn(cookie_header) => {
                 let provider = self.provider.clone();
                 let tx = self.tx.clone();
+                let bus = self.bus.clone();
+                let auth_gen = self.auth_generation.clone();
+                let my_gen = auth_gen.fetch_add(1, Ordering::SeqCst) + 1;
                 self.rt.spawn(async move {
                     let session = AuthSession {
                         cookie_header,
@@ -308,9 +371,26 @@ impl AppEngine {
                     };
                     match provider.sync_session(Some(&session)).await {
                         Ok(()) => {
+                            if auth_gen.load(Ordering::SeqCst) != my_gen {
+                                return;
+                            }
+                            let mut probed_name = None;
                             if let Ok(Some(profile)) = provider.probe_account_profile().await {
+                                if auth_gen.load(Ordering::SeqCst) != my_gen {
+                                    return;
+                                }
+                                if !profile.account_name.is_empty() {
+                                    probed_name = Some(profile.account_name.clone());
+                                }
                                 let _ = tx.send(LiveUpdate::AccountProfileUpdated(Some(profile)));
                             }
+                            if auth_gen.load(Ordering::SeqCst) != my_gen {
+                                return;
+                            }
+                            bus.publish(AppEvent::AuthStateChanged {
+                                signed_in: true,
+                                account_name: probed_name,
+                            });
                             let status = platform_auth_status(provider.current_session().as_ref());
                             let _ = tx.send(LiveUpdate::AuthStatus(status));
                             let _ = tx.send(LiveUpdate::AuthUpdated {
@@ -318,12 +398,16 @@ impl AppEngine {
                                 banner: "Signed in securely (stored in OS Keystore)".into(),
                             });
                             let snap = provider.refresh_and_cache_library_snapshot().await;
-                            let _ = tx.send(LiveUpdate::LibraryLoaded(snap));
+                            if auth_gen.load(Ordering::SeqCst) == my_gen {
+                                let _ = tx.send(LiveUpdate::LibraryLoaded(snap));
+                            }
                         }
                         Err(e) => {
-                            let _ = tx.send(LiveUpdate::StatusBanner(redact_secrets(&format!(
-                                "Sign-in failed: {e}"
-                            ))));
+                            if auth_gen.load(Ordering::SeqCst) == my_gen {
+                                let _ = tx.send(LiveUpdate::StatusBanner(redact_secrets(&format!(
+                                    "Sign-in failed: {e}"
+                                ))));
+                            }
                         }
                     }
                 });
@@ -332,9 +416,21 @@ impl AppEngine {
                 let provider = self.provider.clone();
                 let cache = self.cache.clone();
                 let tx = self.tx.clone();
+                let bus = self.bus.clone();
+                let auth_gen = self.auth_generation.clone();
+                let explicit_sign_out_pending = self.explicit_sign_out_pending.clone();
+                let my_gen = auth_gen.fetch_add(1, Ordering::SeqCst) + 1;
                 self.rt.spawn(async move {
                     let _ = provider.sync_session(None).await;
+                    if auth_gen.load(Ordering::SeqCst) != my_gen {
+                        return;
+                    }
                     let _ = cache.evict_metadata(LIBRARY_SNAPSHOT_METADATA_KEY);
+                    explicit_sign_out_pending.fetch_add(1, Ordering::SeqCst);
+                    bus.publish(AppEvent::AuthStateChanged {
+                        signed_in: false,
+                        account_name: None,
+                    });
                     let status = platform_auth_status(provider.current_session().as_ref());
                     let _ = tx.send(LiveUpdate::AccountProfileUpdated(None));
                     let _ = tx.send(LiveUpdate::AuthStatus(status));
@@ -373,6 +469,9 @@ impl AppEngine {
                 immediate,
             } => {
                 let _ = self.settings_tx.send((settings, immediate));
+            }
+            EngineCommand::SetAtrSync(enabled) => {
+                self.atr_enabled.store(enabled, Ordering::SeqCst);
             }
             EngineCommand::SetLike { video_id, action } => {
                 self.enqueue_mutation(MutationCommand::SetLike { video_id, action });

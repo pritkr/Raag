@@ -3,76 +3,15 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { Download, Monitor, Moon, RefreshCw, Smartphone, Sun } from 'lucide-react';
-
-interface NshBorderSide {
-  width: number;
-  color: string | null;
-}
-
-interface NshSpan {
-  text: string;
-  color: string | null;
-  fontSize: number;
-  fontWeight: number;
-  italic: boolean;
-  tabularNums: boolean;
-  lineHeight: number;
-}
-
-interface NshNode {
-  id: number;
-  kind: 'view' | 'text' | 'scroll' | 'input' | 'image';
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  bg: string | null;
-  radii: [number, number, number, number];
-  borders: [NshBorderSide, NshBorderSide, NshBorderSide, NshBorderSide];
-  opacity: number;
-  backdropBlurPx: number;
-  overflowHidden: boolean;
-  text: string | null;
-  spans: NshSpan[];
-  textAlign: 'left' | 'center' | 'right' | 'justify';
-  maxLines: number;
-  contentX: number;
-  contentY: number;
-  contentW: number;
-  contentH: number;
-  imageUri: string | null;
-  pressable: boolean;
-  scrollable: boolean;
-  scrollHorizontal: boolean;
-  scrollContentW: number;
-  scrollContentH: number;
-  scrollX: number;
-  scrollY: number;
-  isInput: boolean;
-  inputValue: string;
-  inputPlaceholder: string;
-  inputColor: string | null;
-  inputPlaceholderColor: string | null;
-  inputFontSize: number;
-  testId: string | null;
-  a11yLabel: string | null;
-  pointerNone: boolean;
-  children: NshNode[];
-}
-
-interface NshTreeResponse {
-  version: number;
-  engine: string;
-  device: 'android' | 'desktop';
-  scheme: 'dark' | 'light';
-  width: number;
-  height: number;
-  apkAvailable: boolean;
-  apkSizeBytes: number;
-  root: NshNode | null;
-}
+import {
+  INITIAL_PREVIEW_STATE,
+  previewReducer,
+  type NshBorderSide,
+  type NshNode,
+  type NshTreeResponse,
+} from './previewState';
 
 function borderCss(side: NshBorderSide): string | undefined {
   if (side.width > 0 && side.color) {
@@ -116,6 +55,14 @@ function NshNodeView({
   useEffect(() => {
     setDraft(node.inputValue);
   }, [node.inputValue]);
+
+  useEffect(() => {
+    return () => {
+      if (scrollTimer.current !== null) {
+        window.clearTimeout(scrollTimer.current);
+      }
+    };
+  }, []);
 
   const baseStyle: React.CSSProperties = {
     position: isRoot ? 'relative' : 'absolute',
@@ -359,11 +306,12 @@ function NshNodeView({
 }
 
 export default function App() {
-  const [tree, setTree] = useState<NshTreeResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [preview, dispatch] = useReducer(previewReducer, INITIAL_PREVIEW_STATE);
+  const reqSeqRef = useRef(0);
 
   const fetchTree = useCallback(async () => {
+    const seq = ++reqSeqRef.current;
+    dispatch({ type: 'request_started' });
     try {
       const res = await fetch('/api/nsh/tree');
       if (!res.ok) {
@@ -371,10 +319,13 @@ export default function App() {
         throw new Error(msg || `HTTP ${res.status}`);
       }
       const data: NshTreeResponse = await res.json();
-      setTree(data);
-      setError(null);
+      dispatch({ type: 'tree_received', seq, tree: data });
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      dispatch({
+        type: 'request_failed',
+        seq,
+        message: e instanceof Error ? e.message : String(e),
+      });
     }
   }, []);
 
@@ -383,16 +334,17 @@ export default function App() {
   }, [fetchTree]);
 
   useEffect(() => {
-    if (!error || tree) return;
+    if (preview.status !== 'error') return;
     const timer = window.setTimeout(() => {
       void fetchTree();
     }, 2000);
     return () => window.clearTimeout(timer);
-  }, [error, tree, fetchTree]);
+  }, [preview.status, preview.error, fetchTree]);
 
   const sendAction = useCallback(
     async (endpoint: string, payload: Record<string, unknown>) => {
-      setBusy(true);
+      const seq = ++reqSeqRef.current;
+      dispatch({ type: 'request_started' });
       try {
         const res = await fetch(endpoint, {
           method: 'POST',
@@ -401,16 +353,20 @@ export default function App() {
         });
         if (res.ok) {
           const data: NshTreeResponse = await res.json();
-          setTree(data);
-          setError(null);
+          dispatch({ type: 'tree_received', seq, tree: data });
+        } else {
+          dispatch({ type: 'request_settled' });
         }
-      } finally {
-        setBusy(false);
+      } catch {
+        dispatch({ type: 'request_settled' });
       }
     },
     [],
   );
 
+  const tree = preview.tree;
+  const error = preview.error;
+  const busy = preview.inFlightCount > 0;
   const device = tree?.device ?? 'android';
   const scheme = tree?.scheme ?? 'dark';
   const apkMb = tree?.apkSizeBytes

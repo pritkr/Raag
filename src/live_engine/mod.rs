@@ -16,14 +16,16 @@ mod boot;
 mod commands;
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, OnceLock};
 
 use crossbeam_channel::{Receiver, Sender};
 use resonance_contract::{
-    AccountProfile, AuthBackendStatus, CacheStats, DownloadRecord, ExplorePage, HomeSection,
-    LibraryCollectionRef, LibrarySnapshot, LikeAction, LyricsDocument, MutationCommand,
-    PlayerSnapshot, Playlist, PlaylistEditOp, PoTokenDiagnostics, RemoteConfigStatus, RepeatMode,
-    SearchCategory, SearchResults, SettingsV1, Track, TrackId, WatchtimeReport,
+    AccountProfile, AuthBackendStatus, CacheStats, DownloadRecord, EventBus, ExplorePage,
+    HomeSection, LibraryCollectionRef, LibrarySnapshot, LikeAction, LyricsDocument,
+    MutationCommand, MutationReceipt, PlayerSnapshot, Playlist, PlaylistEditOp, PoTokenDiagnostics,
+    RemoteConfigStatus, RepeatMode, SearchCategory, SearchResults, SettingsV1, SleepTimerState,
+    Track, TrackId, WatchtimeReport,
 };
 pub use resonance_core::cache::{
     load_cached_library_snapshot, load_persisted_settings, save_persisted_settings,
@@ -44,10 +46,12 @@ pub enum EngineCommand {
     LoadHome,
     LoadExplore,
     LoadMoodPlaylists {
+        generation: u64,
         mood: String,
         params: String,
     },
     Search {
+        generation: u64,
         query: String,
         params: Option<&'static str>,
     },
@@ -55,11 +59,13 @@ pub enum EngineCommand {
         prefix: String,
     },
     SearchContinuation {
+        generation: u64,
         query: String,
         category: SearchCategory,
         continuation: String,
     },
     BrowseCollection {
+        generation: u64,
         browse_id: String,
     },
 
@@ -87,6 +93,12 @@ pub enum EngineCommand {
     SetShuffle(bool),
     SetRepeatMode(RepeatMode),
     SetAutoplayRadio(bool),
+    SetSponsorBlock(bool),
+    SetSleepTimer(SleepTimerState),
+    SetPlaybackSpeed {
+        speed: f32,
+        preserve_pitch: bool,
+    },
 
     // Auth, Config, Cache & Settings
     SignIn(String),
@@ -97,6 +109,7 @@ pub enum EngineCommand {
         settings: SettingsV1,
         immediate: bool,
     },
+    SetAtrSync(bool),
 
     // Optimistic Mutations
     SetLike {
@@ -136,13 +149,14 @@ pub enum LiveUpdate {
         signed_in: bool,
     },
     HomeLoaded(Result<Vec<HomeSection>, String>),
-    ExploreLoaded(Result<Vec<HomeSection>, String>),
     ExplorePageLoaded(Result<ExplorePage, String>),
     MoodPlaylistsLoaded {
+        generation: u64,
         mood: String,
         result: Result<Vec<LibraryCollectionRef>, String>,
     },
     SearchLoaded {
+        generation: u64,
         query: String,
         result: Result<SearchResults, String>,
         plays: HashMap<String, String>,
@@ -152,12 +166,19 @@ pub enum LiveUpdate {
         suggestions: Vec<String>,
     },
     SearchContinuationLoaded {
+        generation: u64,
         query: String,
         result: Result<SearchResults, String>,
     },
-    CollectionLoaded(Result<Playlist, String>),
+    CollectionLoaded {
+        generation: u64,
+        result: Result<Playlist, String>,
+    },
     PlaybackUpdated(PlayerSnapshot),
-    LyricsLoaded(Option<LyricsDocument>),
+    LyricsLoaded {
+        video_id: TrackId,
+        lyrics: Option<LyricsDocument>,
+    },
     CacheStatsUpdated(CacheStats),
     AuthUpdated {
         signed_in: bool,
@@ -167,6 +188,7 @@ pub enum LiveUpdate {
     AccountProfileUpdated(Option<AccountProfile>),
     RemoteConfigUpdated(RemoteConfigStatus),
     PoTokenDiagnostics(PoTokenDiagnostics),
+    MutationCompleted(MutationReceipt),
     MutationFailed {
         command: MutationCommand,
         reason: String,
@@ -190,7 +212,13 @@ pub struct AppEngine {
     pub(super) chunks: Arc<ChunkCache>,
     pub(super) vault: Arc<OfflineVault>,
     pub(super) controller: Arc<PlaybackController>,
+    #[cfg(target_os = "android")]
+    pub(super) android_bridge: Arc<crate::platform::android::AndroidMediaBridge>,
     pub(super) mutations: MutationWorker,
+    pub(super) bus: EventBus,
+    pub(super) auth_generation: Arc<AtomicU64>,
+    pub(super) explicit_sign_out_pending: Arc<AtomicU64>,
+    pub(super) atr_enabled: Arc<AtomicBool>,
     pub(super) settings_tx: tokio::sync::mpsc::UnboundedSender<(SettingsV1, bool)>,
     pub(super) tx: Sender<LiveUpdate>,
     pub(super) rx: Receiver<LiveUpdate>,

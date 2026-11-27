@@ -467,7 +467,8 @@ async fn handle_request(
 
     // Priority 0: Local-Disk Bypass for completed offline downloads (zero network I/O).
     if let Some(resp) =
-        try_serve_offline_file(&state, video_id, range_header.as_deref(), request_gen).await
+        try_serve_offline_file(&state, video_id, range_header.as_deref(), request_gen, is_head)
+            .await
     {
         return Ok(resp);
     }
@@ -676,10 +677,18 @@ async fn fetch_chunk_with_403_recovery(
                 let info = {
                     let cached = state.slots.read().unwrap().get(video_id);
                     match cached {
-                        Some(s) if attempt == 0 => s,
+                        Some(s) if attempt == 0 && s.itag == itag => s,
                         _ => {
                             let fresh = state.provider.resolve_stream(video_id).await?;
                             state.slots.write().unwrap().register(fresh.clone());
+                            if fresh.itag != itag {
+                                return Err(CoreError::Playback(PlaybackError::StreamExpired(
+                                    format!(
+                                        "re-resolved stream itag changed ({itag} -> {}); reload required",
+                                        fresh.itag
+                                    ),
+                                )));
+                            }
                             fresh
                         }
                     }
@@ -755,6 +764,7 @@ async fn try_serve_offline_file(
     video_id: &str,
     range_header: Option<&str>,
     request_gen: Option<u64>,
+    is_head: bool,
 ) -> Option<Response<Full<Bytes>>> {
     let offline = state.offline.as_ref()?;
     let rec = offline.get_completed_download(video_id).ok().flatten()?;
@@ -812,6 +822,26 @@ async fn try_serve_offline_file(
         },
         None => (0, file_len.saturating_sub(1), false),
     };
+
+    if is_head {
+        let mut builder = Response::builder()
+            .status(if is_partial {
+                StatusCode::PARTIAL_CONTENT
+            } else {
+                StatusCode::OK
+            })
+            .header(CONTENT_TYPE, rec.mime_type)
+            .header(ACCEPT_RANGES, "bytes")
+            .header(CONTENT_LENGTH, (req_end - req_start + 1).to_string())
+            .header("X-Resonance-Source", "offline-disk");
+        if is_partial {
+            builder = builder.header(
+                CONTENT_RANGE,
+                format!("bytes {req_start}-{req_end}/{file_len}"),
+            );
+        }
+        return Some(builder.body(Full::new(Bytes::new())).unwrap());
+    }
 
     if file
         .seek(std::io::SeekFrom::Start(req_start))

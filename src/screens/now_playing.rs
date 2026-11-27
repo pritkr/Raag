@@ -13,8 +13,7 @@ use resonance_contract::{DownloadStatus, LyricSyncKind, RepeatMode, format_durat
 use crate::store::{self, AppTab};
 use crate::ui::controls::{
     open_sleep_timer_sheet, open_speed_sheet, secondary_button, seek_slider,
-    sleep_timer_badge_label, sleep_timer_sheet, speed_badge_label, speed_sheet, status_card,
-    svg_icon_button, volume_slider,
+    sleep_timer_badge_label, speed_badge_label, status_card, svg_icon_button, volume_slider,
 };
 use crate::ui::icons::{IconKind, icon, reactive_icon};
 use crate::ui::tokens::{
@@ -50,8 +49,6 @@ pub fn now_playing_screen() -> impl IntoElement {
                     ))
             }),
         )
-        .child(sleep_timer_sheet())
-        .child(speed_sheet())
 }
 
 fn header_pill_button(
@@ -142,11 +139,9 @@ fn top_header_bar(desktop: bool) -> impl IntoElement {
                                         let snap = store::player_snapshot();
                                         if snap.offline_mode {
                                             SharedString::from("Offline")
-                                        } else if snap
-                                            .current_track
-                                            .as_ref()
-                                            .is_some_and(|t| t.id.starts_with("local_"))
-                                        {
+                                        } else if snap.current_track.as_ref().is_some_and(|t| {
+                                            t.id.starts_with("local:") || t.id.starts_with("local_")
+                                        }) {
                                             SharedString::from("Local Audio")
                                         } else if snap.active_proxy_url.is_some() {
                                             SharedString::from("Standard Stream")

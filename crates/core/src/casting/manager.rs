@@ -116,11 +116,26 @@ impl CastManager {
             .await?
         };
 
-        transport.connect(&device).await?;
-        self.delegate.pause_local().await?;
+        if let Err(err) = transport.connect(&device).await {
+            relay.shutdown();
+            return Err(err);
+        }
+        if let Err(err) = self.delegate.pause_local().await {
+            let _ = transport.disconnect().await;
+            relay.shutdown();
+            return Err(err);
+        }
 
-        let stream_url = relay.stream_url(video_id, "m4a")?;
-        transport
+        let stream_url = match relay.stream_url(video_id, "m4a") {
+            Ok(url) => url,
+            Err(err) => {
+                let _ = transport.disconnect().await;
+                relay.shutdown();
+                let _ = self.delegate.resume_local_at(current_position_ms).await;
+                return Err(err);
+            }
+        };
+        if let Err(err) = transport
             .load_media(CastMediaPayload {
                 stream_url,
                 content_type: "audio/mp4".to_owned(),
@@ -128,7 +143,13 @@ impl CastManager {
                 start_position_ms: current_position_ms,
                 autoplay: true,
             })
-            .await?;
+            .await
+        {
+            let _ = transport.disconnect().await;
+            relay.shutdown();
+            let _ = self.delegate.resume_local_at(current_position_ms).await;
+            return Err(err);
+        }
 
         let state = CastSessionState::Connected {
             device: device.clone(),

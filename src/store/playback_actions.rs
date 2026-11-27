@@ -60,8 +60,10 @@ pub fn play_all_shuffled(tracks: Vec<Track>) {
     let live = !is_fixture_mode();
     let tracks_for_live = tracks.clone();
     let mut started = None;
+    let mut start_index = 0usize;
     playback_signal().update(|p| {
         started = p.play_all_shuffled(tracks, live, proxy_stream_url);
+        start_index = p.player.queue.current_index.unwrap_or(0);
     });
     if let Some(ref t) = started {
         library_signal().update(|l| l.record_play(t.clone()));
@@ -69,7 +71,7 @@ pub fn play_all_shuffled(tracks: Vec<Track>) {
     if live && started.is_some() {
         live_engine::dispatch(EngineCommand::PlayQueue {
             tracks: tracks_for_live,
-            start_index: 0,
+            start_index,
             shuffle: true,
         });
     }
@@ -215,6 +217,9 @@ pub fn set_autoplay_radio(enabled: bool) {
 
 pub fn set_sponsorblock_enabled(enabled: bool) {
     playback_signal().update(|p| p.player.sponsorblock_enabled = enabled);
+    if !is_fixture_mode() {
+        live_engine::dispatch(EngineCommand::SetSponsorBlock(enabled));
+    }
     persist_settings_now(true);
 }
 
@@ -327,9 +332,25 @@ pub fn apply_fixture_audio_telemetry(event: AudioTelemetry) {
             playback_signal().update(|p| p.on_native_audio_progress(position_ms, duration_ms));
         }
         AudioTelemetry::Ended { .. } => {
-            playback_signal().update(|p| {
-                let _ = p.on_native_audio_ended(false, proxy_stream_url);
+            let mut end_of_track_restore = None;
+            ui_signal().update(|u| {
+                if let super::ui_slice::SleepTimerTickAction::PauseAndRestoreVolume(saved) =
+                    u.sleep_timer.on_track_ended()
+                {
+                    end_of_track_restore = Some(saved);
+                }
             });
+            if let Some(saved) = end_of_track_restore {
+                playback_signal().update(|p| {
+                    p.player.state = resonance_contract::PlayerState::Paused;
+                    p.set_volume(saved);
+                });
+                ui_signal().update(|u| u.set_status_banner("Sleep timer paused at end of track"));
+            } else {
+                playback_signal().update(|p| {
+                    let _ = p.on_native_audio_ended(false, proxy_stream_url);
+                });
+            }
         }
         AudioTelemetry::Failed { message, .. } => {
             ui_signal().update(|u| u.set_status_banner(message));

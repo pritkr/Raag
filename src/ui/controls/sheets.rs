@@ -339,17 +339,12 @@ pub fn add_to_playlist_sheet() -> impl IntoElement {
                                             let title = new_title.get_untracked();
                                             let clean = title.trim();
                                             if !clean.is_empty() {
-                                                let pid = format!(
-                                                    "PL_NEW_{}",
-                                                    resonance_core::unix_secs()
-                                                );
-                                                store::add_track_to_playlist(
-                                                    pid,
-                                                    clean.to_owned(),
+                                                store::create_local_playlist_and_add(
+                                                    clean,
+                                                    privacy.get_untracked(),
                                                     t_create.clone(),
                                                 );
                                                 new_title.set(String::new());
-                                                store::close_add_to_playlist_sheet();
                                             }
                                         })
                                         .min_h(px(MOBILE_MIN_TOUCH_TARGET))

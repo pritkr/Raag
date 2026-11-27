@@ -30,6 +30,7 @@ pub struct PlaybackController {
     sponsorblock: Arc<dyn resonance_contract::SponsorBlockProvider>,
     bus: EventBus,
     play_generation: AtomicU64,
+    pause_epoch: AtomicU64,
     last_now_playing_sync_ms: AtomicU64,
     last_resume_persist_ms: AtomicU64,
     fsm: Mutex<PlaybackFsm>,
@@ -56,6 +57,7 @@ impl PlaybackController {
             sponsorblock,
             bus,
             play_generation: AtomicU64::new(0),
+            pause_epoch: AtomicU64::new(0),
             last_now_playing_sync_ms: AtomicU64::new(0),
             last_resume_persist_ms: AtomicU64::new(0),
             fsm: Mutex::new(PlaybackFsm::from_restored_queue(restored_queue)),
@@ -163,18 +165,47 @@ impl PlaybackController {
 
     /// Removes an item at `index` from the queue.
     pub async fn remove_from_queue(&self, index: usize) -> CoreResult<()> {
-        let mut fsm = self.fsm.lock().await;
-        if let Some(updated_track) = QueueManager::remove(&mut fsm.snapshot.queue, index) {
-            fsm.snapshot.current_track = updated_track;
-            if fsm.snapshot.current_track.is_none() {
-                let _ = fsm.snapshot.state.transition(PlayerState::Idle);
+        let mut should_stop_audio = false;
+        let mut should_reload_active = false;
+        {
+            let mut fsm = self.fsm.lock().await;
+            let was_playing = fsm.snapshot.state.is_playing();
+            match QueueManager::remove(&mut fsm.snapshot.queue, index) {
+                Some(None) => {
+                    self.play_generation.fetch_add(1, Ordering::SeqCst);
+                    self.proxy.advance_generation();
+                    fsm.clear_to_idle();
+                    should_stop_audio = true;
+                }
+                Some(Some(next_track)) => {
+                    fsm.snapshot.current_track = Some(next_track);
+                    fsm.snapshot.position_ms = 0;
+                    fsm.snapshot.queue.resume_position_ms = 0;
+                    fsm.snapshot.active_proxy_url = None;
+                    if was_playing {
+                        should_reload_active = true;
+                    } else {
+                        self.play_generation.fetch_add(1, Ordering::SeqCst);
+                        self.proxy.advance_generation();
+                        should_stop_audio = true;
+                    }
+                }
+                None => {}
             }
+            self.publish_and_persist(&fsm);
         }
-        self.publish_and_persist(&fsm);
+        if should_reload_active {
+            return self.load_and_play_current(0).await;
+        }
+        if should_stop_audio {
+            let _ = self.audio.stop().await;
+        }
         Ok(())
     }
 
     pub async fn clear_queue(&self) -> CoreResult<()> {
+        self.play_generation.fetch_add(1, Ordering::SeqCst);
+        self.proxy.advance_generation();
         let _ = self.audio.stop().await;
         let mut fsm = self.fsm.lock().await;
         fsm.clear_to_idle();
@@ -253,6 +284,7 @@ impl PlaybackController {
 
     async fn load_and_play_current(&self, resume_ms: u64) -> CoreResult<()> {
         let my_gen = self.play_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let start_pause_epoch = self.pause_epoch.load(Ordering::SeqCst);
         self.last_now_playing_sync_ms.store(0, Ordering::SeqCst);
         self.last_resume_persist_ms
             .store(resume_ms, Ordering::SeqCst);
@@ -363,6 +395,18 @@ impl PlaybackController {
             return Ok(());
         }
 
+        if self.pause_epoch.load(Ordering::SeqCst) != start_pause_epoch {
+            let mut fsm = self.fsm.lock().await;
+            if self.play_generation.load(Ordering::SeqCst) == my_gen {
+                fsm.codec_badge = codec_badge;
+                fsm.snapshot.duration_ms = duration_ms;
+                fsm.snapshot.active_proxy_url = None;
+                fsm.enter_paused();
+                self.publish_and_persist(&fsm);
+            }
+            return Ok(());
+        }
+
         {
             let mut fsm = self.fsm.lock().await;
             fsm.codec_badge = codec_badge;
@@ -380,10 +424,31 @@ impl PlaybackController {
         };
 
         if let Err(e) = self.audio.load_and_play(&proxy_url, meta.clone()).await {
+            if self.play_generation.load(Ordering::SeqCst) != my_gen {
+                return Ok(());
+            }
             let mut fsm = self.fsm.lock().await;
             fsm.enter_error(e.to_string());
             self.publish_and_persist(&fsm);
             return Err(e);
+        }
+
+        if self.play_generation.load(Ordering::SeqCst) != my_gen {
+            let queue_empty = self.fsm.lock().await.snapshot.current_track.is_none();
+            if queue_empty {
+                let _ = self.audio.stop().await;
+            }
+            return Ok(());
+        }
+
+        if self.pause_epoch.load(Ordering::SeqCst) != start_pause_epoch {
+            let _ = self.audio.pause().await;
+            let mut fsm = self.fsm.lock().await;
+            if self.play_generation.load(Ordering::SeqCst) == my_gen {
+                fsm.enter_paused();
+                self.publish_and_persist(&fsm);
+            }
+            return Ok(());
         }
 
         if resume_ms > 0 {
@@ -399,6 +464,14 @@ impl PlaybackController {
 
         {
             let mut fsm = self.fsm.lock().await;
+            if self.play_generation.load(Ordering::SeqCst) != my_gen {
+                return Ok(());
+            }
+            if self.pause_epoch.load(Ordering::SeqCst) != start_pause_epoch {
+                fsm.enter_paused();
+                self.publish_and_persist(&fsm);
+                return Ok(());
+            }
             fsm.enter_playing();
             self.publish_and_persist(&fsm);
         }
@@ -440,6 +513,7 @@ impl PlaybackController {
     }
 
     pub async fn pause(&self) -> CoreResult<()> {
+        self.pause_epoch.fetch_add(1, Ordering::SeqCst);
         self.audio.pause().await?;
         let mut fsm = self.fsm.lock().await;
         fsm.enter_paused();
@@ -509,6 +583,7 @@ impl PlaybackController {
         }
 
         // End of queue: check Autoplay Radio (`next`).
+        let before_radio_gen = self.play_generation.load(Ordering::SeqCst);
         let (autoplay, seed_id) = {
             let fsm = self.fsm.lock().await;
             (
@@ -520,6 +595,9 @@ impl PlaybackController {
             && let Some(video_id) = seed_id
             && let Ok(radio) = self.fetch_diverse_radio(&video_id).await
         {
+            if self.play_generation.load(Ordering::SeqCst) != before_radio_gen {
+                return Ok(());
+            }
             let next_idx = {
                 let mut fsm = self.fsm.lock().await;
                 QueueManager::merge_radio_tracks(&mut fsm.snapshot.queue, radio)
@@ -529,6 +607,9 @@ impl PlaybackController {
             }
         }
 
+        if self.play_generation.load(Ordering::SeqCst) != before_radio_gen {
+            return Ok(());
+        }
         self.pause().await
     }
 

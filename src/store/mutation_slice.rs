@@ -2,7 +2,8 @@
 //! and playlist edit transitions with deterministic rollbacks on `LiveUpdate::MutationFailed`.
 
 use resonance_contract::{
-    LibraryCollectionRef, LikeAction, MutationCommand, PlaylistEditOp, Track, TrackId,
+    LibraryCollectionRef, LikeAction, MutationCommand, MutationReceipt, PlaylistEditOp, Track,
+    TrackId,
 };
 
 use super::catalog_slice::CatalogSlice;
@@ -221,6 +222,18 @@ impl MutationSlice {
             Some((playlist_id.to_owned(), op.clone()))
         } else {
             None
+        }
+    }
+
+    /// Reconciles optimistic tracking counters when `MutationWorker` confirms a write succeeded.
+    /// ATR watchtime pings are excluded because they do not increment `pending_mutations`.
+    pub fn complete_mutation(&mut self, receipt: &MutationReceipt) {
+        if receipt.endpoint == "atr" {
+            return;
+        }
+        self.pending_mutations = self.pending_mutations.saturating_sub(1);
+        if receipt.endpoint == "browse/edit_playlist" && !self.pending_playlist_edits.is_empty() {
+            self.pending_playlist_edits.remove(0);
         }
     }
 

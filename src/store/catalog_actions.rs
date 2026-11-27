@@ -40,14 +40,18 @@ pub fn mood_playlists() -> Vec<LibraryCollectionRef> {
 }
 
 pub fn load_mood_playlists(mood: &str, params: &str) {
+    let mut generation = 0u64;
     catalog_signal().update(|c| {
         c.selected_mood = Some(mood.to_owned());
+        c.mood_generation = c.mood_generation.wrapping_add(1);
+        generation = c.mood_generation;
     });
     if is_fixture_mode() {
         run_search(mood);
         set_tab(AppTab::Search);
     } else {
         live_engine::dispatch(EngineCommand::LoadMoodPlaylists {
+            generation,
             mood: mood.to_owned(),
             params: params.to_owned(),
         });
@@ -86,8 +90,9 @@ pub fn load_more_search() {
     if is_fixture_mode() {
         return;
     }
-    let (query, category, cont) = catalog_signal().with(|c| {
+    let (generation, query, category, cont) = catalog_signal().with(|c| {
         (
+            c.search_generation,
             c.search_query.clone(),
             c.search_filter.as_search_category(),
             c.search_continuation.clone(),
@@ -96,6 +101,7 @@ pub fn load_more_search() {
     if let Some(continuation) = cont {
         catalog_signal().update(|c| c.search_loading = true);
         live_engine::dispatch(EngineCommand::SearchContinuation {
+            generation,
             query,
             category,
             continuation,
@@ -192,18 +198,26 @@ pub fn search_filter() -> SearchFilter {
 }
 
 pub fn set_search_filter(filter: SearchFilter) {
-    let mut live_dispatch: Option<(String, Option<&'static str>)> = None;
+    let mut live_dispatch: Option<(u64, String, Option<&'static str>)> = None;
     catalog_signal().update(|c| {
         c.set_search_filter(filter);
         if !is_fixture_mode() && !c.search_query.is_empty() {
             c.search_loading = true;
             c.search_error = None;
             c.search_generation = c.search_generation.wrapping_add(1);
-            live_dispatch = Some((c.search_query.clone(), filter.params()));
+            live_dispatch = Some((
+                c.search_generation,
+                c.search_query.clone(),
+                filter.params(),
+            ));
         }
     });
-    if let Some((query, params)) = live_dispatch {
-        live_engine::dispatch(EngineCommand::Search { query, params });
+    if let Some((generation, query, params)) = live_dispatch {
+        live_engine::dispatch(EngineCommand::Search {
+            generation,
+            query,
+            params,
+        });
     }
 }
 
@@ -244,16 +258,22 @@ pub fn run_search(query: &str) {
     if is_fixture_mode() {
         catalog_signal().update(|c| c.run_fixture_search(q));
     } else {
+        let mut generation = 0u64;
         let mut params = None;
         let should_dispatch = !q.is_empty();
         catalog_signal().update(|c| {
             c.begin_live_search(q.clone());
+            generation = c.search_generation;
             if should_dispatch {
                 params = c.search_filter.params();
             }
         });
         if should_dispatch {
-            live_engine::dispatch(EngineCommand::Search { query: q, params });
+            live_engine::dispatch(EngineCommand::Search {
+                generation,
+                query: q,
+                params,
+            });
         }
     }
 }
@@ -277,7 +297,11 @@ pub fn run_search_debounced(query: &str) {
         let still_current =
             catalog_signal().with(|c| c.search_generation == seq && c.search_query == q);
         if still_current {
-            live_engine::dispatch(EngineCommand::Search { query: q, params });
+            live_engine::dispatch(EngineCommand::Search {
+                generation: seq,
+                query: q,
+                params,
+            });
         }
     });
 }
@@ -295,11 +319,16 @@ pub fn open_collection(
     let fixture = is_fixture_mode();
     set_tab(AppTab::Home);
     let live_id = browse_id.clone();
+    let mut generation = 0u64;
     catalog_signal().update(|c| {
         c.open_collection(fixture, browse_id, title, subtitle, artwork_url);
+        generation = c.collection_generation;
     });
     if !fixture {
-        live_engine::dispatch(EngineCommand::BrowseCollection { browse_id: live_id });
+        live_engine::dispatch(EngineCommand::BrowseCollection {
+            generation,
+            browse_id: live_id,
+        });
     }
 }
 
@@ -537,6 +566,26 @@ pub fn unpin_collection(collection_id: &str) {
 }
 
 // ── Optimistic Mutations ─────────────────────────────────────────────────────
+
+pub fn create_local_playlist_and_add(title: &str, privacy: &str, track: Track) {
+    let mut created_title = String::new();
+    mutations_signal().update(|m| {
+        library_signal().update(|l| {
+            let created = m.create_local_playlist(title, privacy, l);
+            created_title = created.title.clone();
+            if let Some(pl) = l.playlists.first_mut() {
+                pl.track_count = Some(1);
+            }
+        });
+    });
+    ui_signal().update(|u| {
+        u.add_to_playlist_track = None;
+        u.set_status_banner(format!(
+            "Created local playlist \"{created_title}\" and added \"{}\"",
+            track.title
+        ));
+    });
+}
 
 pub fn add_track_to_playlist(playlist_id: String, playlist_title: String, track: Track) {
     let live = !is_fixture_mode();

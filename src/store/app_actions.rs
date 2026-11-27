@@ -5,8 +5,9 @@ use std::path::PathBuf;
 
 use resonance_contract::{
     AccountProfile, AuthBackendStatus, AuthoritativePlaybackState, CastDevice, CastSessionState,
-    LocalFolderRoot, LocalScanProgress, LocalTrackRecord, PoTokenDiagnostics, RemoteConfigStatus,
-    RoomParticipant, RoomRole, RoomTrackRef, Track, UpdateChannel, UpdateInfo, UpdatePhase,
+    LocalFolderRoot, LocalScanProgress, LocalTrackRecord, PlaybackSpeedConfig, PoTokenDiagnostics,
+    RemoteConfigStatus, RoomParticipant, RoomRole, RoomTrackRef, SleepTimerState, Track,
+    UpdateChannel, UpdateInfo, UpdatePhase,
 };
 use resonance_core::audio_dsp::DspConfig;
 use resonance_core::rooms::{RoomStateSnapshot, RoomTransportKind, generate_room_code};
@@ -129,6 +130,154 @@ pub fn close_add_to_playlist_sheet() {
 
 pub fn add_to_playlist_track() -> Option<Track> {
     ui_signal().with(|u| u.add_to_playlist_track.clone())
+}
+
+pub fn open_sleep_timer_sheet() {
+    ui_signal().update(|u| u.sleep_timer_sheet_open = true);
+}
+
+pub fn close_sleep_timer_sheet() {
+    ui_signal().update(|u| u.sleep_timer_sheet_open = false);
+}
+
+pub fn is_sleep_timer_sheet_open() -> bool {
+    ui_signal().with(|u| u.sleep_timer_sheet_open)
+}
+
+pub fn sleep_timer_mode() -> super::ui_slice::SleepTimerMode {
+    ui_signal().with(|u| u.sleep_timer.mode)
+}
+
+pub fn sleep_timer_state_at(now_unix_ms: u64) -> SleepTimerState {
+    ui_signal().with(|u| u.sleep_timer.state(now_unix_ms))
+}
+
+pub fn sleep_timer_badge_at(now_unix_ms: u64) -> Option<String> {
+    ui_signal().with(|u| u.sleep_timer.badge_label(now_unix_ms))
+}
+
+pub fn set_sleep_timer_countdown_secs(duration_secs: u64, now_unix_ms: u64) {
+    let vol = player_snapshot().volume;
+    let mut next_state = SleepTimerState::Off;
+    ui_signal().update(|u| {
+        u.sleep_timer.set_countdown(duration_secs, now_unix_ms, vol);
+        next_state = u.sleep_timer.state(now_unix_ms);
+        u.sleep_timer_sheet_open = false;
+    });
+    playback_signal().update(|p| p.set_sleep_timer(next_state));
+    if !is_fixture_mode() {
+        live_engine::dispatch(EngineCommand::SetSleepTimer(next_state));
+    }
+}
+
+pub fn set_sleep_timer_end_of_track_mode() {
+    let vol = player_snapshot().volume;
+    ui_signal().update(|u| {
+        u.sleep_timer.set_end_of_track(vol);
+        u.sleep_timer_sheet_open = false;
+    });
+    playback_signal().update(|p| p.set_sleep_timer(SleepTimerState::EndOfTrack));
+    if !is_fixture_mode() {
+        live_engine::dispatch(EngineCommand::SetSleepTimer(SleepTimerState::EndOfTrack));
+    }
+}
+
+pub fn extend_sleep_timer_secs(add_secs: u64, now_unix_ms: u64) {
+    let mut next_state = SleepTimerState::Off;
+    ui_signal().update(|u| {
+        u.sleep_timer.extend_minutes(add_secs, now_unix_ms);
+        next_state = u.sleep_timer.state(now_unix_ms);
+    });
+    playback_signal().update(|p| p.set_sleep_timer(next_state));
+    if !is_fixture_mode() {
+        live_engine::dispatch(EngineCommand::SetSleepTimer(next_state));
+    }
+}
+
+pub fn cancel_sleep_timer_mode() -> Option<f32> {
+    let mut restore = None;
+    ui_signal().update(|u| {
+        restore = u.sleep_timer.cancel();
+        u.sleep_timer_sheet_open = false;
+    });
+    playback_signal().update(|p| p.set_sleep_timer(SleepTimerState::Off));
+    if !is_fixture_mode() {
+        live_engine::dispatch(EngineCommand::SetSleepTimer(SleepTimerState::Off));
+    }
+    restore
+}
+
+pub fn tick_sleep_timer_action(now_unix_ms: u64) -> super::ui_slice::SleepTimerTickAction {
+    let mut action = super::ui_slice::SleepTimerTickAction::None;
+    let mut next_state = SleepTimerState::Off;
+    ui_signal().update(|u| {
+        action = u.sleep_timer.tick(now_unix_ms);
+        next_state = u.sleep_timer.state(now_unix_ms);
+    });
+    playback_signal().update(|p| {
+        if p.sleep_timer != next_state {
+            p.set_sleep_timer(next_state);
+        }
+    });
+    action
+}
+
+pub fn open_speed_sheet() {
+    ui_signal().update(|u| u.speed_sheet_open = true);
+}
+
+pub fn close_speed_sheet() {
+    ui_signal().update(|u| u.speed_sheet_open = false);
+}
+
+pub fn is_speed_sheet_open() -> bool {
+    ui_signal().with(|u| u.speed_sheet_open)
+}
+
+pub fn playback_speed_config() -> PlaybackSpeedConfig {
+    settings_signal().with(|s| PlaybackSpeedConfig {
+        speed: s.playback_speed,
+        preserve_pitch: s.preserve_pitch,
+    })
+}
+
+pub fn set_playback_speed(speed: f32) {
+    let clamped = (speed.clamp(0.50, 2.00) * 20.0).round() / 20.0;
+    let mut preserve_pitch = true;
+    settings_signal().update(|s| {
+        s.playback_speed = clamped;
+        preserve_pitch = s.preserve_pitch;
+    });
+    if !is_fixture_mode() {
+        live_engine::dispatch(EngineCommand::SetPlaybackSpeed {
+            speed: clamped,
+            preserve_pitch,
+        });
+    }
+    persist_settings_now(true);
+}
+
+pub fn set_preserve_pitch(preserve: bool) {
+    let mut speed = 1.0_f32;
+    settings_signal().update(|s| {
+        s.preserve_pitch = preserve;
+        speed = s.playback_speed;
+    });
+    if !is_fixture_mode() {
+        live_engine::dispatch(EngineCommand::SetPlaybackSpeed {
+            speed,
+            preserve_pitch: preserve,
+        });
+    }
+    persist_settings_now(true);
+}
+
+pub fn set_atr_watchtime_sync(enabled: bool) {
+    settings_signal().update(|s| s.atr_watchtime_sync = enabled);
+    if !is_fixture_mode() {
+        live_engine::dispatch(EngineCommand::SetAtrSync(enabled));
+    }
+    persist_settings_now(true);
 }
 
 // ── Settings, Auth, DSP & PO-Token Diagnostics ───────────────────────────────

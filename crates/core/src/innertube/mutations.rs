@@ -91,7 +91,7 @@ fn make_receipt(endpoint: &str, resp: Option<&Value>) -> MutationReceipt {
 #[async_trait]
 impl InnerTubeMutations for InnerTubeClient {
     async fn report_atr(&self, report: &WatchtimeReport) -> Result<MutationReceipt, MutationError> {
-        let Some(session) = self.current_session() else {
+        let (req_epoch, Some(session)) = self.session_with_epoch() else {
             return Err(MutationError::NotAuthenticated);
         };
         validate_innertube_id(&report.video_id, "video_id")?;
@@ -160,11 +160,11 @@ impl InnerTubeMutations for InnerTubeClient {
             && let Some(updated) =
                 apply_cookie_rotation(&session, set_cookies.iter().map(String::as_str))
         {
-            let _ = self.sign_in(updated);
+            self.rotate_session_if_epoch(req_epoch, updated);
         }
 
         if status == 401 {
-            let _ = self.sign_out();
+            let _ = self.sign_out_if_epoch(req_epoch);
             return Err(MutationError::Http {
                 status: 401,
                 message: "session revoked".to_owned(),
@@ -409,9 +409,25 @@ async fn run_worker(
                         command: cmd,
                         reason: redact_and_cap(&err.to_string()),
                     });
-                    // Drain all remaining queued mutations to prevent retry storms with revoked cookies.
-                    pending.clear();
-                    while rx.try_recv().is_ok() {}
+                    // Drain all remaining queued mutations to prevent retry storms with revoked cookies,
+                    // notifying the UI to roll back any optimistic SetLike / EditPlaylist entries.
+                    let fail_reason = redact_and_cap(&err.to_string());
+                    for dropped in pending.drain(..) {
+                        if !matches!(dropped, MutationCommand::ReportAtr(_)) {
+                            bus.publish(AppEvent::MutationFailed {
+                                command: dropped,
+                                reason: fail_reason.clone(),
+                            });
+                        }
+                    }
+                    while let Ok(dropped) = rx.try_recv() {
+                        if !matches!(dropped, MutationCommand::ReportAtr(_)) {
+                            bus.publish(AppEvent::MutationFailed {
+                                command: dropped,
+                                reason: fail_reason.clone(),
+                            });
+                        }
+                    }
                     break;
                 }
                 Err(err) => {

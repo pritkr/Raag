@@ -6,11 +6,11 @@
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use resonance_contract::CoreResult;
-use tokio::sync::{Mutex, broadcast};
+use tokio::sync::broadcast;
 
 use crate::cache::chunks::CHUNK_SIZE;
 
@@ -66,6 +66,30 @@ pub fn coalesce_byte_range(
 
 type SharedChunkResult = Result<(Arc<Vec<u8>>, u64), String>;
 
+/// Cancel-safe RAII guard ensuring an in-flight leader entry is always removed if
+/// the leader future is dropped or cancelled mid-fetch.
+struct InFlightGuard<'a> {
+    map: &'a Mutex<HashMap<ChunkKey, broadcast::Sender<SharedChunkResult>>>,
+    key: Option<ChunkKey>,
+}
+
+impl<'a> InFlightGuard<'a> {
+    fn take_sender(&mut self) -> Option<broadcast::Sender<SharedChunkResult>> {
+        let key = self.key.take()?;
+        let mut guard = self.map.lock().unwrap_or_else(|p| p.into_inner());
+        guard.remove(&key)
+    }
+}
+
+impl Drop for InFlightGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(key) = self.key.take() {
+            let mut guard = self.map.lock().unwrap_or_else(|p| p.into_inner());
+            guard.remove(&key);
+        }
+    }
+}
+
 /// Single-flight in-flight chunk fetch deduplicator.
 pub struct ChunkCoalescer {
     in_flight: Mutex<HashMap<ChunkKey, broadcast::Sender<SharedChunkResult>>>,
@@ -102,15 +126,21 @@ impl ChunkCoalescer {
         F: FnOnce() -> Fut,
         Fut: Future<Output = CoreResult<(Vec<u8>, u64)>>,
     {
-        let maybe_rx = {
-            let mut guard = self.in_flight.lock().await;
+        let (maybe_rx, mut leader_guard) = {
+            let mut guard = self.in_flight.lock().unwrap_or_else(|p| p.into_inner());
             if let Some(tx) = guard.get(&key) {
                 self.coalesced_hits.fetch_add(1, Ordering::SeqCst);
-                Some(tx.subscribe())
+                (Some(tx.subscribe()), None)
             } else {
                 let (tx, _rx) = broadcast::channel(4);
                 guard.insert(key.clone(), tx);
-                None
+                (
+                    None,
+                    Some(InFlightGuard {
+                        map: &self.in_flight,
+                        key: Some(key.clone()),
+                    }),
+                )
             }
         };
 
@@ -121,16 +151,13 @@ impl ChunkCoalescer {
                     return Err(resonance_contract::CoreError::Offline(msg));
                 }
                 Err(_) => {
-                    // Leader dropped before sending; fall through and execute directly.
+                    // Leader dropped/cancelled before sending; fall through and execute directly.
                 }
             }
         }
 
         let res = fetcher().await;
-        let tx = {
-            let mut guard = self.in_flight.lock().await;
-            guard.remove(&key)
-        };
+        let tx = leader_guard.as_mut().and_then(InFlightGuard::take_sender);
         if let Some(tx) = tx {
             match &res {
                 Ok((bytes, total)) => {

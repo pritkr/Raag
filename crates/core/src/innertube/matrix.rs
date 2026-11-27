@@ -286,12 +286,23 @@ pub struct ClientHealthSnapshot {
     pub consecutive_failures: u32,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum BreakerPhase {
+    Closed,
+    Open {
+        opened_at: Instant,
+    },
+    HalfOpenProbing {
+        opened_at: Instant,
+        started_at: Instant,
+    },
+}
+
 struct PerClientHealth {
     samples: VecDeque<OutcomeSample>,
     consecutive_failures: u32,
     ewma_latency_ms: f32,
-    opened_at: Option<Instant>,
-    half_open_probe_in_flight: bool,
+    phase: BreakerPhase,
 }
 
 impl Default for PerClientHealth {
@@ -300,8 +311,7 @@ impl Default for PerClientHealth {
             samples: VecDeque::with_capacity(24),
             consecutive_failures: 0,
             ewma_latency_ms: 0.0,
-            opened_at: None,
-            half_open_probe_in_flight: false,
+            phase: BreakerPhase::Closed,
         }
     }
 }
@@ -329,18 +339,25 @@ impl ClientCircuitBreaker {
         }
     }
 
+    fn phase_to_state(phase: BreakerPhase, cooldown: Duration, now: Instant) -> CircuitState {
+        match phase {
+            BreakerPhase::Closed => CircuitState::Closed,
+            BreakerPhase::Open { opened_at }
+                if now.saturating_duration_since(opened_at) >= cooldown =>
+            {
+                CircuitState::HalfOpen
+            }
+            BreakerPhase::Open { .. } => CircuitState::Open,
+            BreakerPhase::HalfOpenProbing { .. } => CircuitState::HalfOpen,
+        }
+    }
+
     pub fn state_at(&self, kind: ClientKind, now: Instant) -> CircuitState {
         let guard = self.clients.read().unwrap();
         let Some(entry) = guard.get(&kind) else {
             return CircuitState::Closed;
         };
-        match entry.opened_at {
-            None => CircuitState::Closed,
-            Some(opened) if now.saturating_duration_since(opened) >= self.config.cooldown => {
-                CircuitState::HalfOpen
-            }
-            Some(_) => CircuitState::Open,
-        }
+        Self::phase_to_state(entry.phase, self.config.cooldown, now)
     }
 
     pub fn state(&self, kind: ClientKind) -> CircuitState {
@@ -355,17 +372,41 @@ impl ClientCircuitBreaker {
     pub fn allow_request_at(&self, kind: ClientKind, now: Instant) -> bool {
         let mut guard = self.clients.write().unwrap();
         let entry = guard.entry(kind).or_default();
-        match entry.opened_at {
-            None => true,
-            Some(opened) if now.saturating_duration_since(opened) >= self.config.cooldown => {
-                if entry.half_open_probe_in_flight {
-                    false
-                } else {
-                    entry.half_open_probe_in_flight = true;
-                    true
-                }
+        match entry.phase {
+            BreakerPhase::Closed => true,
+            BreakerPhase::Open { opened_at }
+                if now.saturating_duration_since(opened_at) >= self.config.cooldown =>
+            {
+                entry.phase = BreakerPhase::HalfOpenProbing {
+                    opened_at,
+                    started_at: now,
+                };
+                true
             }
-            Some(_) => false,
+            BreakerPhase::Open { .. } => false,
+            BreakerPhase::HalfOpenProbing {
+                opened_at,
+                started_at,
+            } if now.saturating_duration_since(started_at) >= self.config.cooldown => {
+                // Self-heal if a previous probe task was cancelled or panicked before reporting.
+                entry.phase = BreakerPhase::HalfOpenProbing {
+                    opened_at,
+                    started_at: now,
+                };
+                true
+            }
+            BreakerPhase::HalfOpenProbing { .. } => false,
+        }
+    }
+
+    /// Releases an in-flight `HalfOpen` probe slot without tripping or closing the circuit
+    /// (used when a probe ends with a non-tripping error or async cancellation).
+    pub fn release_probe(&self, kind: ClientKind) {
+        let mut guard = self.clients.write().unwrap();
+        if let Some(entry) = guard.get_mut(&kind)
+            && let BreakerPhase::HalfOpenProbing { opened_at, .. } = entry.phase
+        {
+            entry.phase = BreakerPhase::Open { opened_at };
         }
     }
 
@@ -378,8 +419,7 @@ impl ClientCircuitBreaker {
             self.config.window_size,
         );
         entry.consecutive_failures = 0;
-        entry.opened_at = None;
-        entry.half_open_probe_in_flight = false;
+        entry.phase = BreakerPhase::Closed;
     }
 
     pub fn record_failure(&self, kind: ClientKind, http_status: Option<u16>, latency_ms: u64) {
@@ -400,8 +440,7 @@ impl ClientCircuitBreaker {
             Some(429) => OutcomeSample::Http429 { latency_ms },
             _ => OutcomeSample::OtherFailure { latency_ms },
         };
-        let was_half_open = entry.half_open_probe_in_flight;
-        entry.half_open_probe_in_flight = false;
+        let was_half_open = matches!(entry.phase, BreakerPhase::HalfOpenProbing { .. });
         Self::push_sample(entry, sample, self.config.window_size);
         entry.consecutive_failures = entry.consecutive_failures.saturating_add(1);
 
@@ -412,7 +451,7 @@ impl ClientCircuitBreaker {
                 && err_rate >= self.config.max_error_rate);
 
         if should_open {
-            entry.opened_at = Some(now);
+            entry.phase = BreakerPhase::Open { opened_at: now };
         }
     }
 
@@ -447,13 +486,7 @@ impl ClientCircuitBreaker {
             .iter()
             .filter(|s| matches!(s, OutcomeSample::Http429 { .. }))
             .count() as f32;
-        let state = match entry.opened_at {
-            None => CircuitState::Closed,
-            Some(opened) if now.saturating_duration_since(opened) >= self.config.cooldown => {
-                CircuitState::HalfOpen
-            }
-            Some(_) => CircuitState::Open,
-        };
+        let state = Self::phase_to_state(entry.phase, self.config.cooldown, now);
         ClientHealthSnapshot {
             kind,
             state,

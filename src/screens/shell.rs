@@ -27,7 +27,7 @@ use crate::store::{
 };
 use crate::ui::controls::{
     add_to_playlist_sheet, artwork_box, cast_picker_sheet, desktop_player_bar, mini_player_bar,
-    svg_icon_button, track_action_sheet,
+    sleep_timer_sheet, speed_sheet, svg_icon_button, track_action_sheet,
 };
 use crate::ui::icons::{IconKind, icon, liked_music_tile_svg, yt_music_icon};
 use crate::ui::tokens::{
@@ -1286,6 +1286,8 @@ pub fn app_shell() -> impl IntoElement {
         )
         .child(track_action_sheet())
         .child(add_to_playlist_sheet())
+        .child(sleep_timer_sheet())
+        .child(speed_sheet())
         .child(auth_sign_in_sheet(
             store::synced_signal(store::auth_sheet_open),
             store::synced_signal(|| store::settings_snapshot().tv_oauth_user_code),

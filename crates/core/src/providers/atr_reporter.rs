@@ -4,6 +4,9 @@
 //! and emits `WatchtimeReport` commands via `MutationWorker` at 30s played, on pause,
 //! and on track end/switch — strictly when `signed_in == true`.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use rand::Rng;
 use resonance_contract::{
     AppEvent, EventBus, MutationCommand, PlayerSnapshot, PlayerState, WatchtimeReport,
@@ -215,12 +218,31 @@ impl AtrReporter {
         worker: MutationWorker,
         initial_signed_in: bool,
     ) -> tokio::task::JoinHandle<()> {
+        Self::spawn_with_enabled(
+            bus,
+            worker,
+            initial_signed_in,
+            Arc::new(AtomicBool::new(true)),
+        )
+    }
+
+    pub fn spawn_with_enabled(
+        bus: EventBus,
+        worker: MutationWorker,
+        initial_signed_in: bool,
+        enabled: Arc<AtomicBool>,
+    ) -> tokio::task::JoinHandle<()> {
         let mut rx = bus.subscribe();
         tokio::spawn(async move {
-            let mut tracker = AtrTracker::new(initial_signed_in);
+            let mut tracker =
+                AtrTracker::new(initial_signed_in).with_enabled(enabled.load(Ordering::SeqCst));
             loop {
                 match rx.recv().await {
                     Ok(event) => {
+                        let desired_enabled = enabled.load(Ordering::SeqCst);
+                        if tracker.is_enabled() != desired_enabled {
+                            tracker.set_enabled(desired_enabled);
+                        }
                         for report in tracker.process_event(&event) {
                             let _ = worker.enqueue(MutationCommand::ReportAtr(report));
                         }

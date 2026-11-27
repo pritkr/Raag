@@ -1,5 +1,6 @@
 //! Background engine bootstrap, service wiring, and event/telemetry pumps.
 
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -106,10 +107,10 @@ impl AppEngine {
         }
 
         #[cfg(target_os = "android")]
-        let (audio, android_auth_rx) = {
+        let (audio, android_bridge, android_auth_rx) = {
             let bridge = Arc::new(crate::platform::android::AndroidMediaBridge::new());
             let auth_rx = bridge.take_auth_cookie_receiver();
-            (bridge as Arc<dyn AudioBackend>, auth_rx)
+            (bridge.clone() as Arc<dyn AudioBackend>, bridge, auth_rx)
         };
         #[cfg(not(target_os = "android"))]
         let audio: Arc<dyn AudioBackend> =
@@ -168,7 +169,9 @@ impl AppEngine {
             });
         }
 
-        spawn_event_bus_forwarder(&rt, &bus, &tx);
+        let auth_generation = Arc::new(AtomicU64::new(0));
+        let explicit_sign_out_pending = Arc::new(AtomicU64::new(0));
+        spawn_event_bus_forwarder(&rt, &bus, &tx, explicit_sign_out_pending.clone());
 
         let initial_snap = rt.block_on(controller.snapshot());
         let persisted_settings = load_persisted_settings(cache.as_ref());
@@ -178,9 +181,15 @@ impl AppEngine {
         let initial_downloads = vault.list_records().unwrap_or_default();
         let current_session = provider.current_session();
         let signed_in = current_session.is_some();
+        let atr_enabled = Arc::new(AtomicBool::new(persisted_settings.atr_watchtime_sync));
         {
             let _guard = rt.enter();
-            let _atr_handle = AtrReporter::spawn(bus, mutations.clone(), signed_in);
+            let _atr_handle = AtrReporter::spawn_with_enabled(
+                bus.clone(),
+                mutations.clone(),
+                signed_in,
+                atr_enabled.clone(),
+            );
         }
 
         let auth_status = platform_auth_status(current_session.as_ref());
@@ -228,7 +237,13 @@ impl AppEngine {
             chunks,
             vault,
             controller,
+            #[cfg(target_os = "android")]
+            android_bridge,
             mutations,
+            bus,
+            auth_generation,
+            explicit_sign_out_pending,
+            atr_enabled,
             settings_tx,
             tx,
             rx,
@@ -276,36 +291,57 @@ fn spawn_audio_pumps(
     }
 }
 
-fn spawn_event_bus_forwarder(rt: &Runtime, bus: &EventBus, tx: &Sender<LiveUpdate>) {
+fn spawn_event_bus_forwarder(
+    rt: &Runtime,
+    bus: &EventBus,
+    tx: &Sender<LiveUpdate>,
+    explicit_sign_out_pending: Arc<AtomicU64>,
+) {
     let mut bus_rx = bus.subscribe();
     let ui_tx = tx.clone();
     rt.spawn(async move {
-        while let Ok(ev) = bus_rx.recv().await {
-            match ev {
-                AppEvent::PlayerUpdated(snap) => {
-                    let _ = ui_tx.send(LiveUpdate::PlaybackUpdated(snap));
+        loop {
+            match bus_rx.recv().await {
+                Ok(ev) => match ev {
+                    AppEvent::PlayerUpdated(snap) => {
+                        let _ = ui_tx.send(LiveUpdate::PlaybackUpdated(snap));
+                    }
+                    AppEvent::LyricsLoaded { video_id, lyrics } => {
+                        let _ = ui_tx.send(LiveUpdate::LyricsLoaded { video_id, lyrics });
+                    }
+                    AppEvent::MutationCompleted(receipt) => {
+                        let _ = ui_tx.send(LiveUpdate::MutationCompleted(receipt));
+                    }
+                    AppEvent::MutationFailed { command, reason } => {
+                        let _ = ui_tx.send(LiveUpdate::MutationFailed { command, reason });
+                    }
+                    AppEvent::AuthStateChanged {
+                        signed_in: false, ..
+                    } => {
+                        // Suppress the "Session expired" toast only for matched user-initiated sign-outs.
+                        let was_unexpected = explicit_sign_out_pending
+                            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                            .is_err();
+                        if was_unexpected {
+                            let _ = ui_tx.send(LiveUpdate::AuthUpdated {
+                                signed_in: false,
+                                banner: "Session expired — please sign in again".into(),
+                            });
+                        }
+                    }
+                    AppEvent::DownloadUpdated(rec) => {
+                        let _ = ui_tx.send(LiveUpdate::DownloadUpdated(rec));
+                    }
+                    AppEvent::DownloadRemoved { video_id } => {
+                        let _ = ui_tx.send(LiveUpdate::DownloadRemoved(video_id));
+                    }
+                    _ => {}
+                },
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    log::warn!("event bus lagged by {skipped} events; continuing forwarder loop");
+                    continue;
                 }
-                AppEvent::LyricsLoaded { lyrics, .. } => {
-                    let _ = ui_tx.send(LiveUpdate::LyricsLoaded(lyrics));
-                }
-                AppEvent::MutationFailed { command, reason } => {
-                    let _ = ui_tx.send(LiveUpdate::MutationFailed { command, reason });
-                }
-                AppEvent::AuthStateChanged {
-                    signed_in: false, ..
-                } => {
-                    let _ = ui_tx.send(LiveUpdate::AuthUpdated {
-                        signed_in: false,
-                        banner: "Session expired — please sign in again".into(),
-                    });
-                }
-                AppEvent::DownloadUpdated(rec) => {
-                    let _ = ui_tx.send(LiveUpdate::DownloadUpdated(rec));
-                }
-                AppEvent::DownloadRemoved { video_id } => {
-                    let _ = ui_tx.send(LiveUpdate::DownloadRemoved(video_id));
-                }
-                _ => {}
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
         }
     });

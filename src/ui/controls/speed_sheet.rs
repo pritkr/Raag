@@ -1,9 +1,6 @@
 //! Playback Speed & Pitch Preservation control sheet (`0.50×` .. `2.00×` in `0.05×` steps).
 //! Zero raw color literals — semantic theme tokens only.
 
-use std::cell::Cell;
-use std::sync::{Mutex, OnceLock};
-
 use nsh_base::{button, theme};
 use nsh_core::prelude::*;
 use resonance_contract::PlaybackSpeedConfig;
@@ -16,105 +13,45 @@ use crate::ui::tokens::{
     pill_glass_hover, pill_glass_surface, radius_card, radius_panel, radius_pill,
 };
 
-static SPEED_CONFIG: OnceLock<Mutex<PlaybackSpeedConfig>> = OnceLock::new();
-static SPEED_SHEET_OPEN: OnceLock<Mutex<bool>> = OnceLock::new();
-
-thread_local! {
-    static SPEED_VERSION: Cell<Option<Signal<u64>>> = const { Cell::new(None) };
-}
-
-fn speed_lock() -> &'static Mutex<PlaybackSpeedConfig> {
-    SPEED_CONFIG.get_or_init(|| Mutex::new(PlaybackSpeedConfig::default()))
-}
-
-fn sheet_open_lock() -> &'static Mutex<bool> {
-    SPEED_SHEET_OPEN.get_or_init(|| Mutex::new(false))
-}
-
-fn bump_version() {
-    SPEED_VERSION.with(|cell| {
-        if let Some(sig) = cell.get() {
-            if sig.try_get().is_some() {
-                sig.update(|v| *v = v.wrapping_add(1));
-            } else {
-                cell.set(None);
-            }
-        }
-    });
-}
-
-fn track_version() {
-    SPEED_VERSION.with(|cell| {
-        let sig = match cell.get() {
-            Some(s) if s.try_get().is_some() => s,
-            _ => {
-                let s = signal(0u64);
-                cell.set(Some(s));
-                s
-            }
-        };
-        let _ = sig.get();
-    });
-}
-
 pub fn quantize_speed(speed: f32) -> f32 {
     let clamped = speed.clamp(0.50, 2.00);
     (clamped * 20.0).round() / 20.0
 }
 
 pub fn open_speed_sheet() {
-    *sheet_open_lock().lock().unwrap() = true;
-    bump_version();
+    store::open_speed_sheet();
 }
 
 pub fn close_speed_sheet() {
-    *sheet_open_lock().lock().unwrap() = false;
-    bump_version();
+    store::close_speed_sheet();
 }
 
 pub fn is_speed_sheet_open() -> bool {
-    track_version();
-    *sheet_open_lock().lock().unwrap()
+    store::is_speed_sheet_open()
 }
 
 pub fn current_speed_config() -> PlaybackSpeedConfig {
-    track_version();
-    *speed_lock().lock().unwrap()
+    store::playback_speed_config()
 }
 
 pub fn set_playback_speed(speed: f32) {
     let q = quantize_speed(speed);
-    {
-        let mut cfg = speed_lock().lock().unwrap();
-        cfg.speed = q;
-    }
+    store::set_playback_speed(q);
     store::set_status_banner(format!("Playback speed: {q:.2}×"));
-    bump_version();
 }
 
 pub fn step_playback_speed(delta: f32) {
-    let next = {
-        let cfg = speed_lock().lock().unwrap();
-        quantize_speed(cfg.speed + delta)
-    };
+    let next = quantize_speed(current_speed_config().speed + delta);
     set_playback_speed(next);
 }
 
 pub fn set_preserve_pitch(preserve: bool) {
-    {
-        let mut cfg = speed_lock().lock().unwrap();
-        cfg.preserve_pitch = preserve;
-    }
-    bump_version();
+    store::set_preserve_pitch(preserve);
 }
 
 pub fn reset_playback_speed() {
-    {
-        let mut cfg = speed_lock().lock().unwrap();
-        cfg.speed = 1.0;
-    }
+    store::set_playback_speed(1.0);
     store::set_status_banner("Playback speed reset to 1.0×");
-    bump_version();
 }
 
 pub fn speed_badge_label() -> Option<String> {

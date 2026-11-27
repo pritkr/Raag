@@ -5,13 +5,13 @@
 //! - 10s debounced 403 invalidation
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use async_trait::async_trait;
 use resonance_contract::{
     PoToken, PoTokenDiagnostics, PoTokenError, PoTokenProvider, PoTokenRequest, PoTokenScope,
 };
-use tokio::sync::{Mutex, watch};
+use tokio::sync::watch;
 
 use crate::unix_secs;
 
@@ -64,9 +64,39 @@ struct CacheState {
     entries: HashMap<CacheKey, CacheEntry>,
     negative: HashMap<CacheKey, NegativeEntry>,
     last_invalidated: HashMap<PoTokenScope, u64>,
+    /// Per-scope monotonic epoch bumped on `invalidate(scope)` so in-flight refreshes for that
+    /// scope cannot resurrect invalidated tokens without affecting unrelated scopes.
+    invalidation_epochs: HashMap<PoTokenScope, u64>,
+}
+
+impl CacheState {
+    fn scope_epoch(&self, scope: PoTokenScope) -> u64 {
+        self.invalidation_epochs.get(&scope).copied().unwrap_or(0)
+    }
 }
 
 type InflightSender = watch::Sender<Option<Result<PoToken, PoTokenError>>>;
+
+/// Cancel-safe RAII guard removing the single-flight key if a leader future is dropped mid-mint.
+struct InflightGuard<'a> {
+    map: &'a Mutex<HashMap<CacheKey, InflightSender>>,
+    key: Option<CacheKey>,
+}
+
+impl<'a> InflightGuard<'a> {
+    fn disarm(&mut self) {
+        if let Some(key) = self.key.take() {
+            let mut guard = self.map.lock().unwrap_or_else(|p| p.into_inner());
+            guard.remove(&key);
+        }
+    }
+}
+
+impl Drop for InflightGuard<'_> {
+    fn drop(&mut self) {
+        self.disarm();
+    }
+}
 
 /// Caching + single-flight deduplicating wrapper around any [`PoTokenProvider`].
 pub struct CachingPoTokenProvider<P: PoTokenProvider + 'static> {
@@ -130,8 +160,9 @@ impl<P: PoTokenProvider + 'static> CachingPoTokenProvider<P> {
     ) -> Option<PoToken> {
         let now = (self.clock)();
         let mut should_refresh = false;
-        let token = {
+        let (token, refresh_epoch) = {
             let mut guard = self.state.write().unwrap_or_else(|p| p.into_inner());
+            let epoch = guard.scope_epoch(key.scope);
             let entry = guard.entries.get_mut(key)?;
             if entry.token.expires_at_unix_secs <= now.saturating_add(CACHE_EXPIRY_SKEW_SECS) {
                 return None;
@@ -148,7 +179,7 @@ impl<P: PoTokenProvider + 'static> CachingPoTokenProvider<P> {
                 entry.refreshing = true;
                 should_refresh = true;
             }
-            entry.token.clone()
+            (entry.token.clone(), epoch)
         };
 
         if should_refresh {
@@ -162,15 +193,17 @@ impl<P: PoTokenProvider + 'static> CachingPoTokenProvider<P> {
                     Ok(fresh) => {
                         let minted_at = (clock)();
                         let mut guard = state.write().unwrap_or_else(|p| p.into_inner());
-                        guard.negative.remove(&key_owned);
-                        guard.entries.insert(
-                            key_owned,
-                            CacheEntry {
-                                token: fresh,
-                                minted_at_unix_secs: minted_at,
-                                refreshing: false,
-                            },
-                        );
+                        if guard.scope_epoch(key_owned.scope) == refresh_epoch {
+                            guard.negative.remove(&key_owned);
+                            guard.entries.insert(
+                                key_owned,
+                                CacheEntry {
+                                    token: fresh,
+                                    minted_at_unix_secs: minted_at,
+                                    refreshing: false,
+                                },
+                            );
+                        }
                     }
                     Err(_) => {
                         let mut guard = state.write().unwrap_or_else(|p| p.into_inner());
@@ -214,18 +247,25 @@ impl<P: PoTokenProvider + 'static> PoTokenProvider for CachingPoTokenProvider<P>
             return Err(backoff_err);
         }
 
-        // Per-key single-flight via tokio::sync::watch
-        let (leader_tx, follower_rx) = {
-            let mut inflight = self.inflight.lock().await;
+        // Per-key cancel-safe single-flight via tokio::sync::watch + RAII guard
+        let (leader_tx, mut leader_guard, follower_rx) = {
+            let mut inflight = self.inflight.lock().unwrap_or_else(|p| p.into_inner());
             if let Some(cached) = self.lookup_fresh_or_schedule_refresh(&key, req) {
                 return Ok(cached);
             }
             if let Some(existing_tx) = inflight.get(&key) {
-                (None, Some(existing_tx.subscribe()))
+                (None, None, Some(existing_tx.subscribe()))
             } else {
                 let (tx, _rx) = watch::channel(None);
                 inflight.insert(key.clone(), tx.clone());
-                (Some(tx), None)
+                (
+                    Some(tx),
+                    Some(InflightGuard {
+                        map: &self.inflight,
+                        key: Some(key.clone()),
+                    }),
+                    None,
+                )
             }
         };
 
@@ -237,47 +277,53 @@ impl<P: PoTokenProvider + 'static> PoTokenProvider for CachingPoTokenProvider<P>
         }
 
         let tx = leader_tx.expect("leader sender");
+        let mint_epoch = self
+            .state
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .scope_epoch(key.scope);
         let res = self.inner.mint_token(req).await;
         let now = (self.clock)();
 
         {
             let mut guard = self.state.write().unwrap_or_else(|p| p.into_inner());
-            match &res {
-                Ok(minted) => {
-                    guard.negative.remove(&key);
-                    guard.entries.insert(
-                        key.clone(),
-                        CacheEntry {
-                            token: minted.clone(),
-                            minted_at_unix_secs: now,
-                            refreshing: false,
-                        },
-                    );
-                }
-                Err(_) => {
-                    let next_backoff = guard
-                        .negative
-                        .get(&key)
-                        .map(|prev| {
-                            prev.backoff_secs
-                                .saturating_mul(2)
-                                .min(MAX_NEGATIVE_BACKOFF_SECS)
-                        })
-                        .unwrap_or(INITIAL_NEGATIVE_BACKOFF_SECS);
-                    guard.negative.insert(
-                        key.clone(),
-                        NegativeEntry {
-                            failed_at_unix_secs: now,
-                            backoff_secs: next_backoff,
-                        },
-                    );
+            if guard.scope_epoch(key.scope) == mint_epoch {
+                match &res {
+                    Ok(minted) => {
+                        guard.negative.remove(&key);
+                        guard.entries.insert(
+                            key.clone(),
+                            CacheEntry {
+                                token: minted.clone(),
+                                minted_at_unix_secs: now,
+                                refreshing: false,
+                            },
+                        );
+                    }
+                    Err(_) => {
+                        let next_backoff = guard
+                            .negative
+                            .get(&key)
+                            .map(|prev| {
+                                prev.backoff_secs
+                                    .saturating_mul(2)
+                                    .min(MAX_NEGATIVE_BACKOFF_SECS)
+                            })
+                            .unwrap_or(INITIAL_NEGATIVE_BACKOFF_SECS);
+                        guard.negative.insert(
+                            key.clone(),
+                            NegativeEntry {
+                                failed_at_unix_secs: now,
+                                backoff_secs: next_backoff,
+                            },
+                        );
+                    }
                 }
             }
         }
 
-        {
-            let mut inflight = self.inflight.lock().await;
-            inflight.remove(&key);
+        if let Some(mut guard) = leader_guard.take() {
+            guard.disarm();
         }
         let _ = tx.send(Some(res.clone()));
         res
@@ -285,6 +331,8 @@ impl<P: PoTokenProvider + 'static> PoTokenProvider for CachingPoTokenProvider<P>
 
     fn invalidate(&self, scope: PoTokenScope) {
         let mut guard = self.state.write().unwrap_or_else(|p| p.into_inner());
+        let next_epoch = guard.scope_epoch(scope).saturating_add(1);
+        guard.invalidation_epochs.insert(scope, next_epoch);
         guard.entries.retain(|k, _| k.scope != scope);
         guard.negative.retain(|k, _| k.scope != scope);
         drop(guard);

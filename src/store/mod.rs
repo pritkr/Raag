@@ -232,9 +232,20 @@ pub fn mount_live_engine_bridge() {
     live_engine::dispatch(EngineCommand::LoadHome);
     live_engine::dispatch(EngineCommand::LoadExplore);
     spawn(async {
+        let mut sleep_tick_accum: u8 = 0;
         loop {
             for update in live_engine::try_drain_updates() {
                 apply_live_update(update);
+            }
+            sleep_tick_accum = sleep_tick_accum.saturating_add(1);
+            if sleep_tick_accum >= 12 {
+                sleep_tick_accum = 0;
+                if ui_signal().with(|u| {
+                    matches!(u.sleep_timer.mode, ui_slice::SleepTimerMode::Countdown { .. })
+                }) {
+                    let now_ms = resonance_core::unix_secs().saturating_mul(1000);
+                    crate::ui::controls::sleep_timer_sheet::tick_sleep_timer(now_ms);
+                }
             }
             timer(Duration::from_millis(80)).await;
         }
@@ -266,21 +277,23 @@ fn apply_live_update(update: LiveUpdate) {
         LiveUpdate::HomeLoaded(res) => {
             catalog_signal().update(|c| c.apply_home_loaded(res));
         }
-        LiveUpdate::ExploreLoaded(res) => {
-            catalog_signal().update(|c| c.apply_explore_loaded(res));
-        }
         LiveUpdate::ExplorePageLoaded(res) => {
             catalog_signal().update(|c| c.apply_explore_page(res));
         }
-        LiveUpdate::MoodPlaylistsLoaded { mood, result } => {
-            catalog_signal().update(|c| c.apply_mood_playlists(Some(mood), result));
+        LiveUpdate::MoodPlaylistsLoaded {
+            generation,
+            mood,
+            result,
+        } => {
+            catalog_signal().update(|c| c.apply_mood_playlists_gen(generation, Some(mood), result));
         }
         LiveUpdate::SearchLoaded {
+            generation,
             query,
             result,
             plays,
         } => {
-            catalog_signal().update(|c| c.apply_search_loaded(&query, result, plays));
+            catalog_signal().update(|c| c.apply_search_loaded_gen(generation, &query, result, plays));
         }
         LiveUpdate::SearchSuggestionsLoaded {
             prefix,
@@ -288,13 +301,27 @@ fn apply_live_update(update: LiveUpdate) {
         } => {
             catalog_signal().update(|c| c.apply_search_suggestions(&prefix, suggestions));
         }
-        LiveUpdate::SearchContinuationLoaded { query, result } => {
-            catalog_signal().update(|c| c.append_search_page(&query, result));
+        LiveUpdate::SearchContinuationLoaded {
+            generation,
+            query,
+            result,
+        } => {
+            catalog_signal().update(|c| c.append_search_page_gen(generation, &query, result));
         }
-        LiveUpdate::CollectionLoaded(res) => match res {
-            Ok(playlist) => catalog_signal().update(|c| c.selected_collection = Some(playlist)),
+        LiveUpdate::CollectionLoaded { generation, result } => match result {
+            Ok(playlist) => {
+                catalog_signal().update(|c| {
+                    let _ = c.apply_collection_loaded_gen(generation, playlist);
+                });
+            }
             Err(err) => {
-                ui_signal().update(|u| u.set_status_banner(format!("Collection load failed: {err}")));
+                let is_current = catalog_signal().with(|c| {
+                    c.collection_generation == generation && c.selected_collection.is_some()
+                });
+                if is_current {
+                    ui_signal()
+                        .update(|u| u.set_status_banner(format!("Collection load failed: {err}")));
+                }
             }
         },
         LiveUpdate::PlaybackUpdated(mut snapshot) => {
@@ -304,8 +331,16 @@ fn apply_live_update(update: LiveUpdate) {
                 p.player = snapshot;
             });
         }
-        LiveUpdate::LyricsLoaded(doc) => {
-            playback_signal().update(|p| p.lyrics = doc);
+        LiveUpdate::LyricsLoaded { video_id, lyrics } => {
+            playback_signal().update(|p| {
+                if p.player
+                    .current_track
+                    .as_ref()
+                    .is_some_and(|t| t.id == video_id)
+                {
+                    p.lyrics = lyrics;
+                }
+            });
         }
         LiveUpdate::CacheStatsUpdated(stats) => {
             library_signal().update(|l| l.cache_stats = stats);
@@ -325,6 +360,9 @@ fn apply_live_update(update: LiveUpdate) {
         }
         LiveUpdate::PoTokenDiagnostics(diag) => {
             settings_signal().update(|s| s.po_token_diagnostics = diag);
+        }
+        LiveUpdate::MutationCompleted(receipt) => {
+            mutations_signal().update(|m| m.complete_mutation(&receipt));
         }
         LiveUpdate::MutationFailed { command, reason } => {
             mutations_signal().update(|m| {
@@ -394,6 +432,11 @@ fn apply_live_update(update: LiveUpdate) {
             apply_nsh_appearance(loaded_theme);
             if !is_fixture_mode() {
                 live_engine::dispatch(EngineCommand::SetVolume(loaded_volume));
+                live_engine::dispatch(EngineCommand::SetPlaybackSpeed {
+                    speed: settings.playback_speed.clamp(0.5, 2.0),
+                    preserve_pitch: settings.preserve_pitch,
+                });
+                live_engine::dispatch(EngineCommand::SetAtrSync(settings.atr_watchtime_sync));
             }
         }
         LiveUpdate::StatusBanner(msg) => {

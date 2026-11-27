@@ -1,6 +1,6 @@
 //! Navigation, sidebar/panel chrome, and global status toast slice (`UiSlice`).
 
-use resonance_contract::{CodecBadgeInfo, PlaybackSpeedConfig, SleepTimerState, Track};
+use resonance_contract::{SleepTimerState, Track};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SleepTimerMode {
@@ -185,8 +185,6 @@ pub struct UiSlice {
     pub sleep_timer_sheet_open: bool,
     pub speed_sheet_open: bool,
     pub sleep_timer: SleepTimerController,
-    pub playback_speed: PlaybackSpeedConfig,
-    pub codec_badge: Option<CodecBadgeInfo>,
 }
 
 impl Default for UiSlice {
@@ -205,8 +203,6 @@ impl Default for UiSlice {
             sleep_timer_sheet_open: false,
             speed_sheet_open: false,
             sleep_timer: SleepTimerController::default(),
-            playback_speed: PlaybackSpeedConfig::default(),
-            codec_badge: None,
         }
     }
 }

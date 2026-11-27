@@ -454,6 +454,7 @@ fn verify_ed25519_raw(key: &VerifyingKey, payload: &[u8], sig_raw: &[u8]) -> Cor
 }
 
 fn write_atomic_bytes(path: &Path, bytes: &[u8]) -> CoreResult<()> {
+    static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| {
             CoreError::Cache(resonance_contract::CacheError::Io(format!(
@@ -461,26 +462,39 @@ fn write_atomic_bytes(path: &Path, bytes: &[u8]) -> CoreResult<()> {
             )))
         })?;
     }
-    let tmp = path.with_extension("tmp");
-    let mut f = fs::File::create(&tmp).map_err(|e| {
-        CoreError::Cache(resonance_contract::CacheError::Io(format!(
-            "create remote_config tmp: {e}"
-        )))
-    })?;
-    f.write_all(bytes).map_err(|e| {
-        CoreError::Cache(resonance_contract::CacheError::Io(format!(
-            "write remote_config tmp: {e}"
-        )))
-    })?;
-    f.sync_all().map_err(|e| {
-        CoreError::Cache(resonance_contract::CacheError::Io(format!(
-            "sync remote_config tmp: {e}"
-        )))
-    })?;
-    fs::rename(&tmp, path).map_err(|e| {
-        CoreError::Cache(resonance_contract::CacheError::Io(format!(
+    let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("remote_config");
+    let tmp = path.with_file_name(format!("{file_name}.tmp.{}.{seq}", std::process::id()));
+    let write_res = (|| -> CoreResult<()> {
+        let mut f = fs::File::create(&tmp).map_err(|e| {
+            CoreError::Cache(resonance_contract::CacheError::Io(format!(
+                "create remote_config tmp: {e}"
+            )))
+        })?;
+        f.write_all(bytes).map_err(|e| {
+            CoreError::Cache(resonance_contract::CacheError::Io(format!(
+                "write remote_config tmp: {e}"
+            )))
+        })?;
+        f.sync_all().map_err(|e| {
+            CoreError::Cache(resonance_contract::CacheError::Io(format!(
+                "sync remote_config tmp: {e}"
+            )))
+        })?;
+        Ok(())
+    })();
+    if let Err(e) = write_res {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+    if let Err(e) = fs::rename(&tmp, path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(CoreError::Cache(resonance_contract::CacheError::Io(format!(
             "rename remote_config file: {e}"
-        )))
-    })?;
+        ))));
+    }
     Ok(())
 }

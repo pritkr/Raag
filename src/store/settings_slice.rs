@@ -143,7 +143,7 @@ impl SettingsSlice {
 
         playback.player.sponsorblock_enabled = persisted.sponsorblock_enabled;
         playback.player.offline_mode = persisted.offline_mode;
-        playback.player.volume = persisted.volume.clamp(0.0, 1.6);
+        playback.player.volume = persisted.volume.clamp(0.0, 1.0);
         playback.player.queue.autoplay_radio = persisted.autoplay_radio;
     }
 
@@ -163,7 +163,7 @@ impl SettingsSlice {
         settings.wifi_only_downloads = self.wifi_only_downloads;
         settings.offline_quality = self.offline_quality;
         settings.keep_liked_songs_offline = self.keep_liked_songs_offline;
-        settings.volume = playback.player.volume.clamp(0.0, 1.6);
+        settings.volume = playback.player.volume.clamp(0.0, 1.0);
         settings.autoplay_radio = playback.player.queue.autoplay_radio;
         settings.atr_watchtime_sync = self.atr_watchtime_sync;
         settings.offline_quota_bytes = self.offline_quota_bytes;
@@ -182,6 +182,7 @@ impl SettingsSlice {
         self.auth_backend_status.signed_in = signed_in;
         self.auth_backend_status.account_name = self.account_name.clone();
         if !signed_in {
+            self.account_profile = None;
             self.auth_backend_status.has_sapisid = false;
             self.auth_backend_status.has_3papisid = false;
         }
@@ -235,6 +236,7 @@ impl SettingsSlice {
     pub fn sign_out(&mut self) -> String {
         self.signed_in = false;
         self.account_name = None;
+        self.account_profile = None;
         self.auth_backend_status.signed_in = false;
         self.auth_backend_status.account_name = None;
         self.auth_backend_status.has_sapisid = false;

@@ -7,6 +7,7 @@
 //! - Graceful `401` cookie-rotation / session revocation recovery & `429` handling
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -45,6 +46,9 @@ pub struct InnerTubeClient {
     auth_store: Arc<dyn AuthStore>,
     solver: SharedSolver,
     session: RwLock<Option<AuthSession>>,
+    /// Monotonic epoch bumped on `sign_in`/`sign_out` so in-flight `Set-Cookie` rotations
+    /// or stale `401`s from an earlier session can never resurrect or clobber newer auth state.
+    session_epoch: AtomicU64,
     visitor_data: RwLock<Option<String>>,
     hl: String,
     gl: String,
@@ -86,6 +90,7 @@ impl InnerTubeClient {
             auth_store,
             solver,
             session: RwLock::new(saved_session),
+            session_epoch: AtomicU64::new(0),
             visitor_data: RwLock::new(saved_visitor),
             hl: "en".to_owned(),
             gl: "US".to_owned(),
@@ -171,18 +176,45 @@ impl InnerTubeClient {
         self.session.read().unwrap().clone()
     }
 
+    pub(crate) fn session_with_epoch(&self) -> (u64, Option<AuthSession>) {
+        let guard = self.session.read().unwrap();
+        (self.session_epoch.load(Ordering::SeqCst), guard.clone())
+    }
+
+    pub(crate) fn rotate_session_if_epoch(&self, expected_epoch: u64, updated: AuthSession) {
+        let mut guard = self.session.write().unwrap();
+        if self.session_epoch.load(Ordering::SeqCst) == expected_epoch && guard.is_some() {
+            let _ = self.auth_store.save_session(&updated);
+            *guard = Some(updated);
+        }
+    }
+
+    pub(crate) fn sign_out_if_epoch(&self, expected_epoch: u64) -> CoreResult<()> {
+        let mut guard = self.session.write().unwrap();
+        if self.session_epoch.load(Ordering::SeqCst) == expected_epoch {
+            self.session_epoch.fetch_add(1, Ordering::SeqCst);
+            self.auth_store.clear_session()?;
+            *guard = None;
+        }
+        Ok(())
+    }
+
     pub fn sign_in(&self, session: AuthSession) -> CoreResult<()> {
         self.auth_store.save_session(&session)?;
         if let Some(vd) = &session.visitor_data {
             self.persist_visitor_data(vd);
         }
-        *self.session.write().unwrap() = Some(session);
+        let mut guard = self.session.write().unwrap();
+        self.session_epoch.fetch_add(1, Ordering::SeqCst);
+        *guard = Some(session);
         Ok(())
     }
 
     pub fn sign_out(&self) -> CoreResult<()> {
+        let mut guard = self.session.write().unwrap();
+        self.session_epoch.fetch_add(1, Ordering::SeqCst);
         self.auth_store.clear_session()?;
-        *self.session.write().unwrap() = None;
+        *guard = None;
         Ok(())
     }
 
@@ -240,7 +272,7 @@ impl InnerTubeClient {
             req = req.header("X-Goog-Visitor-Id", v);
         }
 
-        let active_session = self.current_session();
+        let (req_epoch, active_session) = self.session_with_epoch();
         if client.allows_browser_cookies() {
             if let Some(sess) = &active_session {
                 let auth_headers = build_auth_headers(client, sess, unix_secs())?;
@@ -261,7 +293,8 @@ impl InnerTubeClient {
 
         let status = resp.status();
 
-        // Capture any Set-Cookie rotation headers for signed-in sessions on cookie-capable clients.
+        // Capture any Set-Cookie rotation headers for signed-in sessions on cookie-capable clients,
+        // fenced by `req_epoch` so an in-flight request can never resurrect a signed-out session.
         if client.allows_browser_cookies()
             && let Some(sess) = &active_session
         {
@@ -275,15 +308,14 @@ impl InnerTubeClient {
                 && let Some(updated) =
                     apply_cookie_rotation(sess, set_cookies.iter().map(String::as_str))
             {
-                let _ = self.auth_store.save_session(&updated);
-                *self.session.write().unwrap() = Some(updated);
+                self.rotate_session_if_epoch(req_epoch, updated);
             }
         }
 
         if status.as_u16() == 401 {
             // Graceful 401 cookie-rotation / revocation recovery: clear stale session and report AuthError::Revoked.
             if active_session.is_some() && client.allows_browser_cookies() {
-                let _ = self.sign_out();
+                let _ = self.sign_out_if_epoch(req_epoch);
                 return Err(CoreError::Auth(AuthError::Revoked));
             }
         }
@@ -611,6 +643,19 @@ impl MusicProvider for InnerTubeClient {
             .unwrap()
             .playback_chain(tier, has_gvs_po, false, false);
 
+        struct ProbeGuard<'a> {
+            breaker: &'a ClientCircuitBreaker,
+            kind: crate::innertube::clients::ClientKind,
+            active: bool,
+        }
+        impl Drop for ProbeGuard<'_> {
+            fn drop(&mut self) {
+                if self.active {
+                    self.breaker.release_probe(self.kind);
+                }
+            }
+        }
+
         let mut last_err = None;
         for client in chain {
             if !self.circuit_breaker.allow_request(client.kind) {
@@ -620,9 +665,15 @@ impl MusicProvider for InnerTubeClient {
                 );
                 continue;
             }
+            let mut probe_guard = ProbeGuard {
+                breaker: &self.circuit_breaker,
+                kind: client.kind,
+                active: true,
+            };
             let started = Instant::now();
             match self.resolve_with_client(client, video_id).await {
                 Ok(stream) => {
+                    probe_guard.active = false;
                     self.circuit_breaker
                         .record_success(client.kind, started.elapsed().as_millis() as u64);
                     self.write_cache_entry(&cache_key, &stream, TTL_STREAM_SECS);
@@ -643,9 +694,11 @@ impl MusicProvider for InnerTubeClient {
                         }) | CoreError::Provider(ProviderError::RateLimited { .. })
                             | CoreError::Provider(ProviderError::Network(_))
                     ) {
+                        probe_guard.active = false;
                         self.circuit_breaker
                             .record_failure(client.kind, http_status, latency_ms);
                     }
+                    // Otherwise `probe_guard` drops here and releases any HalfOpen probe slot.
                     log::warn!(
                         "stream resolve via {} failed for {video_id}: {}",
                         client.client_name,
