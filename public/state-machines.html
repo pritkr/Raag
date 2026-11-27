@@ -1,0 +1,2587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Raag State Atlas — Explicit State Machine Visualizer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #f7f6f3;
+      --surface: #ffffff;
+      --surface-subtle: #f1efe9;
+      --surface-hover: #eae7df;
+      --text: #121316;
+      --text-secondary: #4a4d55;
+      --text-muted: #6c707a;
+      --border: #e2dfd7;
+      --border-strong: #cdc8bc;
+      --accent: #d92638;
+      --accent-soft: #fcecef;
+      --accent-ink: #a31826;
+      --ok: #15803d;
+      --ok-soft: #ecfdf3;
+      --warn: #b45309;
+      --warn-soft: #fffbeb;
+      --info: #0369a1;
+      --info-soft: #f0f9ff;
+      --err: #b91c1c;
+      --err-soft: #fef2f2;
+      --node-bg: #ffffff;
+      --node-shadow: 0 2px 10px rgba(18, 19, 22, 0.05);
+      --edge-idle: #c5c0b4;
+      --edge-valid: #6e6a60;
+      --canvas-grid: rgba(18, 19, 22, 0.045);
+      --font-display: 'Bricolage Grotesque', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-body: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+      --radius: 10px;
+      --radius-lg: 14px;
+      --ease: cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    html.dark {
+      --bg: #0c0c0e;
+      --surface: #151417;
+      --surface-subtle: #1c1b1f;
+      --surface-hover: #242228;
+      --text: #f3f2ef;
+      --text-secondary: #c4c1b8;
+      --text-muted: #8e8a80;
+      --border: #27252b;
+      --border-strong: #3a3740;
+      --accent: #eb4a5a;
+      --accent-soft: #2e161a;
+      --accent-ink: #ff9aa4;
+      --ok: #4ade80;
+      --ok-soft: #11261a;
+      --warn: #fbbf24;
+      --warn-soft: #29200e;
+      --info: #38bdf8;
+      --info-soft: #0f222e;
+      --err: #f87171;
+      --err-soft: #2e1517;
+      --node-bg: #19181c;
+      --node-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+      --edge-idle: #3f3c46;
+      --edge-valid: #8d8896;
+      --canvas-grid: rgba(255, 255, 255, 0.045);
+    }
+
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html {
+      scroll-behavior: smooth;
+      font-size: 16px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-body);
+      line-height: 1.55;
+      min-height: 100vh;
+      transition: background 180ms var(--ease), color 180ms var(--ease);
+    }
+
+    html.dark body {
+      letter-spacing: 0.008em;
+    }
+
+    .mono {
+      font-family: var(--font-mono);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .tabular {
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* ── Top Bar (Strict 3-Zone Contract) ─────────────────────────────────── */
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      background: color-mix(in srgb, var(--bg) 90%, transparent);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .topbar-inner {
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 0 28px;
+      height: 60px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 32px;
+    }
+
+    .brand {
+      font-family: var(--font-display);
+      font-weight: 700;
+      font-size: 1.125rem;
+      letter-spacing: -0.02em;
+      color: var(--text);
+      text-decoration: none;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .topnav {
+      display: flex;
+      align-items: center;
+      gap: 28px;
+    }
+
+    .topnav a {
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: var(--text-secondary);
+      text-decoration: none;
+      white-space: nowrap;
+      flex-shrink: 0;
+      padding: 4px 0;
+      border-bottom: 1.5px solid transparent;
+      transition: color 150ms var(--ease), border-color 150ms var(--ease);
+    }
+
+    .topnav a:hover,
+    .topnav a:focus-visible {
+      color: var(--text);
+      border-bottom-color: var(--accent);
+      outline: none;
+    }
+
+    .theme-btn {
+      font-family: var(--font-body);
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: var(--surface);
+      background: var(--text);
+      border: 1px solid transparent;
+      border-radius: 8px;
+      padding: 8px 16px;
+      min-height: 36px;
+      cursor: pointer;
+      white-space: nowrap;
+      flex-shrink: 0;
+      transition: opacity 150ms var(--ease), transform 150ms var(--ease);
+    }
+
+    .theme-btn:hover {
+      opacity: 0.88;
+    }
+
+    .theme-btn:active {
+      transform: scale(0.98);
+    }
+
+    .theme-btn:focus-visible,
+    button:focus-visible,
+    input:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    /* ── Page Container ───────────────────────────────────────────────────── */
+    .page {
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 22px 28px 64px;
+    }
+
+    /* ── Editorial Intro ──────────────────────────────────────────────────── */
+    .hero {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 32px;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 20px;
+    }
+
+    .hero-copy {
+      max-width: 760px;
+    }
+
+    .hero-kicker {
+      font-size: 0.78125rem;
+      color: var(--text-muted);
+      margin-bottom: 5px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px 8px;
+    }
+
+    .hero h1 {
+      font-family: var(--font-display);
+      font-size: clamp(1.65rem, 2.5vw, 2.25rem);
+      font-weight: 700;
+      line-height: 1.12;
+      letter-spacing: -0.025em;
+      text-wrap: balance;
+      margin-bottom: 6px;
+    }
+
+    .hero p {
+      font-size: 0.90625rem;
+      color: var(--text-secondary);
+      max-width: 68ch;
+      line-height: 1.5;
+    }
+
+    .hero-stats {
+      display: flex;
+      align-items: baseline;
+      gap: 28px;
+      flex-shrink: 0;
+    }
+
+    .stat-item {
+      text-align: right;
+    }
+
+    .stat-value {
+      font-family: var(--font-display);
+      font-size: 1.75rem;
+      font-weight: 700;
+      line-height: 1.1;
+      letter-spacing: -0.02em;
+    }
+
+    .stat-label {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    /* ── Main Interactive Workbench ───────────────────────────────────────── */
+    .workbench {
+      display: grid;
+      grid-template-columns: 270px minmax(0, 1fr) 340px;
+      gap: 20px;
+      align-items: start;
+      margin-bottom: 56px;
+    }
+
+    .workbench > * {
+      min-width: 0;
+    }
+
+    /* Left Machine Rail */
+    .rail {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .rail-search {
+      width: 100%;
+      font-family: var(--font-body);
+      font-size: 0.8125rem;
+      color: var(--text);
+      background: var(--surface-subtle);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 9px 12px;
+      min-height: 38px;
+      transition: border-color 150ms var(--ease);
+    }
+
+    .rail-search::placeholder {
+      color: var(--text-muted);
+    }
+
+    .rail-search:focus {
+      border-color: var(--accent);
+      outline: none;
+    }
+
+    .filter-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      padding: 3px;
+      background: var(--surface-subtle);
+      border-radius: 8px;
+    }
+
+    .filter-tab {
+      flex: 1 1 auto;
+      font-family: var(--font-body);
+      font-size: 0.75rem;
+      font-weight: 500;
+      color: var(--text-secondary);
+      background: transparent;
+      border: none;
+      border-radius: 6px;
+      padding: 6px 8px;
+      min-height: 32px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 150ms var(--ease), color 150ms var(--ease);
+    }
+
+    .filter-tab:hover {
+      color: var(--text);
+    }
+
+    .filter-tab.active {
+      background: var(--surface);
+      color: var(--text);
+      font-weight: 600;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+    }
+
+    .machine-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      max-height: 560px;
+      overflow-y: auto;
+    }
+
+    .machine-item {
+      width: 100%;
+      text-align: left;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 9px;
+      padding: 10px 12px;
+      cursor: pointer;
+      transition: background 140ms var(--ease), border-color 140ms var(--ease);
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .machine-item:hover {
+      background: var(--surface-subtle);
+    }
+
+    .machine-item.active {
+      background: var(--accent-soft);
+      border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+    }
+
+    .machine-item-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .machine-item-name {
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .machine-item.active .machine-item-name {
+      color: var(--accent-ink);
+    }
+
+    .machine-item-count {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      flex-shrink: 0;
+    }
+
+    .machine-item-meta {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Center Interactive Diagram Stage */
+    .stage-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .stage-header {
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: nowrap;
+    }
+
+    .stage-header-main {
+      min-width: 0;
+      flex: 1 1 auto;
+    }
+
+    .stage-title {
+      font-family: var(--font-display);
+      font-size: 1.1875rem;
+      font-weight: 700;
+      letter-spacing: -0.015em;
+      line-height: 1.2;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .stage-subtitle {
+      font-size: 0.78125rem;
+      color: var(--text-muted);
+      margin-top: 3px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .stage-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+
+    .btn-secondary {
+      font-family: var(--font-body);
+      font-size: 0.8125rem;
+      font-weight: 500;
+      color: var(--text);
+      background: var(--surface-subtle);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 7px 14px;
+      min-height: 36px;
+      cursor: pointer;
+      white-space: nowrap;
+      flex-shrink: 0;
+      transition: background 140ms var(--ease), border-color 140ms var(--ease);
+    }
+
+    .btn-secondary:hover {
+      background: var(--surface-hover);
+      border-color: var(--border-strong);
+    }
+
+    .btn-primary {
+      font-family: var(--font-body);
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: #ffffff;
+      background: var(--accent);
+      border: 1px solid transparent;
+      border-radius: 8px;
+      padding: 7px 14px;
+      min-height: 36px;
+      cursor: pointer;
+      white-space: nowrap;
+      flex-shrink: 0;
+      transition: opacity 140ms var(--ease), transform 140ms var(--ease);
+    }
+
+    .btn-primary:hover {
+      opacity: 0.9;
+    }
+
+    .btn-primary:active {
+      transform: scale(0.98);
+    }
+
+    .canvas-wrap {
+      position: relative;
+      background-color: var(--bg);
+      background-image:
+        radial-gradient(circle at 1px 1px, var(--canvas-grid) 1.2px, transparent 0);
+      background-size: 22px 22px;
+      min-height: 430px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 8px 12px;
+    }
+
+    #fsm-svg {
+      width: 100%;
+      height: auto;
+      max-height: 455px;
+      display: block;
+      user-select: none;
+    }
+
+    .stage-footer {
+      padding: 12px 22px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .legend {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+    }
+
+    .legend-swatch {
+      width: 10px;
+      height: 10px;
+      border-radius: 3px;
+      border: 1.5px solid currentColor;
+      display: inline-block;
+    }
+
+    /* SVG Elements */
+    .fsm-node {
+      cursor: pointer;
+      transition: opacity 160ms var(--ease);
+    }
+
+    .fsm-node rect.node-box {
+      fill: var(--node-bg);
+      stroke: var(--border-strong);
+      stroke-width: 1.5;
+      transition: stroke 160ms var(--ease), fill 160ms var(--ease), stroke-width 160ms var(--ease);
+      filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.06));
+    }
+
+    html.dark .fsm-node rect.node-box {
+      filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.35));
+    }
+
+    .fsm-node:hover rect.node-box {
+      stroke: var(--text);
+    }
+
+    .fsm-node.is-current rect.node-box {
+      fill: var(--accent-soft);
+      stroke: var(--accent);
+      stroke-width: 2.5;
+    }
+
+    .fsm-node.is-reachable rect.node-box {
+      stroke: var(--info);
+      stroke-width: 1.75;
+      stroke-dasharray: 4 2.5;
+    }
+
+    .fsm-node.is-error.is-current rect.node-box {
+      fill: var(--err-soft);
+      stroke: var(--err);
+    }
+
+    .fsm-node.is-ok.is-current rect.node-box {
+      fill: var(--ok-soft);
+      stroke: var(--ok);
+    }
+
+    .fsm-node.is-warn.is-current rect.node-box {
+      fill: var(--warn-soft);
+      stroke: var(--warn);
+    }
+
+    .node-label {
+      font-family: var(--font-display);
+      font-size: 13px;
+      font-weight: 600;
+      fill: var(--text);
+      text-anchor: middle;
+      pointer-events: none;
+    }
+
+    .node-role {
+      font-family: var(--font-mono);
+      font-size: 9.5px;
+      font-weight: 500;
+      fill: var(--text-muted);
+      text-anchor: middle;
+      pointer-events: none;
+    }
+
+    .fsm-node.is-current .node-role {
+      fill: var(--accent-ink);
+    }
+
+    .fsm-node.is-ok.is-current .node-role {
+      fill: var(--ok);
+    }
+
+    .fsm-node.is-warn.is-current .node-role {
+      fill: var(--warn);
+    }
+
+    .fsm-node.is-error.is-current .node-role {
+      fill: var(--err);
+    }
+
+    .fsm-edge-hit {
+      fill: none;
+      stroke: transparent;
+      stroke-width: 16;
+      cursor: pointer;
+    }
+
+    .fsm-edge {
+      fill: none;
+      stroke: var(--edge-idle);
+      stroke-width: 1.4;
+      opacity: 0.34;
+      transition: stroke 160ms var(--ease), stroke-width 160ms var(--ease), opacity 160ms var(--ease);
+      pointer-events: none;
+    }
+
+    .fsm-edge.is-valid {
+      stroke: var(--edge-valid);
+      stroke-width: 1.9;
+      opacity: 0.94;
+    }
+
+    .fsm-edge.is-last-fired {
+      stroke: var(--accent);
+      stroke-width: 2.5;
+      opacity: 1;
+    }
+
+    .fsm-edge.is-hovered {
+      stroke: var(--accent);
+      stroke-width: 2.3;
+      opacity: 1;
+    }
+
+    .edge-label {
+      font-family: var(--font-mono);
+      font-size: 9.75px;
+      font-weight: 500;
+      fill: var(--text-muted);
+      opacity: 0.24;
+      text-anchor: middle;
+      paint-order: stroke;
+      stroke: var(--bg);
+      stroke-width: 4.5px;
+      stroke-linejoin: round;
+      pointer-events: none;
+      transition: fill 160ms var(--ease), opacity 160ms var(--ease);
+    }
+
+    .edge-label.is-valid {
+      fill: var(--text-secondary);
+      font-weight: 600;
+      opacity: 1;
+    }
+
+    .edge-label.is-last-fired {
+      fill: var(--accent);
+      font-weight: 600;
+      opacity: 1;
+    }
+
+    .edge-label.is-hovered {
+      fill: var(--accent);
+      font-weight: 600;
+      opacity: 1;
+    }
+
+    @keyframes pulseTravel {
+      0% { stroke-dashoffset: 100; opacity: 1; }
+      100% { stroke-dashoffset: 0; opacity: 0.25; }
+    }
+
+    .edge-pulse {
+      fill: none;
+      stroke: var(--accent);
+      stroke-width: 3.2;
+      stroke-linecap: round;
+      stroke-dasharray: 18 100;
+      pathLength: 100;
+      animation: pulseTravel 520ms var(--ease) forwards;
+      pointer-events: none;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .edge-pulse { animation: none; opacity: 0; }
+      *, *::before, *::after { transition-duration: 0.01ms !important; }
+    }
+
+    /* Right Inspector & Simulator Deck */
+    .inspector {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+
+    .insp-block {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .insp-block + .insp-block {
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+    }
+
+    .insp-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .current-state-name {
+      font-family: var(--font-display);
+      font-size: 1.35rem;
+      font-weight: 700;
+      line-height: 1.2;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .state-desc {
+      font-size: 0.84375rem;
+      color: var(--text-secondary);
+      line-height: 1.5;
+    }
+
+    .fence-readout {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .fence-metric {
+      padding: 8px 10px;
+      background: var(--surface-subtle);
+      border-radius: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .fence-metric-name {
+      font-size: 0.6875rem;
+      color: var(--text-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .fence-metric-val {
+      font-size: 0.9375rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .trigger-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .trigger-btn {
+      width: 100%;
+      text-align: left;
+      background: var(--surface-subtle);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 9px 12px;
+      min-height: 40px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      transition: background 140ms var(--ease), border-color 140ms var(--ease);
+    }
+
+    .trigger-btn:hover {
+      background: var(--surface-hover);
+      border-color: var(--accent);
+    }
+
+    .trigger-event {
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .trigger-target {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .race-btn {
+      width: 100%;
+      text-align: left;
+      background: var(--warn-soft);
+      border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+      border-radius: 8px;
+      padding: 9px 12px;
+      min-height: 40px;
+      cursor: pointer;
+      font-family: var(--font-body);
+      font-size: 0.78125rem;
+      font-weight: 600;
+      line-height: 1.35;
+      color: var(--warn);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      transition: opacity 140ms var(--ease);
+    }
+
+    .race-btn-tag {
+      font-size: 0.7rem;
+      flex-shrink: 0;
+      opacity: 0.85;
+    }
+
+    .race-btn:hover {
+      opacity: 0.86;
+    }
+
+    .invariant-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .invariant-list li {
+      font-size: 0.8125rem;
+      color: var(--text-secondary);
+      line-height: 1.45;
+      padding-left: 14px;
+      position: relative;
+    }
+
+    .invariant-list li::before {
+      content: '–';
+      position: absolute;
+      left: 0;
+      color: var(--text-muted);
+    }
+
+    .trace-log {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      max-height: 150px;
+      overflow-y: auto;
+    }
+
+    .trace-entry {
+      font-size: 0.75rem;
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 4px 0;
+      border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+    }
+
+    .trace-entry:last-child {
+      border-bottom: none;
+    }
+
+    .trace-msg {
+      color: var(--text-secondary);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .trace-outcome {
+      flex-shrink: 0;
+      font-weight: 600;
+    }
+
+    .trace-outcome.ok { color: var(--ok); }
+    .trace-outcome.fenced { color: var(--warn); }
+    .trace-outcome.rejected { color: var(--err); }
+
+    /* ── Lower Reference Sections ─────────────────────────────────────────── */
+    .section {
+      padding-top: 44px;
+      margin-top: 44px;
+      border-top: 1px solid var(--border);
+    }
+
+    .section-head {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 22px;
+      flex-wrap: wrap;
+    }
+
+    .section h2 {
+      font-family: var(--font-display);
+      font-size: 1.5rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      line-height: 1.2;
+    }
+
+    .section-desc {
+      font-size: 0.875rem;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    /* Clean Data Tables */
+    .table-wrap {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.84375rem;
+    }
+
+    th {
+      text-align: left;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface-subtle);
+      white-space: nowrap;
+    }
+
+    td {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+      color: var(--text-secondary);
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    tbody tr.clickable {
+      cursor: pointer;
+      transition: background 120ms var(--ease);
+    }
+
+    tbody tr.clickable:hover {
+      background: var(--surface-subtle);
+    }
+
+    tbody tr.clickable.selected-row {
+      background: var(--accent-soft);
+    }
+
+    .cell-title {
+      font-weight: 600;
+      color: var(--text);
+      white-space: nowrap;
+    }
+
+    .cell-path {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    /* Transition Matrix */
+    .matrix-table th,
+    .matrix-table td {
+      text-align: center;
+      padding: 10px 12px;
+    }
+
+    .matrix-table th:first-child,
+    .matrix-table td:first-child {
+      text-align: left;
+      font-weight: 600;
+      color: var(--text);
+      background: var(--surface-subtle);
+      position: sticky;
+      left: 0;
+    }
+
+    .matrix-cell-btn {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      font-weight: 500;
+      color: var(--info);
+      background: var(--info-soft);
+      border: 1px solid color-mix(in srgb, var(--info) 28%, transparent);
+      border-radius: 6px;
+      padding: 4px 8px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 120ms var(--ease);
+    }
+
+    .matrix-cell-btn:hover {
+      background: var(--accent-soft);
+      color: var(--accent-ink);
+      border-color: var(--accent);
+    }
+
+    .matrix-self {
+      color: var(--text-muted);
+      font-size: 0.75rem;
+    }
+
+    .matrix-blocked {
+      color: color-mix(in srgb, var(--text-muted) 45%, transparent);
+      font-size: 0.75rem;
+    }
+
+    .footer {
+      margin-top: 64px;
+      padding-top: 24px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+      font-size: 0.8125rem;
+      color: var(--text-muted);
+    }
+
+    /* ── Responsive Breakpoints ───────────────────────────────────────────── */
+    @media (max-width: 1200px) {
+      .workbench {
+        grid-template-columns: 240px minmax(0, 1fr);
+      }
+      .inspector {
+        grid-column: 1 / -1;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 20px;
+      }
+      .insp-block + .insp-block {
+        padding-top: 0;
+        border-top: none;
+        padding-left: 18px;
+        border-left: 1px solid var(--border);
+      }
+    }
+
+    @media (max-width: 860px) {
+      .topbar-inner { padding: 0 16px; gap: 16px; }
+      .topnav { display: none; }
+      .page { padding: 20px 16px 56px; }
+      .hero { flex-direction: column; align-items: flex-start; gap: 16px; }
+      .hero-stats { width: 100%; justify-content: space-between; }
+      .stat-item { text-align: left; }
+      .stage-header { flex-wrap: wrap; align-items: flex-start; }
+      .stage-subtitle { white-space: normal; }
+      .workbench { grid-template-columns: 1fr; }
+      .inspector { grid-template-columns: 1fr; }
+      .insp-block + .insp-block {
+        padding-left: 0;
+        border-left: none;
+        padding-top: 16px;
+        border-top: 1px solid var(--border);
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a href="#stage" class="brand">Raag State Atlas</a>
+      <nav class="topnav" aria-label="Sections">
+        <a href="#stage">Interactive Stage</a>
+        <a href="#overview">Machine Index</a>
+        <a href="#fences">Concurrency Fences</a>
+        <a href="#matrix">Transition Matrix</a>
+      </nav>
+      <button id="theme-toggle" class="theme-btn" type="button">Dark Theme</button>
+    </div>
+  </header>
+
+  <main class="page">
+    <section class="hero">
+      <div class="hero-copy">
+        <div class="hero-kicker">
+          <span>Resonance (Raag)</span>
+          <span aria-hidden="true">·</span>
+          <span>Pure Rust Core &amp; NSH UI Architecture</span>
+          <span aria-hidden="true">·</span>
+          <span>Explicit State Machine Reference</span>
+        </div>
+        <h1>Every State Machine, Fence &amp; Transition in One Interactive Map</h1>
+        <p>
+          Explore all 11 explicit finite state machines across audio playback, InnerTube resilience,
+          offline downloads, authentication, casting, Listen Together rooms, and the web preview host.
+          Click any reachable node, edge, or trigger button to step through transitions and test stale-event fencing live.
+        </p>
+      </div>
+      <div class="hero-stats">
+        <div class="stat-item">
+          <div class="stat-value tabular" id="stat-machines">11</div>
+          <div class="stat-label">State Machines</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value tabular" id="stat-states">57</div>
+          <div class="stat-label">Explicit States</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value tabular" id="stat-edges">0</div>
+          <div class="stat-label">Verified Edges</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="stage" class="workbench" aria-label="Interactive State Machine Simulator">
+      <!-- Left Rail: Machine Picker -->
+      <aside class="rail" aria-label="State Machines">
+        <input
+          id="machine-search"
+          class="rail-search"
+          type="search"
+          placeholder="Filter machines or states..."
+          aria-label="Filter state machines"
+        />
+        <div class="filter-row" role="tablist" aria-label="Domain filter">
+          <button class="filter-tab active" type="button" data-domain="all">All</button>
+          <button class="filter-tab" type="button" data-domain="audio">Audio</button>
+          <button class="filter-tab" type="button" data-domain="network">Network</button>
+          <button class="filter-tab" type="button" data-domain="system">System</button>
+        </div>
+        <div id="machine-list" class="machine-list" role="listbox" aria-label="Select a state machine"></div>
+      </aside>
+
+      <!-- Center Stage: Interactive SVG Diagram -->
+      <div class="stage-panel">
+        <div class="stage-header">
+          <div class="stage-header-main">
+            <h2 id="stage-title" class="stage-title">Playback Lifecycle</h2>
+            <div id="stage-subtitle" class="stage-subtitle"></div>
+          </div>
+          <div class="stage-controls">
+            <button id="btn-walkthrough" class="btn-primary" type="button">Play Walkthrough</button>
+            <button id="btn-reset" class="btn-secondary" type="button">Reset State</button>
+          </div>
+        </div>
+        <div class="canvas-wrap">
+          <svg
+            id="fsm-svg"
+            viewBox="0 0 860 470"
+            role="img"
+            aria-label="Interactive state machine graph"
+          ></svg>
+        </div>
+        <div class="stage-footer">
+          <div class="legend">
+            <span class="legend-item">
+              <span class="legend-swatch" style="color: var(--accent); background: var(--accent-soft);"></span>
+              Active state
+            </span>
+            <span class="legend-item">
+              <span class="legend-swatch" style="color: var(--info); border-style: dashed;"></span>
+              Reachable next (click to fire)
+            </span>
+            <span class="legend-item">
+              <span class="legend-swatch" style="color: var(--ok); background: var(--ok-soft);"></span>
+              Committed / Healthy
+            </span>
+            <span class="legend-item">
+              <span class="legend-swatch" style="color: var(--err); background: var(--err-soft);"></span>
+              Error / Rollback
+            </span>
+          </div>
+          <span>Click any dashed node or solid arrow to transition</span>
+        </div>
+      </div>
+
+      <!-- Right Deck: Inspector, Triggers, Race Tester & Trace -->
+      <aside class="inspector" aria-label="State Inspector and Simulator">
+        <div class="insp-block">
+          <div class="insp-label">
+            <span>Current State</span>
+            <span id="current-role-text" class="mono">Initial</span>
+          </div>
+          <div id="current-state-name" class="current-state-name">Idle</div>
+          <p id="current-state-desc" class="state-desc"></p>
+          <div id="fence-readout" class="fence-readout"></div>
+        </div>
+
+        <div class="insp-block">
+          <div class="insp-label">
+            <span>Available Transitions</span>
+            <span id="trigger-count" class="mono">0</span>
+          </div>
+          <div id="trigger-list" class="trigger-list"></div>
+          <button id="btn-race" class="race-btn" type="button" hidden>
+            <span id="race-btn-label">Test Stale Event Fence</span>
+            <span class="mono race-btn-tag">Fence</span>
+          </button>
+        </div>
+
+        <div class="insp-block">
+          <div class="insp-label">
+            <span>Invariants &amp; Guards</span>
+          </div>
+          <ul id="invariant-list" class="invariant-list"></ul>
+        </div>
+
+        <div class="insp-block">
+          <div class="insp-label">
+            <span>Transition Trace</span>
+            <button id="btn-clear-trace" type="button" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:0.75rem;">Clear</button>
+          </div>
+          <div id="trace-log" class="trace-log"></div>
+        </div>
+      </aside>
+    </section>
+
+    <!-- Section 2: Complete Index -->
+    <section id="overview" class="section">
+      <div class="section-head">
+        <div>
+          <h2>01. Complete State Machine Index</h2>
+          <p class="section-desc">All 11 explicit state machines recovered and hardened across Resonance. Select any row to inspect it interactively above.</p>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Machine</th>
+              <th>Domain</th>
+              <th>Source Module</th>
+              <th>States</th>
+              <th>Authoritative Fence</th>
+              <th>Recovery Guarantee</th>
+            </tr>
+          </thead>
+          <tbody id="overview-tbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Section 3: Concurrency Fences & Ordering Semantics -->
+    <section id="fences" class="section">
+      <div class="section-head">
+        <div>
+          <h2>02. Concurrency Fences &amp; Ordering Guarantees</h2>
+          <p class="section-desc">Every monotonic epoch, Lamport clock, mutex serialization boundary, and RAII lease preventing async races.</p>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Fence Mechanism</th>
+              <th>Owner</th>
+              <th>Algebraic Property</th>
+              <th>Race Eliminated</th>
+            </tr>
+          </thead>
+          <tbody id="fences-tbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Section 4: Live Transition Adjacency Matrix -->
+    <section id="matrix" class="section">
+      <div class="section-head">
+        <div>
+          <h2 id="matrix-heading">03. Transition Matrix — Playback Lifecycle</h2>
+          <p class="section-desc">Complete From × To reachability grid for the selected machine. Click any active transition cell to jump directly to that state.</p>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table id="matrix-table" class="matrix-table"></table>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <span>Raag State Atlas · Generated from verified Rust &amp; TypeScript state contracts</span>
+      <span>Keyboard shortcuts: ← / → switch machines · R reset state · Space toggle walkthrough</span>
+    </footer>
+  </main>
+
+  <script>
+    const STATE_MACHINES = [
+      {
+        id: 'playback',
+        name: 'Playback Lifecycle',
+        enumName: 'PlayerState',
+        domain: 'audio',
+        domainLabel: 'Audio & Playback',
+        file: 'crates/contract/src/state.rs · playback/controller.rs',
+        fenceSummary: 'play_generation + pause_epoch + proxy_generation',
+        recoverySummary: 'Stale async loads & radio fetches abort without clobbering active track',
+        initial: 'Idle',
+        counters: [
+          { key: 'play_generation', label: 'play_generation', value: 1 },
+          { key: 'pause_epoch', label: 'pause_epoch', value: 0 }
+        ],
+        raceTest: {
+          label: 'Inject Stale Stream Resolve (gen - 1)',
+          detail: 'load_and_play_current checks play_generation == my_gen before buffering/playing — dropped cleanly.'
+        },
+        invariants: [
+          'Every track switch increments play_generation and LoopbackProxy generation atomically.',
+          'pause() bumps pause_epoch so an in-flight resolve cannot auto-resume a user-paused track.',
+          'clear_queue() and active-track removal stop audio and invalidate in-flight telemetry.',
+          'AudioTelemetry::Ended honors SleepTimerState::EndOfTrack before RepeatMode::One or autoplay radio.'
+        ],
+        walkthrough: ['load_track', 'stream_ready', 'first_frame', 'user_pause', 'user_resume', 'network_stall', 'recovered', 'clear_queue'],
+        nodes: [
+          { id: 'Idle', role: 'Initial', tone: 'neutral', x: 112, y: 210, desc: 'No track active. Queue may be empty or cleared; audio backend stopped.' },
+          { id: 'Loading', role: 'Transient', tone: 'neutral', x: 315, y: 105, desc: 'Resolving offline file, local media, or InnerTube stream URL under my_gen & start_pause_epoch.' },
+          { id: 'Buffering', role: 'Transient', tone: 'warn', x: 545, y: 105, desc: 'Proxy URL handed to native audio backend; waiting for initial PCM frames.' },
+          { id: 'Playing', role: 'Active', tone: 'ok', x: 748, y: 210, desc: 'Audio rendering. Drives 50% pre-resolve, 75% proxy pre-warm, SponsorBlock skips, and 5s resume saves.' },
+          { id: 'Paused', role: 'Held', tone: 'neutral', x: 545, y: 365, desc: 'Playback suspended; pause_epoch incremented to fence concurrent stream loads.' },
+          { id: 'Recovering', role: 'Recovery', tone: 'warn', x: 315, y: 365, desc: 'Handling transient upstream 403/network drop while keeping track context intact.' },
+          { id: 'Error', role: 'Fault', tone: 'err', x: 112, y: 390, desc: 'Unrecoverable stream or backend failure; redacted message emitted to UI toast.' }
+        ],
+        edges: [
+          { id: 'load_track', from: 'Idle', to: 'Loading', label: 'play_track()', bump: ['play_generation'], curve: -24, labelOffset: [-14, -10] },
+          { id: 'stream_ready', from: 'Loading', to: 'Buffering', label: 'url_resolved', curve: -18, labelOffset: [0, -10] },
+          { id: 'load_paused', from: 'Loading', to: 'Paused', label: 'pause_epoch changed', bump: ['pause_epoch'], curve: 26, labelT: 0.35, labelOffset: [42, -8] },
+          { id: 'load_error', from: 'Loading', to: 'Error', label: 'resolve_err', curve: 22, labelT: 0.62, labelOffset: [16, 12] },
+          { id: 'first_frame', from: 'Buffering', to: 'Playing', label: 'audio_started', curve: -24, labelOffset: [20, -12] },
+          { id: 'buf_pause', from: 'Buffering', to: 'Paused', label: 'pause()', bump: ['pause_epoch'], curve: 24, labelT: 0.55, labelOffset: [28, 0] },
+          { id: 'buf_recover', from: 'Buffering', to: 'Recovering', label: '403 / stall', curve: -28, labelT: 0.66, labelOffset: [-26, 8] },
+          { id: 'user_pause', from: 'Playing', to: 'Paused', label: 'pause()', bump: ['pause_epoch'], curve: 28, labelOffset: [24, 10] },
+          { id: 'user_resume', from: 'Paused', to: 'Playing', label: 'resume()', curve: 26, labelOffset: [-22, -8] },
+          { id: 'play_rebuffer', from: 'Playing', to: 'Buffering', label: 'underrun', curve: 26, labelOffset: [-18, 12] },
+          { id: 'network_stall', from: 'Playing', to: 'Recovering', label: 'stream_expired', curve: 10, labelT: 0.62, labelOffset: [0, 14] },
+          { id: 'recovered', from: 'Recovering', to: 'Playing', label: 're-resolved', curve: -54, labelT: 0.38, labelOffset: [-10, -10] },
+          { id: 'recover_fail', from: 'Recovering', to: 'Error', label: 'retries_exhausted', curve: 20, labelOffset: [8, 16] },
+          { id: 'next_track', from: 'Playing', to: 'Loading', label: 'next() / ended', bump: ['play_generation'], curve: 125, labelT: 0.5, labelOffset: [0, -10] },
+          { id: 'clear_queue', from: 'Playing', to: 'Idle', label: 'clear_queue()', bump: ['play_generation'], curve: 0, labelT: 0.5, labelOffset: [0, -10] },
+          { id: 'pause_clear', from: 'Paused', to: 'Idle', label: 'clear_queue()', bump: ['play_generation'], curve: -20, labelT: 0.34, labelOffset: [-24, 14] },
+          { id: 'retry_load', from: 'Error', to: 'Loading', label: 'retry / play()', bump: ['play_generation'], curve: -32, labelT: 0.58, labelOffset: [-34, -8] },
+          { id: 'error_reset', from: 'Error', to: 'Idle', label: 'clear_queue()', bump: ['play_generation'], curve: 0, labelOffset: [-48, 0] }
+        ]
+      },
+      {
+        id: 'circuit_breaker',
+        name: 'InnerTube Circuit Breaker',
+        enumName: 'BreakerPhase',
+        domain: 'network',
+        domainLabel: 'Network & Auth',
+        file: 'crates/core/src/innertube/matrix.rs · client.rs',
+        fenceSummary: 'Single-probe BreakerPhase + RAII ProbeGuard::Drop',
+        recoverySummary: 'Cancelled or panicked probe releases lease immediately instead of wedging client for 30s',
+        initial: 'Closed',
+        counters: [
+          { key: 'consecutive_failures', label: 'consecutive_failures', value: 0 },
+          { key: 'probe_leases', label: 'active_probes', value: 0 }
+        ],
+        raceTest: {
+          label: 'Simulate Second Concurrent Probe in HalfOpenProbing',
+          detail: 'allow_request_at() denies concurrent probe while HalfOpenProbing lease is active (< 30s).'
+        },
+        invariants: [
+          'Illegal product state (probing=true while Closed) is unrepresentable in BreakerPhase enum.',
+          'Trips Open on >= 3 consecutive failures or rolling 403/429 rate >= 50%.',
+          'Cooldown expiration exposes CircuitState::HalfOpen; first caller acquires HalfOpenProbing.',
+          'ProbeGuard::Drop calls release_probe() if the async task is cancelled before recording an outcome.'
+        ],
+        walkthrough: ['trip_failures', 'cooldown_elapsed', 'acquire_probe', 'probe_cancelled', 'acquire_probe', 'probe_succeeded'],
+        nodes: [
+          { id: 'Closed', role: 'Healthy', tone: 'ok', x: 145, y: 235, desc: 'Requests flow freely; rolling window tracks success rate, 403/429 rates, and EWMA latency.' },
+          { id: 'Open', role: 'Tripped', tone: 'err', x: 430, y: 105, desc: 'Client skipped by ClientMatrix during cooldown window; opened_at timestamp recorded.' },
+          { id: 'HalfOpenReady', role: 'Cooldown Met', tone: 'warn', x: 715, y: 235, desc: 'Open { opened_at } has exceeded cooldown; next request wins single probe slot.' },
+          { id: 'HalfOpenProbing', role: 'Leased Probe', tone: 'warn', x: 430, y: 365, desc: 'Single probe in flight guarded by RAII ProbeGuard; concurrent callers are skipped.' }
+        ],
+        edges: [
+          { id: 'trip_failures', from: 'Closed', to: 'Open', label: '3x fail / 403-429 >= 50%', bump: ['consecutive_failures'], curve: -26, labelOffset: [-26, -12] },
+          { id: 'cooldown_elapsed', from: 'Open', to: 'HalfOpenReady', label: 'now - opened_at >= cooldown', curve: -26, labelOffset: [26, -12] },
+          { id: 'acquire_probe', from: 'HalfOpenReady', to: 'HalfOpenProbing', label: 'allow_request() [1 lease]', bump: ['probe_leases'], curve: -18, labelOffset: [-16, -12] },
+          { id: 'probe_succeeded', from: 'HalfOpenProbing', to: 'Closed', label: 'record_success()', reset: ['consecutive_failures', 'probe_leases'], curve: 26, labelOffset: [-24, 14] },
+          { id: 'probe_failed', from: 'HalfOpenProbing', to: 'Open', label: 'record_failure()', bump: ['consecutive_failures'], reset: ['probe_leases'], curve: 0, labelOffset: [58, 0] },
+          { id: 'probe_cancelled', from: 'HalfOpenProbing', to: 'HalfOpenReady', label: 'ProbeGuard::Drop -> release_probe()', reset: ['probe_leases'], curve: 62, labelT: 0.56, labelOffset: [34, 24] }
+        ]
+      },
+      {
+        id: 'offline_download',
+        name: 'Offline Download Vault',
+        enumName: 'DownloadStatus',
+        domain: 'system',
+        domainLabel: 'Storage & Sync',
+        file: 'crates/contract/src/domain.rs · offline/worker.rs',
+        fenceSummary: 'active_jobs mutex + ChunkFetch::StreamChanged restart',
+        recoverySummary: 'Eliminates enqueue/resume TOCTOU and prevents .part corruption on 403 itag drift',
+        initial: 'Queued',
+        counters: [
+          { key: 'download_attempts', label: 'stream_restarts', value: 0 },
+          { key: 'active_workers', label: 'active_jobs', value: 0 }
+        ],
+        raceTest: {
+          label: 'Simulate Concurrent Duplicate enqueue()',
+          detail: 'active_jobs.lock().await is held across status check, quota check, SQLite upsert, and spawn — duplicate rejected.'
+        },
+        invariants: [
+          'Strict can_transition_to() prevents skipping Tagging or mutating Completed records directly.',
+          'enqueue() and resume() hold active_jobs lock across quota check, DB write, and worker spawn.',
+          'If HTTP 403 re-resolution changes itag or content_length, worker restarts cleanly with truncated .part.',
+          'Tagging verifies SHA-256 and atomically renames .part to final relative path before Completed.'
+        ],
+        walkthrough: ['start_worker', 'stream_403_itag_change', 'chunks_complete', 'commit_verified'],
+        nodes: [
+          { id: 'Queued', role: 'Initial', tone: 'neutral', x: 115, y: 170, desc: 'Quota checked and row persisted; waiting for semaphore permit.' },
+          { id: 'Downloading', role: 'Active', tone: 'warn', x: 335, y: 170, desc: 'Streaming ranged chunks into .part file with 403 recovery and resume offset.' },
+          { id: 'Tagging', role: 'Verifying', tone: 'warn', x: 555, y: 170, desc: 'Computing SHA-256 digest, writing audio tags, and atomically committing file.' },
+          { id: 'Completed', role: 'Committed', tone: 'ok', x: 740, y: 170, desc: 'Offline file immutable and playable with zero network I/O.' },
+          { id: 'Paused', role: 'Suspended', tone: 'neutral', x: 335, y: 360, desc: 'CancellationToken triggered for pause; partial bytes preserved on disk.' },
+          { id: 'Failed', role: 'Fault', tone: 'err', x: 555, y: 360, desc: 'Network, quota, or digest mismatch error; retryable back to Queued.' },
+          { id: 'Cancelled', role: 'Aborted', tone: 'neutral', x: 115, y: 360, desc: 'User cancelled transfer; .part cleaned up and row retained for re-queue.' }
+        ],
+        edges: [
+          { id: 'start_worker', from: 'Queued', to: 'Downloading', label: 'acquire_permit', bump: ['active_workers'], curve: -16 },
+          { id: 'stream_403_itag_change', from: 'Downloading', to: 'Downloading', label: 'StreamChanged -> truncate .part', bump: ['download_attempts'], loop: true },
+          { id: 'chunks_complete', from: 'Downloading', to: 'Tagging', label: 'all_bytes_written', curve: -16 },
+          { id: 'commit_verified', from: 'Tagging', to: 'Completed', label: 'sha256_ok + rename', reset: ['active_workers'], curve: -16 },
+          { id: 'pause_dl', from: 'Downloading', to: 'Paused', label: 'pause()', reset: ['active_workers'], curve: 26 },
+          { id: 'resume_dl', from: 'Paused', to: 'Downloading', label: 'resume()', bump: ['active_workers'], curve: 26 },
+          { id: 'dl_failed', from: 'Downloading', to: 'Failed', label: 'io / 403 fail', reset: ['active_workers'], curve: 18 },
+          { id: 'tag_failed', from: 'Tagging', to: 'Failed', label: 'digest_mismatch', reset: ['active_workers'], curve: 0 },
+          { id: 'retry_failed', from: 'Failed', to: 'Queued', label: 'enqueue() retry', curve: 65 },
+          { id: 'cancel_queued', from: 'Queued', to: 'Cancelled', label: 'cancel()', curve: 0 },
+          { id: 'cancel_dl', from: 'Downloading', to: 'Cancelled', label: 'cancel()', reset: ['active_workers'], curve: -16 },
+          { id: 'cancel_paused', from: 'Paused', to: 'Cancelled', label: 'cancel()', curve: 16 },
+          { id: 'requeue_cancelled', from: 'Cancelled', to: 'Queued', label: 'enqueue()', curve: -36 }
+        ]
+      },
+      {
+        id: 'sleep_timer',
+        name: 'Sleep Timer Controller',
+        enumName: 'SleepTimerMode',
+        domain: 'audio',
+        domainLabel: 'Audio & Playback',
+        file: 'src/store/ui_slice.rs · sleep_timer_sheet.rs',
+        fenceSummary: 'Single UiSlice owner + EngineCommand::SetSleepTimer',
+        recoverySummary: 'Removes shadow OnceLock global; always restores saved_volume on cancel or expiry',
+        initial: 'Off',
+        counters: [
+          { key: 'saved_volume_pct', label: 'saved_vol_%', value: 85 },
+          { key: 'extend_ops', label: 'extensions', value: 0 }
+        ],
+        raceTest: {
+          label: 'Simulate Rapid +5m During 3s Fade-Out',
+          detail: 'extend_minutes() resets fade_started=false and advances ends_at_unix_ms from max(ends_at, now).'
+        },
+        invariants: [
+          'Single source of truth in UiSlice.sleep_timer synced to PlaybackController via SetSleepTimer.',
+          'Live-engine 80ms pump ticks active Countdown every ~1s without blocking UI.',
+          'Final 3 seconds linearly attenuate volume while preserving original saved_volume.',
+          'EndOfTrack pauses on AudioTelemetry::Ended in both live PlaybackController and fixture mode.'
+        ],
+        walkthrough: ['set_15m', 'enter_fade', 'extend_5m', 'enter_fade', 'timer_expired'],
+        nodes: [
+          { id: 'Off', role: 'Initial', tone: 'neutral', x: 130, y: 230, desc: 'No timer active. saved_volume and fade_started are cleared.' },
+          { id: 'Countdown', role: 'Active', tone: 'ok', x: 390, y: 120, desc: 'Counting down toward ends_at_unix_ms; badge displays MM:SS.' },
+          { id: 'FadingOut', role: 'Final 3s', tone: 'warn', x: 670, y: 120, desc: 'remaining_ms <= 3000ms: attenuating volume smoothly toward 0%.' },
+          { id: 'EndOfTrack', role: 'Armed', tone: 'ok', x: 390, y: 355, desc: 'Waiting for current track completion before pausing playback.' },
+          { id: 'PausedRestored', role: 'Triggered', tone: 'neutral', x: 670, y: 355, desc: 'Playback paused, saved_volume restored, mode returned to Off.' }
+        ],
+        edges: [
+          { id: 'set_15m', from: 'Off', to: 'Countdown', label: 'set_countdown(15..60m)', curve: -22 },
+          { id: 'set_eot', from: 'Off', to: 'EndOfTrack', label: 'set_end_of_track()', curve: 22 },
+          { id: 'enter_fade', from: 'Countdown', to: 'FadingOut', label: 'tick: rem <= 3s', curve: -18 },
+          { id: 'extend_5m', from: 'FadingOut', to: 'Countdown', label: '+5m (reset fade)', bump: ['extend_ops'], curve: -26 },
+          { id: 'extend_active', from: 'Countdown', to: 'Countdown', label: '+5m extend', bump: ['extend_ops'], loop: true },
+          { id: 'timer_expired', from: 'FadingOut', to: 'PausedRestored', label: 'rem == 0 -> pause & restore', curve: 0 },
+          { id: 'eot_ended', from: 'EndOfTrack', to: 'PausedRestored', label: 'AudioTelemetry::Ended', curve: 18 },
+          { id: 'cancel_countdown', from: 'Countdown', to: 'Off', label: 'cancel()', curve: 26 },
+          { id: 'cancel_fade', from: 'FadingOut', to: 'Off', label: 'cancel() [restore vol]', curve: 0 },
+          { id: 'cancel_eot', from: 'EndOfTrack', to: 'Off', label: 'cancel()', curve: -26 },
+          { id: 'reset_after_pause', from: 'PausedRestored', to: 'Off', label: 'clear_mode', curve: 45 }
+        ]
+      },
+      {
+        id: 'auth_session',
+        name: 'Auth Session & Fencing',
+        enumName: 'AuthSession',
+        domain: 'network',
+        domainLabel: 'Network & Auth',
+        file: 'crates/core/src/innertube/client.rs · live_engine/commands.rs',
+        fenceSummary: 'auth_generation + session_epoch + explicit_sign_out_pending',
+        recoverySummary: 'Late 401 from old session cannot wipe a newly signed-in session or show bogus expiry toast',
+        initial: 'Anonymous',
+        counters: [
+          { key: 'session_epoch', label: 'session_epoch', value: 0 },
+          { key: 'explicit_sign_out_pending', label: 'explicit_pending', value: 0 }
+        ],
+        raceTest: {
+          label: 'Inject Late 401 From Previous session_epoch',
+          detail: 'sign_out_if_epoch(old_epoch) fails CAS against current session_epoch — new login stays untouched.'
+        },
+        invariants: [
+          'Every session mutation checks session_epoch (rotate_session_if_epoch / sign_out_if_epoch).',
+          'explicit_sign_out_pending increments right before publishing user SignOut so concurrent 401s never steal it.',
+          'Browser cookies are strictly stripped from ANDROID_VR and IOS InnerTube requests.',
+          'All non-ATR mutations drained during 401 emit MutationFailed for optimistic UI rollback.'
+        ],
+        walkthrough: ['begin_signin', 'cookies_valid', 'http_401', 'token_rotated', 'user_signout', 'signout_done'],
+        nodes: [
+          { id: 'Anonymous', role: 'Initial', tone: 'neutral', x: 115, y: 230, desc: 'No user cookies; public InnerTube browsing and local library only.' },
+          { id: 'SigningIn', role: 'Transient', tone: 'warn', x: 315, y: 120, desc: 'Validating SAPISID/3PAPISID cookies, syncing Keystore, probing account profile under auth_generation.' },
+          { id: 'Authenticated', role: 'Active', tone: 'ok', x: 560, y: 120, desc: 'Signed in with SAPISIDHASH; optimistic likes, playlist edits, and ATR watchtime enabled.' },
+          { id: 'Recovering401', role: 'CAS Refresh', tone: 'warn', x: 715, y: 310, desc: 'Encountered HTTP 401; attempting rotate_session_if_epoch() without clobbering newer login.' },
+          { id: 'SigningOut', role: 'User Action', tone: 'neutral', x: 350, y: 355, desc: 'Clearing Keystore & library cache; bumps explicit_sign_out_pending right before EventBus publish.' }
+        ],
+        edges: [
+          { id: 'begin_signin', from: 'Anonymous', to: 'SigningIn', label: 'SignIn(cookies)', bump: ['session_epoch'], curve: -22 },
+          { id: 'cookies_valid', from: 'SigningIn', to: 'Authenticated', label: 'sync_ok + profile', curve: -16 },
+          { id: 'signin_failed', from: 'SigningIn', to: 'Anonymous', label: 'sync_err', curve: 26 },
+          { id: 'http_401', from: 'Authenticated', to: 'Recovering401', label: 'HTTP 401', curve: -20 },
+          { id: 'token_rotated', from: 'Recovering401', to: 'Authenticated', label: 'rotate_session_if_epoch()', bump: ['session_epoch'], curve: -20 },
+          { id: 'expired_401', from: 'Recovering401', to: 'Anonymous', label: 'sign_out_if_epoch() -> Toast', bump: ['session_epoch'], curve: 48 },
+          { id: 'user_signout', from: 'Authenticated', to: 'SigningOut', label: 'SignOut', bump: ['explicit_sign_out_pending'], curve: 18 },
+          { id: 'signout_done', from: 'SigningOut', to: 'Anonymous', label: 'publish(signed_in:false)', reset: ['explicit_sign_out_pending'], curve: 18 }
+        ]
+      },
+      {
+        id: 'casting',
+        name: 'LAN Cast Session',
+        enumName: 'CastSessionState',
+        domain: 'audio',
+        domainLabel: 'Audio & Playback',
+        file: 'crates/contract/src/casting.rs · casting/manager.rs',
+        fenceSummary: 'Transactional connect_with_transport rollback',
+        recoverySummary: 'Any failure mid-handshake shuts down LanCastRelay, disconnects transport, and resumes local audio',
+        initial: 'Disconnected',
+        counters: [
+          { key: 'relay_active', label: 'lan_relay_up', value: 0 },
+          { key: 'rollbacks', label: 'rollbacks', value: 0 }
+        ],
+        raceTest: {
+          label: 'Simulate load_media() Failure After Local Pause',
+          detail: 'Manager tears down LanCastRelay, disconnects transport, and invokes delegate.resume_local_at(pos_ms).'
+        },
+        invariants: [
+          'LanCastRelay serves audio only to the pinned Cast receiver IP using an ephemeral random token.',
+          'connect_with_transport rolls back local pause & relay socket if connect, stream_url, or load_media fails.',
+          'Disconnect gracefully hands current remote position back to local PlaybackController.'
+        ],
+        walkthrough: ['select_device', 'media_loaded', 'remote_pause', 'remote_play', 'disconnect_cast'],
+        nodes: [
+          { id: 'Disconnected', role: 'Initial', tone: 'neutral', x: 130, y: 230, desc: 'Playback stays local; no LAN relay server bound.' },
+          { id: 'Connecting', role: 'Handshake', tone: 'warn', x: 370, y: 120, desc: 'Binding ephemeral LanCastRelay, pausing local playback, connecting Chromecast/DLNA/AirPlay.' },
+          { id: 'ConnectedPlaying', role: 'Casting', tone: 'ok', x: 670, y: 145, desc: 'Remote device streaming from IP-pinned relay; polling remote position & volume.' },
+          { id: 'ConnectedPaused', role: 'Paused', tone: 'neutral', x: 670, y: 335, desc: 'Cast session alive and paused on receiver; volume and seek remain controllable.' },
+          { id: 'ErrorRollback', role: 'Rolled Back', tone: 'err', x: 370, y: 360, desc: 'Handshake failed: relay shut down, transport disconnected, local audio resumed at saved position.' }
+        ],
+        edges: [
+          { id: 'select_device', from: 'Disconnected', to: 'Connecting', label: 'connect(device)', bump: ['relay_active'], curve: -22 },
+          { id: 'media_loaded', from: 'Connecting', to: 'ConnectedPlaying', label: 'load_media() ok', curve: -18 },
+          { id: 'handshake_fail', from: 'Connecting', to: 'ErrorRollback', label: 'connect/load err -> rollback', reset: ['relay_active'], bump: ['rollbacks'], curve: 0 },
+          { id: 'remote_pause', from: 'ConnectedPlaying', to: 'ConnectedPaused', label: 'pause()', curve: 26 },
+          { id: 'remote_play', from: 'ConnectedPaused', to: 'ConnectedPlaying', label: 'play()', curve: 26 },
+          { id: 'disconnect_cast', from: 'ConnectedPlaying', to: 'Disconnected', label: 'disconnect() -> resume local', reset: ['relay_active'], curve: 10 },
+          { id: 'disconnect_paused', from: 'ConnectedPaused', to: 'Disconnected', label: 'disconnect()', reset: ['relay_active'], curve: 32 },
+          { id: 'clear_error', from: 'ErrorRollback', to: 'Disconnected', label: 'dismiss / idle', curve: 22 },
+          { id: 'retry_cast', from: 'ErrorRollback', to: 'Connecting', label: 'retry device', bump: ['relay_active'], curve: -46 }
+        ]
+      },
+      {
+        id: 'rooms',
+        name: 'Listen Together Rooms',
+        enumName: 'RoomController',
+        domain: 'network',
+        domainLabel: 'Network & Auth',
+        file: 'crates/core/src/rooms/controller.rs · room-relay/src/lib.rs',
+        fenceSummary: 'Authoritative revision + cleared host_secret on transfer',
+        recoverySummary: 'Promoted host gains immediate control without 403 lockout; WS auto-falls back to HTTP Long-Poll',
+        initial: 'Disconnected',
+        counters: [
+          { key: 'revision', label: 'playback_rev', value: 0 },
+          { key: 'ws_failures', label: 'ws_failures', value: 0 }
+        ],
+        raceTest: {
+          label: 'Simulate Departed Host Command After Transfer',
+          detail: 'is_authorized_host(peer_id, secret) checks host_peer_id first — departed host immediately receives 403.'
+        },
+        invariants: [
+          'Original host authenticates with 256-bit host_secret; transfer/promotion clears host_secret to None so new host is never locked out.',
+          'WebSocket transport degrades automatically to HTTP Long-Poll on repeated disconnect without dropping room membership.',
+          'Guest 3-zone drift controller: <80ms hold, 80-400ms smooth playback-rate nudge, >400ms hard seek.',
+          'Local tracks (local: / local_) are blocked from room sync so guests never attempt unshareable paths.'
+        ],
+        walkthrough: ['create_or_join', 'ws_connected', 'ws_degraded', 'host_transferred', 'leave_room'],
+        nodes: [
+          { id: 'Disconnected', role: 'Initial', tone: 'neutral', x: 115, y: 230, desc: 'No active Listen Together session.' },
+          { id: 'Joining', role: 'Handshake', tone: 'warn', x: 300, y: 120, desc: 'Creating room (Host) or joining 6-char room code (Guest) via relay HTTP endpoint.' },
+          { id: 'WebSocketLive', role: 'Primary Sync', tone: 'ok', x: 545, y: 120, desc: 'Full-duplex WebSocket sync + NTP clock offset filter + 3-zone drift correction.' },
+          { id: 'LongPollFallback', role: 'Degraded Sync', tone: 'warn', x: 715, y: 270, desc: 'Automatic HTTP Long-Poll failover preserving revision ordering across strict proxies.' },
+          { id: 'HostTransferred', role: 'Role Switch', tone: 'ok', x: 420, y: 360, desc: 'Oldest guest promoted or explicit TransferHost; host_secret cleared so new host has authority.' }
+        ],
+        edges: [
+          { id: 'create_or_join', from: 'Disconnected', to: 'Joining', label: 'create / join room', curve: -22 },
+          { id: 'ws_connected', from: 'Joining', to: 'WebSocketLive', label: 'WS upgrade ok', bump: ['revision'], curve: -18 },
+          { id: 'ws_init_fail', from: 'Joining', to: 'LongPollFallback', label: 'WS blocked -> Long-Poll', bump: ['ws_failures', 'revision'], curve: 26 },
+          { id: 'ws_degraded', from: 'WebSocketLive', to: 'LongPollFallback', label: 'WS drop -> failover', bump: ['ws_failures'], curve: -22 },
+          { id: 'ws_recovered', from: 'LongPollFallback', to: 'WebSocketLive', label: 'WS reconnect', reset: ['ws_failures'], curve: -22 },
+          { id: 'host_transferred', from: 'LongPollFallback', to: 'HostTransferred', label: 'promote / TransferHost', bump: ['revision'], curve: 20 },
+          { id: 'ws_host_transfer', from: 'WebSocketLive', to: 'HostTransferred', label: 'TransferHost (secret=None)', bump: ['revision'], curve: 18 },
+          { id: 'continue_ws', from: 'HostTransferred', to: 'WebSocketLive', label: 'sync new host', bump: ['revision'], curve: -24 },
+          { id: 'leave_ws', from: 'WebSocketLive', to: 'Disconnected', label: 'leave_room()', curve: 24 },
+          { id: 'leave_room', from: 'HostTransferred', to: 'Disconnected', label: 'leave_room()', curve: 22 }
+        ]
+      },
+      {
+        id: 'updater',
+        name: 'Auto-Updater Lifecycle',
+        enumName: 'UpdatePhase',
+        domain: 'system',
+        domainLabel: 'Storage & Sync',
+        file: 'crates/contract/src/updater.rs · store/updater_slice.rs',
+        fenceSummary: 'Non-reentrant begin_check() / begin_download() guard',
+        recoverySummary: 'SHA-256 verification before ReadyToInstall; skipped versions stay suppressed across checks',
+        initial: 'Idle',
+        counters: [
+          { key: 'checks', label: 'checks_run', value: 0 },
+          { key: 'install_on_quit', label: 'on_quit_flag', value: 0 }
+        ],
+        raceTest: {
+          label: 'Simulate Duplicate Check While Checking/Downloading',
+          detail: 'check_for_updates_now() rejects re-entry when UpdatePhase is Checking or Downloading.'
+        },
+        invariants: [
+          'Cannot start overlapping update checks or downloads while Checking or Downloading.',
+          'Switching channel (Stable <-> Beta) persists immediately to SettingsV1.',
+          'Skipped version suppresses top update banner without blocking manual re-checks.',
+          'install_on_quit_scheduled defers binary swap cleanly until app exit.'
+        ],
+        walkthrough: ['check_now', 'found_update', 'start_download', 'verify_ready', 'schedule_quit'],
+        nodes: [
+          { id: 'Idle', role: 'Initial', tone: 'neutral', x: 105, y: 230, desc: 'No update check active; waiting for scheduled or manual trigger.' },
+          { id: 'Checking', role: 'Probing', tone: 'warn', x: 270, y: 120, desc: 'Querying release manifest for active UpdateChannel (Stable or Beta).' },
+          { id: 'UpToDate', role: 'Current', tone: 'ok', x: 270, y: 360, desc: 'Running latest build; records checked_at_unix_secs.' },
+          { id: 'Available', role: 'Prompting', tone: 'warn', x: 470, y: 120, desc: 'Newer UpdateInfo discovered; banner displayed unless version is skipped.' },
+          { id: 'Downloading', role: 'Fetching', tone: 'warn', x: 675, y: 120, desc: 'Streaming artifact with received_bytes / total_bytes progress.' },
+          { id: 'ReadyToInstall', role: 'Verified', tone: 'ok', x: 675, y: 355, desc: 'SHA-256 verified; ready for immediate restart or install-on-quit.' },
+          { id: 'Error', role: 'Fault', tone: 'err', x: 470, y: 360, desc: 'Manifest fetch, download, or checksum error; retryable back to Checking.' }
+        ],
+        edges: [
+          { id: 'check_now', from: 'Idle', to: 'Checking', label: 'begin_check()', bump: ['checks'], curve: -20 },
+          { id: 'no_update', from: 'Checking', to: 'UpToDate', label: 'latest_installed', curve: 0 },
+          { id: 'found_update', from: 'Checking', to: 'Available', label: 'newer_version', curve: -16 },
+          { id: 'check_error', from: 'Checking', to: 'Error', label: 'network_err', curve: 18 },
+          { id: 'skip_version', from: 'Available', to: 'Idle', label: 'skip_version()', curve: 48 },
+          { id: 'start_download', from: 'Available', to: 'Downloading', label: 'begin_download()', curve: -16 },
+          { id: 'dl_error', from: 'Downloading', to: 'Error', label: 'sha256 / net err', curve: 18 },
+          { id: 'verify_ready', from: 'Downloading', to: 'ReadyToInstall', label: 'sha256_ok', curve: 0 },
+          { id: 'schedule_quit', from: 'ReadyToInstall', to: 'ReadyToInstall', label: 'install_on_quit()', bump: ['install_on_quit'], loop: true },
+          { id: 'recheck_uptodate', from: 'UpToDate', to: 'Checking', label: 'recheck', bump: ['checks'], curve: -36 },
+          { id: 'retry_error', from: 'Error', to: 'Checking', label: 'retry_check()', bump: ['checks'], curve: -26 }
+        ]
+      },
+      {
+        id: 'async_fences',
+        name: 'PO-Token & Catalog Fences',
+        enumName: 'ScopeEpoch / Gen',
+        domain: 'network',
+        domainLabel: 'Network & Auth',
+        file: 'crates/core/src/potoken/cache.rs · store/catalog_slice.rs',
+        fenceSummary: 'invalidation_epochs[PoTokenScope] + catalog generations',
+        recoverySummary: 'Per-scope invalidation never drops unrelated GVS mints; stale searches/errors discarded cleanly',
+        initial: 'Empty',
+        counters: [
+          { key: 'scope_epoch', label: 'scope_epoch', value: 1 },
+          { key: 'catalog_gen', label: 'catalog_gen', value: 1 }
+        ],
+        raceTest: {
+          label: 'Simulate Invalidate(Player) While Gvs Mint Is In-Flight',
+          detail: 'invalidation_epochs is keyed by PoTokenScope — bumping Player epoch leaves Gvs mint valid.'
+        },
+        invariants: [
+          'PoTokenCache tracks invalidation_epochs per PoTokenScope (Player, Gvs, Subs) independently.',
+          'Search, SearchContinuation, MoodPlaylists, and BrowseCollection carry monotonic generation tokens.',
+          'Stale CollectionLoaded Err(e) checks collection_generation before displaying error toast.',
+          'Debounced search (260ms) re-validates search_generation before dispatching InnerTube call.'
+        ],
+        walkthrough: ['dispatch_request', 'applied_fresh', 'dispatch_request_2', 'superseded_new_req', 'stale_dropped'],
+        nodes: [
+          { id: 'Empty', role: 'Initial', tone: 'neutral', x: 120, y: 230, desc: 'No cached PO-token or active search/collection fetch.' },
+          { id: 'InFlight', role: 'Gen N Active', tone: 'warn', x: 370, y: 125, desc: 'Async mint or InnerTube catalog query running with captured generation N / scope_epoch E.' },
+          { id: 'Applied', role: 'Fresh', tone: 'ok', x: 675, y: 125, desc: 'Response matched current generation/epoch; committed to cache or CatalogSlice.' },
+          { id: 'Superseded', role: 'Gen N+1', tone: 'warn', x: 370, y: 350, desc: 'User changed query, filter, collection, or invalidated scope while Gen N was still in flight.' },
+          { id: 'StaleDiscarded', role: 'Fenced Drop', tone: 'neutral', x: 675, y: 350, desc: 'Late Gen N result or error arrived after Gen N+1 — dropped silently with zero UI flicker.' }
+        ],
+        edges: [
+          { id: 'dispatch_request', from: 'Empty', to: 'InFlight', label: 'fetch / mint (Gen N)', bump: ['catalog_gen'], curve: -20 },
+          { id: 'applied_fresh', from: 'InFlight', to: 'Applied', label: 'gen == current -> apply', curve: -18 },
+          { id: 'dispatch_request_2', from: 'Applied', to: 'InFlight', label: 'new query / refresh', bump: ['catalog_gen'], curve: -26 },
+          { id: 'superseded_new_req', from: 'InFlight', to: 'Superseded', label: 'new input / invalidate(scope)', bump: ['catalog_gen', 'scope_epoch'], curve: 0 },
+          { id: 'stale_dropped', from: 'Superseded', to: 'StaleDiscarded', label: 'late Gen N arrives -> drop', curve: 18 },
+          { id: 'latest_commits', from: 'StaleDiscarded', to: 'Applied', label: 'Gen N+1 arrives -> apply', curve: 0 },
+          { id: 'clear_cache', from: 'Applied', to: 'Empty', label: 'clear_caches / close', bump: ['catalog_gen'], curve: 0 }
+        ]
+      },
+      {
+        id: 'mutations',
+        name: 'Optimistic Mutation Queue',
+        enumName: 'MutationWorker',
+        domain: 'system',
+        domainLabel: 'Storage & Sync',
+        file: 'src/store/mutation_slice.rs · innertube/mutations.rs',
+        fenceSummary: 'Optimistic FIFO receipt matching + 401 drain rollback',
+        recoverySummary: 'pending_mutations counter never leaks on ATR receipts; failed edits cleanly roll back UI',
+        initial: 'Synced',
+        counters: [
+          { key: 'pending_mutations', label: 'pending_count', value: 0 },
+          { key: 'rollbacks', label: 'rollbacks', value: 0 }
+        ],
+        raceTest: {
+          label: 'Inject ATR Watchtime Receipt While Like Is Pending',
+          detail: 'complete_mutation() ignores receipt.kind == "atr" so pending_mutations never underflows or pops playlist edits.'
+        },
+        invariants: [
+          'Likes and playlist edits update LibrarySlice & CatalogSlice optimistically before network completion.',
+          'complete_mutation() skips "atr" receipts, decrements pending_mutations, and pops FIFO playlist edit snapshot.',
+          'Non-ATR queued mutations drained on 401 emit MutationFailed so optimistic UI reverts cleanly.',
+          'Creating a local playlist uses MutationSlice::create_local_playlist rather than dispatching fake PL_NEW_* IDs.'
+        ],
+        walkthrough: ['optimistic_apply', 'worker_dispatch', 'http_401_drain', 'rollback_ui'],
+        nodes: [
+          { id: 'Synced', role: 'Initial', tone: 'ok', x: 135, y: 230, desc: 'No unconfirmed mutations; local UI matches remote YouTube Music state.' },
+          { id: 'OptimisticPending', role: 'Queued', tone: 'warn', x: 405, y: 120, desc: 'UI updated immediately; previous state snapshot stored for rollback; pending_mutations > 0.' },
+          { id: 'Sending', role: 'In Flight', tone: 'warn', x: 685, y: 120, desc: 'MutationWorker executing InnerTube set_like / edit_playlist with SAPISIDHASH.' },
+          { id: 'RollingBack', role: 'Reverting', tone: 'err', x: 545, y: 355, desc: 'Server error or 401 queue drain: restoring pre-mutation track/playlist snapshot + toast.' }
+        ],
+        edges: [
+          { id: 'optimistic_apply', from: 'Synced', to: 'OptimisticPending', label: 'like / edit_playlist', bump: ['pending_mutations'], curve: -22 },
+          { id: 'worker_dispatch', from: 'OptimisticPending', to: 'Sending', label: 'worker.dequeue()', curve: -18 },
+          { id: 'receipt_ok', from: 'Sending', to: 'Synced', label: 'MutationCompleted', reset: ['pending_mutations'], curve: 26 },
+          { id: 'http_401_drain', from: 'Sending', to: 'RollingBack', label: '401 / HTTP err -> Failed', bump: ['rollbacks'], curve: 18 },
+          { id: 'enqueue_fail', from: 'OptimisticPending', to: 'RollingBack', label: 'channel_closed', bump: ['rollbacks'], curve: 18 },
+          { id: 'rollback_ui', from: 'RollingBack', to: 'Synced', label: 'rollback_mutation()', reset: ['pending_mutations'], curve: 26 }
+        ]
+      },
+      {
+        id: 'preview_host',
+        name: 'Web Preview Host Reducer',
+        enumName: 'PreviewState',
+        domain: 'system',
+        domainLabel: 'Host & UI',
+        file: 'src/previewState.ts · src/App.tsx',
+        fenceSummary: 'Server tree.version Lamport clock + client seq tie-breaker',
+        recoverySummary: 'Slower mutation advancing server version beats faster stale poll; inFlightCount stays balanced',
+        initial: 'Booting',
+        counters: [
+          { key: 'tree_version', label: 'tree.version', value: 0 },
+          { key: 'last_seq', label: 'lastAppliedSeq', value: 0 }
+        ],
+        raceTest: {
+          label: 'Simulate Slower Mutation (seq=1, v+1) vs Faster Poll (seq=2, v)',
+          detail: 'action.tree.version > state.tree.version takes precedence over client seq — newer server scene wins.'
+        },
+        invariants: [
+          'Replaces implicit (tree, error, busy) booleans with an explicit discriminated union (booting | ready | error).',
+          'Server nsh_preview increments scene.version monotonically on every mutation.',
+          'Stale request failures (seq < lastAppliedSeq) decrement inFlightCount without wiping Ready tree.',
+          'Scroll debounce timer cleans up on component unmount to avoid post-unmount state dispatch.'
+        ],
+        walkthrough: ['boot_ok', 'user_click_tree', 'server_503', 'reconnect_ok'],
+        nodes: [
+          { id: 'Booting', role: 'Initial', tone: 'warn', x: 165, y: 230, desc: 'Initial mount fetching /api/nsh/tree from local Rust nsh_preview host.' },
+          { id: 'Ready', role: 'Live Frame', tone: 'ok', x: 520, y: 135, desc: 'Rendering NSH layout tree at authoritative server scene version V.' },
+          { id: 'Error', role: 'Waiting / 503', tone: 'err', x: 520, y: 345, desc: 'Rust preview host unavailable; Retry Connection button triggers clean recovery.' }
+        ],
+        edges: [
+          { id: 'boot_ok', from: 'Booting', to: 'Ready', label: 'tree_received(v1)', bump: ['tree_version', 'last_seq'], curve: -22 },
+          { id: 'boot_fail', from: 'Booting', to: 'Error', label: 'request_failed(503)', bump: ['last_seq'], curve: 22 },
+          { id: 'user_click_tree', from: 'Ready', to: 'Ready', label: 'tree_received(v+1)', bump: ['tree_version', 'last_seq'], loop: true },
+          { id: 'server_503', from: 'Ready', to: 'Error', label: 'request_failed(seq>=last)', bump: ['last_seq'], curve: 26 },
+          { id: 'reconnect_ok', from: 'Error', to: 'Ready', label: 'Retry -> tree_received', bump: ['tree_version', 'last_seq'], curve: 26 }
+        ]
+      }
+    ];
+
+    const CONCURRENCY_FENCES = [
+      {
+        mechanism: 'play_generation + pause_epoch',
+        owner: 'PlaybackController',
+        algebra: 'Monotonic u64 fence (last-writer-wins; pause dominates in-flight start)',
+        race: 'Prevents slow InnerTube stream resolve or late radio fetch from hijacking a newer track or unpausing a paused player.'
+      },
+      {
+        mechanism: 'session_epoch CAS + explicit_sign_out_pending',
+        owner: 'InnerTubeClient & AppEngine',
+        algebra: 'Compare-and-swap epoch + matched atomic counter',
+        race: 'Prevents a stale 401 from an old session from clearing a fresh login or firing a false "Session expired" toast on manual sign-out.'
+      },
+      {
+        mechanism: 'BreakerPhase + ProbeGuard (RAII)',
+        owner: 'ClientCircuitBreaker',
+        algebra: 'Affine single-probe lease (released automatically on Drop)',
+        race: 'Prevents thundering-herd probes in HalfOpen and prevents cancelled async probes from wedging a client for 30 seconds.'
+      },
+      {
+        mechanism: 'invalidation_epochs[PoTokenScope]',
+        owner: 'PoTokenCache',
+        algebra: 'Per-scope monotonic epoch map (Player, Gvs, Subs commute)',
+        race: 'Invalidating a Player token no longer discards an unrelated in-flight GVS token mint.'
+      },
+      {
+        mechanism: 'active_jobs Mutex + ChunkFetch::StreamChanged',
+        owner: 'DownloadManager',
+        algebra: 'Serialized admission + atomic .part restart on format drift',
+        race: 'Eliminates enqueue()/resume() TOCTOU duplicate workers and stops HTTP 403 itag/length changes from corrupting partial audio files.'
+      },
+      {
+        mechanism: 'search_generation / collection_generation / mood_generation',
+        owner: 'CatalogSlice & AppEngine',
+        algebra: 'Monotonic generation fence (strictly drops gen != current)',
+        race: 'Prevents out-of-order search pages, filter changes, mood lists, or stale collection errors from flashing over current UI.'
+      },
+      {
+        mechanism: 'tree.version Lamport clock + seq tie-breaker',
+        owner: 'previewReducer (src/previewState.ts)',
+        algebra: 'Join-semilattice on (tree.version, seq)',
+        race: 'Ensures a slower mutation that advances the server NSH scene always beats a faster background poll returning an older frame.'
+      },
+      {
+        mechanism: 'RoomState::is_authorized_host + host_secret: Option',
+        owner: 'room-relay',
+        algebra: 'Authority transfer resets legacy secret requirement',
+        race: 'Prevents promoted/transferred room hosts from being permanently locked out with 403 while rejecting departed hosts immediately.'
+      }
+    ];
+
+    // ── Application State ────────────────────────────────────────────────────
+    let activeMachineId = STATE_MACHINES[0].id;
+    let domainFilter = 'all';
+    let searchTerm = '';
+    let walkthroughTimer = null;
+    let walkthroughIndex = 0;
+
+    // Per-machine live simulation state
+    const simState = {};
+    for (const m of STATE_MACHINES) {
+      simState[m.id] = createInitialSim(m);
+    }
+
+    function createInitialSim(m) {
+      const counters = {};
+      for (const c of m.counters) counters[c.key] = c.value;
+      return {
+        current: m.initial,
+        lastEdgeId: null,
+        pulseKey: 0,
+        counters,
+        trace: [
+          { step: 0, msg: `Initialized in ${m.initial}`, outcome: 'ok', tag: 'Init' }
+        ]
+      };
+    }
+
+    function getMachine(id = activeMachineId) {
+      return STATE_MACHINES.find((m) => m.id === id) || STATE_MACHINES[0];
+    }
+
+    // ── Geometry Helpers for Crisp Non-Overlapping SVG Edges ────────────────
+    const NODE_W = 148;
+    const NODE_H = 58;
+
+    function rectAnchor(cx, cy, tx, ty) {
+      const dx = tx - cx;
+      const dy = ty - cy;
+      if (dx === 0 && dy === 0) return { x: cx, y: cy };
+      const hw = NODE_W / 2 + 4;
+      const hh = NODE_H / 2 + 4;
+      const scale = Math.min(
+        Math.abs(dx) > 0.001 ? hw / Math.abs(dx) : Infinity,
+        Math.abs(dy) > 0.001 ? hh / Math.abs(dy) : Infinity
+      );
+      return { x: cx + dx * scale, y: cy + dy * scale };
+    }
+
+    function computeEdgeGeometry(edge, nodesMap) {
+      const a = nodesMap[edge.from];
+      const b = nodesMap[edge.to];
+
+      if (edge.loop || edge.from === edge.to) {
+        const x1 = a.x - 24;
+        const y1 = a.y - NODE_H / 2 - 2;
+        const x2 = a.x + 24;
+        const y2 = a.y - NODE_H / 2 - 2;
+        const c1x = a.x - 54;
+        const c1y = a.y - NODE_H / 2 - 58;
+        const c2x = a.x + 54;
+        const c2y = a.y - NODE_H / 2 - 58;
+        return {
+          d: `M ${x1} ${y1} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${x2} ${y2}`,
+          lx: a.x,
+          ly: a.y - NODE_H / 2 - 48
+        };
+      }
+
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = -dy / len;
+      const ny = dx / len;
+      const curve = edge.curve || 0;
+
+      const mx = (a.x + b.x) / 2 + nx * curve;
+      const my = (a.y + b.y) / 2 + ny * curve;
+
+      const start = rectAnchor(a.x, a.y, mx, my);
+      const end = rectAnchor(b.x, b.y, mx, my);
+
+      // Label at t along quadratic Bezier: (1-t)^2*start + 2(1-t)t*ctrl + t^2*end
+      const t = typeof edge.labelT === 'number' ? edge.labelT : 0.5;
+      const omt = 1 - t;
+      const qx = omt * omt * start.x + 2 * omt * t * mx + t * t * end.x;
+      const qy = omt * omt * start.y + 2 * omt * t * my + t * t * end.y;
+      const labelShift = curve === 0 ? -10 : (curve > 0 ? 11 : -11);
+      const offX = edge.labelOffset ? edge.labelOffset[0] : (nx * (curve === 0 ? 0 : (curve > 0 ? 6 : -6)));
+      const offY = edge.labelOffset ? edge.labelOffset[1] : (Math.abs(ny) > 0.35 ? ny * labelShift : -9);
+
+      return {
+        d: `M ${start.x.toFixed(1)} ${start.y.toFixed(1)} Q ${mx.toFixed(1)} ${my.toFixed(1)} ${end.x.toFixed(1)} ${end.y.toFixed(1)}`,
+        lx: qx + offX,
+        ly: qy + offY
+      };
+    }
+
+    // ── Transitions & Simulation Engine ─────────────────────────────────────
+    function fireEdge(edgeId) {
+      const m = getMachine();
+      const s = simState[m.id];
+      const edge = m.edges.find((e) => e.id === edgeId);
+      if (!edge) return;
+
+      if (edge.from !== s.current) {
+        s.trace.unshift({
+          step: s.trace.length,
+          msg: `Blocked ${edge.label} (requires ${edge.from}, in ${s.current})`,
+          outcome: 'rejected',
+          tag: 'Invalid'
+        });
+        renderInspector();
+        return;
+      }
+
+      const prev = s.current;
+      s.current = edge.to;
+      s.lastEdgeId = edge.id;
+      s.pulseKey += 1;
+
+      if (edge.bump) {
+        for (const k of edge.bump) {
+          if (typeof s.counters[k] === 'number') s.counters[k] += 1;
+        }
+      }
+      if (edge.reset) {
+        for (const k of edge.reset) {
+          if (typeof s.counters[k] === 'number') s.counters[k] = 0;
+        }
+      }
+
+      s.trace.unshift({
+        step: s.trace.length,
+        msg: `${prev} -> ${edge.to} (${edge.label})`,
+        outcome: 'ok',
+        tag: 'Applied'
+      });
+      if (s.trace.length > 24) s.trace.length = 24;
+
+      renderAll();
+    }
+
+    function clickNode(nodeId) {
+      const m = getMachine();
+      const s = simState[m.id];
+      if (nodeId === s.current) {
+        const selfEdge = m.edges.find((e) => e.from === s.current && e.to === nodeId);
+        if (selfEdge) {
+          fireEdge(selfEdge.id);
+        }
+        return;
+      }
+      const edge = m.edges.find((e) => e.from === s.current && e.to === nodeId);
+      if (edge) {
+        fireEdge(edge.id);
+      } else {
+        s.trace.unshift({
+          step: s.trace.length,
+          msg: `InvalidTransition: ${s.current} -> ${nodeId}`,
+          outcome: 'rejected',
+          tag: 'Rejected'
+        });
+        renderInspector();
+      }
+    }
+
+    function fireRaceTest() {
+      const m = getMachine();
+      const s = simState[m.id];
+      if (!m.raceTest) return;
+      s.trace.unshift({
+        step: s.trace.length,
+        msg: m.raceTest.detail,
+        outcome: 'fenced',
+        tag: 'Fenced'
+      });
+      if (s.trace.length > 24) s.trace.length = 24;
+      renderInspector();
+    }
+
+    function resetActiveMachine() {
+      stopWalkthrough();
+      const m = getMachine();
+      simState[m.id] = createInitialSim(m);
+      renderAll();
+    }
+
+    function stopWalkthrough() {
+      if (walkthroughTimer) {
+        clearInterval(walkthroughTimer);
+        walkthroughTimer = null;
+      }
+      const btn = document.getElementById('btn-walkthrough');
+      if (btn) btn.textContent = 'Play Walkthrough';
+    }
+
+    function toggleWalkthrough() {
+      if (walkthroughTimer) {
+        stopWalkthrough();
+        return;
+      }
+      const m = getMachine();
+      simState[m.id] = createInitialSim(m);
+      walkthroughIndex = 0;
+      renderAll();
+
+      const btn = document.getElementById('btn-walkthrough');
+      btn.textContent = 'Stop Walkthrough';
+
+      const stepOnce = () => {
+        const curM = getMachine();
+        if (walkthroughIndex >= curM.walkthrough.length) {
+          stopWalkthrough();
+          return;
+        }
+        fireEdge(curM.walkthrough[walkthroughIndex]);
+        walkthroughIndex += 1;
+      };
+
+      stepOnce();
+      walkthroughTimer = setInterval(stepOnce, 1150);
+    }
+
+    function selectMachine(id) {
+      stopWalkthrough();
+      activeMachineId = id;
+      renderAll();
+    }
+
+    // ── Renderers ────────────────────────────────────────────────────────────
+    function renderStats() {
+      const totalStates = STATE_MACHINES.reduce((acc, m) => acc + m.nodes.length, 0);
+      const totalEdges = STATE_MACHINES.reduce((acc, m) => acc + m.edges.length, 0);
+      document.getElementById('stat-machines').textContent = String(STATE_MACHINES.length);
+      document.getElementById('stat-states').textContent = String(totalStates);
+      document.getElementById('stat-edges').textContent = String(totalEdges);
+    }
+
+    function renderRail() {
+      const list = document.getElementById('machine-list');
+      const q = searchTerm.trim().toLowerCase();
+      const filtered = STATE_MACHINES.filter((m) => {
+        if (domainFilter !== 'all' && m.domain !== domainFilter) return false;
+        if (!q) return true;
+        return (
+          m.name.toLowerCase().includes(q) ||
+          m.enumName.toLowerCase().includes(q) ||
+          m.file.toLowerCase().includes(q) ||
+          m.nodes.some((n) => n.id.toLowerCase().includes(q))
+        );
+      });
+
+      list.innerHTML = '';
+      if (filtered.length === 0) {
+        const empty = document.createElement('div');
+        empty.style.padding = '18px 8px';
+        empty.style.fontSize = '0.8125rem';
+        empty.style.color = 'var(--text-muted)';
+        empty.textContent = 'No matching state machines.';
+        list.appendChild(empty);
+        return;
+      }
+
+      for (const m of filtered) {
+        const s = simState[m.id];
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.role = 'option';
+        btn.className = 'machine-item' + (m.id === activeMachineId ? ' active' : '');
+        btn.setAttribute('aria-selected', String(m.id === activeMachineId));
+        btn.innerHTML = `
+          <div class="machine-item-top">
+            <span class="machine-item-name">${m.name}</span>
+            <span class="machine-item-count mono">${m.nodes.length}s</span>
+          </div>
+          <div class="machine-item-meta mono">${m.enumName} · ${s.current}</div>
+        `;
+        btn.addEventListener('click', () => selectMachine(m.id));
+        list.appendChild(btn);
+      }
+    }
+
+    function renderDiagram() {
+      const m = getMachine();
+      const s = simState[m.id];
+
+      document.getElementById('stage-title').textContent = m.name;
+      document.getElementById('stage-subtitle').innerHTML = `
+        <span class="mono">${m.enumName}</span>
+        <span aria-hidden="true">·</span>
+        <span>${m.domainLabel}</span>
+        <span aria-hidden="true">·</span>
+        <span class="mono">${m.file}</span>
+      `;
+
+      const svg = document.getElementById('fsm-svg');
+      const ns = 'http://www.w3.org/2000/svg';
+      svg.innerHTML = '';
+
+      // Defs for crisp arrowheads
+      const defs = document.createElementNS(ns, 'defs');
+      const markers = [
+        { id: 'arrow-idle', color: 'var(--edge-idle)' },
+        { id: 'arrow-valid', color: 'var(--edge-valid)' },
+        { id: 'arrow-fired', color: 'var(--accent)' }
+      ];
+      for (const mk of markers) {
+        const marker = document.createElementNS(ns, 'marker');
+        marker.setAttribute('id', mk.id);
+        marker.setAttribute('viewBox', '0 0 10 10');
+        marker.setAttribute('refX', '8.5');
+        marker.setAttribute('refY', '5');
+        marker.setAttribute('markerWidth', '6.5');
+        marker.setAttribute('markerHeight', '6.5');
+        marker.setAttribute('orient', 'auto-start-reverse');
+        const path = document.createElementNS(ns, 'path');
+        path.setAttribute('d', 'M 1 1.5 L 9 5 L 1 8.5 z');
+        path.setAttribute('fill', mk.color);
+        marker.appendChild(path);
+        defs.appendChild(marker);
+      }
+      svg.appendChild(defs);
+
+      const nodesMap = {};
+      for (const n of m.nodes) nodesMap[n.id] = n;
+
+      const reachableSet = new Set(
+        m.edges.filter((e) => e.from === s.current && e.to !== s.current).map((e) => e.to)
+      );
+
+      const edgesLayer = document.createElementNS(ns, 'g');
+      const labelsIdleLayer = document.createElementNS(ns, 'g');
+      const labelsActiveLayer = document.createElementNS(ns, 'g');
+      const nodesLayer = document.createElementNS(ns, 'g');
+
+      // Draw edges (inactive labels underneath active/last-fired labels)
+      for (const edge of m.edges) {
+        const geom = computeEdgeGeometry(edge, nodesMap);
+        const isValid = edge.from === s.current;
+        const isFired = edge.id === s.lastEdgeId;
+
+        const path = document.createElementNS(ns, 'path');
+        path.setAttribute('d', geom.d);
+        path.setAttribute(
+          'class',
+          'fsm-edge' + (isValid ? ' is-valid' : '') + (isFired ? ' is-last-fired' : '')
+        );
+        path.setAttribute(
+          'marker-end',
+          isFired ? 'url(#arrow-fired)' : (isValid ? 'url(#arrow-valid)' : 'url(#arrow-idle)')
+        );
+        edgesLayer.appendChild(path);
+
+        if (isFired && s.pulseKey > 0) {
+          const pulse = document.createElementNS(ns, 'path');
+          pulse.setAttribute('d', geom.d);
+          pulse.setAttribute('pathLength', '100');
+          pulse.setAttribute('class', 'edge-pulse');
+          edgesLayer.appendChild(pulse);
+        }
+
+        const text = document.createElementNS(ns, 'text');
+        text.setAttribute('x', geom.lx.toFixed(1));
+        text.setAttribute('y', geom.ly.toFixed(1));
+        text.setAttribute(
+          'class',
+          'edge-label' + (isValid ? ' is-valid' : '') + (isFired ? ' is-last-fired' : '')
+        );
+        text.textContent = edge.label;
+        if (isValid || isFired) {
+          labelsActiveLayer.appendChild(text);
+        } else {
+          labelsIdleLayer.appendChild(text);
+        }
+
+        const hit = document.createElementNS(ns, 'path');
+        hit.setAttribute('d', geom.d);
+        hit.setAttribute('class', 'fsm-edge-hit');
+        hit.addEventListener('click', () => fireEdge(edge.id));
+        hit.addEventListener('mouseenter', () => {
+          path.classList.add('is-hovered');
+          text.classList.add('is-hovered');
+          labelsActiveLayer.appendChild(text);
+        });
+        hit.addEventListener('mouseleave', () => {
+          path.classList.remove('is-hovered');
+          text.classList.remove('is-hovered');
+          if (!isValid && !isFired) {
+            labelsIdleLayer.appendChild(text);
+          }
+        });
+        edgesLayer.appendChild(hit);
+      }
+
+      // Draw nodes
+      for (const node of m.nodes) {
+        const isCurrent = node.id === s.current;
+        const isReachable = reachableSet.has(node.id);
+        const g = document.createElementNS(ns, 'g');
+        const toneClass =
+          node.tone === 'ok' ? ' is-ok' :
+          node.tone === 'warn' ? ' is-warn' :
+          node.tone === 'err' ? ' is-error' : '';
+        g.setAttribute(
+          'class',
+          'fsm-node' + toneClass + (isCurrent ? ' is-current' : '') + (isReachable ? ' is-reachable' : '')
+        );
+        g.setAttribute('tabindex', '0');
+        g.setAttribute('role', 'button');
+        g.setAttribute('aria-label', `${node.id} state (${node.role})${isCurrent ? ', currently active' : isReachable ? ', reachable next state' : ''}`);
+
+        const rect = document.createElementNS(ns, 'rect');
+        rect.setAttribute('x', String(node.x - NODE_W / 2));
+        rect.setAttribute('y', String(node.y - NODE_H / 2));
+        rect.setAttribute('width', String(NODE_W));
+        rect.setAttribute('height', String(NODE_H));
+        rect.setAttribute('rx', '11');
+        rect.setAttribute('class', 'node-box');
+        g.appendChild(rect);
+
+        const title = document.createElementNS(ns, 'text');
+        title.setAttribute('x', String(node.x));
+        title.setAttribute('y', String(node.y - 3));
+        title.setAttribute('class', 'node-label');
+        title.textContent = node.id;
+        g.appendChild(title);
+
+        const role = document.createElementNS(ns, 'text');
+        role.setAttribute('x', String(node.x));
+        role.setAttribute('y', String(node.y + 15));
+        role.setAttribute('class', 'node-role');
+        role.textContent = isCurrent ? `ACTIVE · ${node.role}` : node.role;
+        g.appendChild(role);
+
+        g.addEventListener('click', () => clickNode(node.id));
+        g.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            clickNode(node.id);
+          }
+        });
+
+        nodesLayer.appendChild(g);
+      }
+
+      svg.appendChild(edgesLayer);
+      svg.appendChild(labelsIdleLayer);
+      svg.appendChild(nodesLayer);
+      svg.appendChild(labelsActiveLayer);
+    }
+
+    function renderInspector() {
+      const m = getMachine();
+      const s = simState[m.id];
+      const curNode = m.nodes.find((n) => n.id === s.current) || m.nodes[0];
+
+      document.getElementById('current-state-name').textContent = curNode.id;
+      document.getElementById('current-role-text').textContent = curNode.role;
+      document.getElementById('current-state-desc').textContent = curNode.desc;
+
+      // Counters
+      const fenceEl = document.getElementById('fence-readout');
+      fenceEl.innerHTML = '';
+      for (const c of m.counters) {
+        const div = document.createElement('div');
+        div.className = 'fence-metric';
+        div.innerHTML = `
+          <span class="fence-metric-name mono">${c.label}</span>
+          <span class="fence-metric-val mono">${s.counters[c.key]}</span>
+        `;
+        fenceEl.appendChild(div);
+      }
+
+      // Outgoing triggers
+      const outgoing = m.edges.filter((e) => e.from === s.current);
+      document.getElementById('trigger-count').textContent = String(outgoing.length);
+      const triggerList = document.getElementById('trigger-list');
+      triggerList.innerHTML = '';
+
+      if (outgoing.length === 0) {
+        const empty = document.createElement('div');
+        empty.style.fontSize = '0.8125rem';
+        empty.style.color = 'var(--text-muted)';
+        empty.textContent = 'Terminal state — click Reset State to replay.';
+        triggerList.appendChild(empty);
+      } else {
+        for (const edge of outgoing) {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'trigger-btn';
+          btn.innerHTML = `
+            <span class="trigger-event mono">${edge.label}</span>
+            <span class="trigger-target mono">→ ${edge.to}</span>
+          `;
+          btn.addEventListener('click', () => fireEdge(edge.id));
+          triggerList.appendChild(btn);
+        }
+      }
+
+      // Race test button
+      const raceBtn = document.getElementById('btn-race');
+      if (m.raceTest) {
+        raceBtn.hidden = false;
+        document.getElementById('race-btn-label').textContent = m.raceTest.label;
+      } else {
+        raceBtn.hidden = true;
+      }
+
+      // Invariants
+      const invList = document.getElementById('invariant-list');
+      invList.innerHTML = '';
+      for (const inv of m.invariants) {
+        const li = document.createElement('li');
+        li.textContent = inv;
+        invList.appendChild(li);
+      }
+
+      // Trace log
+      const traceEl = document.getElementById('trace-log');
+      traceEl.innerHTML = '';
+      for (const entry of s.trace) {
+        const row = document.createElement('div');
+        row.className = 'trace-entry';
+        row.innerHTML = `
+          <span class="trace-msg mono" title="${entry.msg}">#${String(entry.step).padStart(2, '0')} ${entry.msg}</span>
+          <span class="trace-outcome mono ${entry.outcome}">${entry.tag}</span>
+        `;
+        traceEl.appendChild(row);
+      }
+    }
+
+    function renderOverviewTable() {
+      const tbody = document.getElementById('overview-tbody');
+      tbody.innerHTML = '';
+      for (const m of STATE_MACHINES) {
+        const tr = document.createElement('tr');
+        tr.className = 'clickable' + (m.id === activeMachineId ? ' selected-row' : '');
+        tr.innerHTML = `
+          <td>
+            <div class="cell-title">${m.name}</div>
+            <div class="cell-path mono">${m.enumName}</div>
+          </td>
+          <td>${m.domainLabel}</td>
+          <td class="mono" style="font-size:0.75rem;">${m.file}</td>
+          <td class="mono">${m.nodes.length}</td>
+          <td class="mono" style="font-size:0.78rem;">${m.fenceSummary}</td>
+          <td>${m.recoverySummary}</td>
+        `;
+        tr.addEventListener('click', () => {
+          selectMachine(m.id);
+          document.getElementById('stage').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+        tbody.appendChild(tr);
+      }
+    }
+
+    function renderFencesTable() {
+      const tbody = document.getElementById('fences-tbody');
+      tbody.innerHTML = '';
+      for (const f of CONCURRENCY_FENCES) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td class="cell-title mono" style="font-size:0.8125rem;">${f.mechanism}</td>
+          <td style="white-space:nowrap;">${f.owner}</td>
+          <td>${f.algebra}</td>
+          <td>${f.race}</td>
+        `;
+        tbody.appendChild(tr);
+      }
+    }
+
+    function renderMatrix() {
+      const m = getMachine();
+      document.getElementById('matrix-heading').textContent = `03. Transition Matrix — ${m.name}`;
+      const table = document.getElementById('matrix-table');
+      table.innerHTML = '';
+
+      const thead = document.createElement('thead');
+      const headRow = document.createElement('tr');
+      const corner = document.createElement('th');
+      corner.textContent = 'From \\ To';
+      headRow.appendChild(corner);
+      for (const n of m.nodes) {
+        const th = document.createElement('th');
+        th.textContent = n.id;
+        headRow.appendChild(th);
+      }
+      thead.appendChild(headRow);
+      table.appendChild(thead);
+
+      const tbody = document.createElement('tbody');
+      for (const fromNode of m.nodes) {
+        const tr = document.createElement('tr');
+        const rowHead = document.createElement('td');
+        rowHead.textContent = fromNode.id;
+        tr.appendChild(rowHead);
+
+        for (const toNode of m.nodes) {
+          const td = document.createElement('td');
+          const edge = m.edges.find((e) => e.from === fromNode.id && e.to === toNode.id);
+          if (edge) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'matrix-cell-btn';
+            btn.textContent = edge.label;
+            btn.title = `Jump to ${fromNode.id} and fire ${edge.label}`;
+            btn.addEventListener('click', () => {
+              stopWalkthrough();
+              simState[m.id].current = fromNode.id;
+              fireEdge(edge.id);
+              document.getElementById('stage').scrollIntoView({ behavior: 'smooth', block: 'start' });
+            });
+            td.appendChild(btn);
+          } else if (fromNode.id === toNode.id) {
+            td.innerHTML = '<span class="matrix-self mono">idempotent</span>';
+          } else {
+            td.innerHTML = '<span class="matrix-blocked mono">—</span>';
+          }
+          tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+    }
+
+    function renderAll() {
+      renderRail();
+      renderDiagram();
+      renderInspector();
+      renderOverviewTable();
+      renderMatrix();
+    }
+
+    // ── Event Wiring ─────────────────────────────────────────────────────────
+    document.getElementById('machine-search').addEventListener('input', (e) => {
+      searchTerm = e.target.value;
+      renderRail();
+    });
+
+    document.querySelectorAll('.filter-tab').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.filter-tab').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        domainFilter = btn.dataset.domain;
+        renderRail();
+      });
+    });
+
+    document.getElementById('btn-walkthrough').addEventListener('click', toggleWalkthrough);
+    document.getElementById('btn-reset').addEventListener('click', resetActiveMachine);
+    document.getElementById('btn-race').addEventListener('click', fireRaceTest);
+    document.getElementById('btn-clear-trace').addEventListener('click', () => {
+      const m = getMachine();
+      const s = simState[m.id];
+      s.trace = [{ step: 0, msg: `Trace cleared in ${s.current}`, outcome: 'ok', tag: 'Ready' }];
+      renderInspector();
+    });
+
+    const themeBtn = document.getElementById('theme-toggle');
+    themeBtn.addEventListener('click', () => {
+      const isDark = document.documentElement.classList.toggle('dark');
+      themeBtn.textContent = isDark ? 'Light Theme' : 'Dark Theme';
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+        const idx = STATE_MACHINES.findIndex((m) => m.id === activeMachineId);
+        const nextIdx =
+          e.key === 'ArrowRight'
+            ? (idx + 1) % STATE_MACHINES.length
+            : (idx - 1 + STATE_MACHINES.length) % STATE_MACHINES.length;
+        selectMachine(STATE_MACHINES[nextIdx].id);
+      } else if (e.key === 'r' || e.key === 'R') {
+        resetActiveMachine();
+      } else if (e.key === ' ' && e.target === document.body) {
+        e.preventDefault();
+        toggleWalkthrough();
+      }
+    });
+
+    // Boot
+    renderStats();
+    renderFencesTable();
+    renderAll();
+  </script>
+</body>
+</html>

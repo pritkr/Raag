@@ -121,6 +121,15 @@ async function main(): Promise<void> {
     }
   });
 
+  // Serve standalone interactive state-machine visualizer directly
+  app.get('/state-machines.html', (_req, res, next) => {
+    const htmlPath = path.resolve('public/state-machines.html');
+    if (fs.existsSync(htmlPath)) {
+      return res.sendFile(htmlPath);
+    }
+    next();
+  });
+
   // Serve built Android arm64-v8a APK directly from public/
   app.use('/resonance-arm64-debug.apk', (_req, res, next) => {
     const apkPath = path.resolve('public/resonance-arm64-debug.apk');
