@@ -11,12 +11,14 @@ use nsh_core::prelude::*;
 use resonance_contract::{LyricSyncKind, format_duration_ms};
 
 use crate::store;
-use crate::ui::controls::{secondary_button, status_card, svg_icon_button};
+use crate::ui::controls::{
+    ambient_shader_backdrop, secondary_button, status_card, svg_icon_button,
+};
 use crate::ui::icons::IconKind;
 use crate::ui::tokens::{
-    MOBILE_MIN_TOUCH_TARGET, ambient_backdrop_color, color_lyric_active, color_lyric_inactive,
-    color_player_accent, frosted_card_surface, glass_hairline, pill_glass_hover,
-    pill_glass_surface, radius_card, radius_pill,
+    MOBILE_MIN_TOUCH_TARGET, color_lyric_active, color_lyric_inactive, color_player_accent,
+    frosted_card_surface, glass_hairline, pill_glass_hover, pill_glass_surface, radius_card,
+    radius_pill,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,13 +107,16 @@ pub fn lyrics_screen() -> impl IntoElement {
     });
 
     view()
+        .relative()
         .flex_1()
         .min_h(px(0.0))
-        .bg(move || ambient_backdrop_color(store::active_ambient_palette()))
+        .overflow_hidden()
         .items_center()
         .p_4()
+        .child(ambient_shader_backdrop())
         .child(
             view()
+                .relative()
                 .w_full()
                 .max_w(px(860.0))
                 .flex_1()
@@ -146,7 +151,7 @@ pub fn lyrics_screen() -> impl IntoElement {
                                         .is_some_and(|active| at.index() < active)
                                 };
 
-                                // Performance rule: ZERO backdrop blur inside virtual_list rows.
+                                // Performance rule: ZERO blur inside virtual_list rows.
                                 button()
                                     .w_full()
                                     .min_h(px(MOBILE_MIN_TOUCH_TARGET))
@@ -165,6 +170,9 @@ pub fn lyrics_screen() -> impl IntoElement {
                                     )
                                     .hover(|s| s.bg(pill_glass_hover))
                                     .active(|s| s.opacity(0.85))
+                                    .focus_visible(|s| {
+                                        s.outline(px(2.0)).outline_color(move || theme().ring)
+                                    })
                                     .on_press(move || {
                                         if let Some(l) = line.get_untracked()
                                             && l.end_ms > 0
@@ -329,6 +337,9 @@ pub fn lyrics_screen() -> impl IntoElement {
                                     .justify_center()
                                     .rounded(radius_pill)
                                     .bg(move || theme().primary)
+                                    .focus_visible(|s| {
+                                        s.outline(px(2.0)).outline_color(move || theme().ring)
+                                    })
                                     .child(
                                         text("Sync to current line")
                                             .text_xs()

@@ -1,17 +1,35 @@
 //! Card controls: square media shelf cards, feedback status cards, and diagnostics badges.
 //! Zero raw color literals — semantic theme tokens only.
 
+use std::rc::Rc;
+
 use nsh_base::{button, theme};
 use nsh_core::prelude::*;
 
+use crate::store;
 use crate::ui::controls::primitives::{artwork_box, primary_button};
 use crate::ui::icons::{IconKind, icon};
 use crate::ui::tokens::{
-    color_hero_pill_bg, color_hero_pill_fg, color_sponsor_badge, color_status_ok, glass_hairline,
-    pill_glass_hover, pill_glass_surface, radius_card,
+    MOBILE_MIN_TOUCH_TARGET, card_title_label, color_hero_pill_bg, color_hero_pill_fg,
+    color_sponsor_badge, color_status_ok, frosted_bar_surface, glass_hairline, is_desktop_layout,
+    motion, muted_caption_label, pill_glass_hover, pill_glass_surface, radius_card,
 };
 
+fn card_transition_ms() -> f32 {
+    motion::transition_ms(motion::PRESS_MS, store::reduced_motion())
+}
+
+fn card_press_scale() -> f32 {
+    if store::reduced_motion() {
+        1.0
+    } else {
+        motion::PRESS_SCALE
+    }
+}
+
 /// Square album / mix / release card for horizontal shelves.
+/// Overlays top-right `⋯` menu and bottom-right floating Play pill on the artwork (hover/focus
+/// revealed on desktop, 48dp touch targets on mobile).
 #[allow(clippy::too_many_arguments)]
 pub fn media_square_card(
     artwork_url: Option<String>,
@@ -24,77 +42,160 @@ pub fn media_square_card(
     on_more: Option<Box<dyn Fn() + 'static>>,
 ) -> impl IntoElement {
     let art_size = card_width;
+    let on_open_rc = Rc::new(on_open);
+    let on_open_art = on_open_rc.clone();
+    let on_open_pill = on_open_rc.clone();
+    let on_open_meta = on_open_rc;
 
     view()
+        .group()
         .w(px(card_width))
-        .gap_1p5()
+        .gap_2()
         .child(
-            button()
-                .w(px(card_width))
-                .gap_2()
-                .active(|s| s.opacity(0.82))
-                .hover(|s| s.opacity(0.94))
-                .on_press(on_open)
+            view()
+                .relative()
+                .w(px(art_size))
+                .h(px(art_size))
+                .rounded(radius_card)
+                .overflow_hidden()
                 .child(
-                    view()
+                    button()
+                        .accessibility_label(format!("Open {title}"))
                         .w(px(art_size))
                         .h(px(art_size))
                         .rounded(radius_card)
                         .overflow_hidden()
-                        .child(artwork_box(artwork_url, monogram, art_size, 10.0))
-                        .when(is_active, |b| {
-                            b.child(
-                                view()
-                                    .absolute()
-                                    .bottom_2()
-                                    .right_2()
-                                    .w(px(34.0))
-                                    .h(px(34.0))
-                                    .rounded_full()
-                                    .bg(color_hero_pill_bg)
-                                    .items_center()
-                                    .justify_center()
-                                    .child(icon(IconKind::Pause, 14.0, color_hero_pill_fg)),
-                            )
-                        }),
+                        .transition()
+                        .duration(card_transition_ms)
+                        .ease_out()
+                        .hover(|s| s.opacity(0.94))
+                        .active(|s| s.scale(card_press_scale).opacity(0.88))
+                        .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
+                        .on_press(move || on_open_art())
+                        .child(artwork_box(artwork_url, monogram, art_size, 10.0)),
                 )
+                .when_some(on_more, |v, cb| {
+                    v.child(
+                        button()
+                            .accessibility_label("Play Next")
+                            .absolute()
+                            .top_2()
+                            .right_2()
+                            .w(move || {
+                                px(if is_desktop_layout() {
+                                    36.0
+                                } else {
+                                    MOBILE_MIN_TOUCH_TARGET
+                                })
+                            })
+                            .h(move || {
+                                px(if is_desktop_layout() {
+                                    36.0
+                                } else {
+                                    MOBILE_MIN_TOUCH_TARGET
+                                })
+                            })
+                            .items_center()
+                            .justify_center()
+                            .rounded_full()
+                            .bg(frosted_bar_surface)
+                            .border_1()
+                            .border_color(glass_hairline)
+                            .shadow_md()
+                            .opacity(move || if is_desktop_layout() { 0.0_f32 } else { 0.94 })
+                            .transition()
+                            .duration(card_transition_ms)
+                            .ease_out()
+                            .group_hover(|s| s.opacity(1.0))
+                            .group_focus_within(|s| s.opacity(1.0))
+                            .hover(|s| s.bg(pill_glass_hover))
+                            .active(|s| s.scale(card_press_scale))
+                            .focus_visible(|s| {
+                                s.opacity(1.0)
+                                    .outline(px(2.0))
+                                    .outline_color(move || theme().ring)
+                            })
+                            .on_press(cb)
+                            .child(icon(IconKind::MoreVertical, 15.0, move || {
+                                theme().foreground
+                            })),
+                    )
+                })
                 .child(
-                    view()
-                        .w_full()
-                        .gap_0p5()
-                        .child(
-                            text(title)
-                                .number_of_lines(1)
-                                .text_sm()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(move || theme().foreground),
-                        )
-                        .child(
-                            text(subtitle)
-                                .number_of_lines(1)
-                                .text_xs()
-                                .text_color(move || theme().muted_foreground),
-                        ),
-                ),
-        )
-        .when_some(on_more, |v, cb| {
-            v.child(
-                view().w_full().flex_row().justify_end().child(
                     button()
-                        .accessibility_label("Play Next")
-                        .w(px(28.0))
-                        .h(px(24.0))
+                        .accessibility_label(if is_active {
+                            "Pause Track"
+                        } else {
+                            "Play Track"
+                        })
+                        .absolute()
+                        .bottom_2()
+                        .right_2()
+                        .w(move || {
+                            px(if is_desktop_layout() {
+                                38.0
+                            } else {
+                                MOBILE_MIN_TOUCH_TARGET
+                            })
+                        })
+                        .h(move || {
+                            px(if is_desktop_layout() {
+                                38.0
+                            } else {
+                                MOBILE_MIN_TOUCH_TARGET
+                            })
+                        })
                         .items_center()
                         .justify_center()
                         .rounded_full()
-                        .hover(|s| s.bg(pill_glass_hover))
-                        .on_press(cb)
-                        .child(icon(IconKind::MoreVertical, 14.0, move || {
-                            theme().muted_foreground
-                        })),
+                        .bg(color_hero_pill_bg)
+                        .shadow_lg()
+                        .opacity(move || {
+                            if is_active || !is_desktop_layout() {
+                                1.0_f32
+                            } else {
+                                0.0_f32
+                            }
+                        })
+                        .transition()
+                        .duration(card_transition_ms)
+                        .ease_out()
+                        .group_hover(|s| s.opacity(1.0))
+                        .group_focus_within(|s| s.opacity(1.0))
+                        .hover(|s| s.opacity(0.94))
+                        .active(|s| s.scale(card_press_scale))
+                        .focus_visible(|s| {
+                            s.opacity(1.0)
+                                .outline(px(2.0))
+                                .outline_color(move || theme().ring)
+                        })
+                        .on_press(move || on_open_pill())
+                        .child(icon(
+                            if is_active {
+                                IconKind::Pause
+                            } else {
+                                IconKind::Play
+                            },
+                            15.0,
+                            color_hero_pill_fg,
+                        )),
                 ),
-            )
-        })
+        )
+        .child(
+            button()
+                .w_full()
+                .gap_0p5()
+                .rounded(move || theme().radius)
+                .transition()
+                .duration(card_transition_ms)
+                .ease_out()
+                .hover(|s| s.opacity(0.9))
+                .active(|s| s.opacity(0.78))
+                .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
+                .on_press(move || on_open_meta())
+                .child(card_title_label(title))
+                .child(muted_caption_label(subtitle)),
+        )
 }
 
 /// Reusable empty/offline/error feedback panel.

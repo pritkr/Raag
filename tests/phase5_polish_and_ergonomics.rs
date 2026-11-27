@@ -139,9 +139,11 @@ fn phase5_desktop_shortcuts_and_zero_raw_colors_in_controls() -> Result<(), Stri
         "expected atomic hierarchy in src/ui/controls/ (>=6 modules), found {checked_files}"
     );
 
-    // Desktop layout shows keyboard shortcut legend in sidebar
+    // Desktop layout exposes keyboard shortcuts in a header `?` popover
     let mut desktop = start_desktop();
-    desktop.wait_for("Shortcuts: Space · ←/→ · N/P · L · M")?;
+    desktop.press("id:shortcuts-help-btn")?;
+    desktop.wait_for("Keyboard Shortcuts")?;
+    desktop.wait_for("Play / Pause")?;
 
     // Exercise desktop Now Playing controls on the live NSH engine thread
     desktop.press("id:nav-now-playing")?;

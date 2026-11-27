@@ -9,6 +9,7 @@
 //! All modules consume semantic tokens from `crate::ui::tokens` + `nsh_base::theme()`
 //! with zero raw color literals.
 
+pub mod ambient;
 pub mod cards;
 pub mod cast_sheet;
 pub mod context_menu;
@@ -21,6 +22,10 @@ pub mod speed_sheet;
 pub mod transport;
 pub mod vault_widgets;
 
+pub use ambient::{
+    ambient_shader_backdrop, animated_like_heart, animated_play_pause_icon,
+    live_equalizer_indicator,
+};
 pub use cards::{diagnostics_badge, media_square_card, status_card};
 pub use cast_sheet::{active_cast_banner, cast_button, cast_picker_sheet};
 pub use context_menu::{TrackMenuContext, track_context_menu};
@@ -31,8 +36,8 @@ pub use navigation::{
     set_text_input_focused,
 };
 pub use primitives::{
-    artwork_box, glass_pill_button, hero_pill_button, icon_button, mood_chip, primary_button,
-    secondary_button, setting_switch, svg_icon_button,
+    artwork_box, back_button, glass_pill_button, hero_pill_button, icon_button, mood_chip,
+    mood_chip_with_icon, primary_button, secondary_button, setting_switch, svg_icon_button,
 };
 pub use sheets::{
     action_sheet_row, add_to_playlist_sheet, modal_panel_container, track_action_sheet,

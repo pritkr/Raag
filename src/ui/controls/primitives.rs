@@ -4,14 +4,27 @@
 use nsh_base::{button, switch, theme};
 use nsh_core::prelude::*;
 
+use crate::store;
 use crate::ui::icons::{IconKind, icon};
 use crate::ui::tokens::{
     MOBILE_MIN_TOUCH_TARGET, color_control, color_control_fg, color_hero_pill_bg,
-    color_hero_pill_fg, cover_gradient_pair, glass_hairline, pill_glass_hover, pill_glass_surface,
-    radius_card, radius_pill,
+    color_hero_pill_fg, cover_gradient_pair, glass_hairline, is_desktop_layout, motion,
+    pill_glass_hover, pill_glass_surface, radius_card, radius_pill,
 };
 
-/// Primary filled action button with >=48dp height on mobile and native press state.
+fn press_duration_ms() -> f32 {
+    motion::transition_ms(motion::PRESS_MS, store::reduced_motion())
+}
+
+fn active_press_scale() -> f32 {
+    if store::reduced_motion() {
+        1.0
+    } else {
+        motion::PRESS_SCALE
+    }
+}
+
+/// Primary filled action button with >=48dp height on mobile and tactile press feedback.
 pub fn primary_button(
     label: impl IntoReactive<SharedString>,
     on_press: impl Fn() + 'static,
@@ -24,8 +37,11 @@ pub fn primary_button(
         .justify_center()
         .rounded(move || theme().radius)
         .bg(move || theme().primary)
+        .transition()
+        .duration(press_duration_ms)
+        .ease_out()
         .hover(|s| s.opacity(0.92))
-        .active(|s| s.opacity(0.8))
+        .active(|s| s.scale(active_press_scale).opacity(0.86))
         .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
         .disabled_style(|s| s.opacity(0.45))
         .child(
@@ -45,6 +61,10 @@ pub fn hero_pill_button(
     button()
         .on_press(on_press)
         .min_h(px(40.0))
+        .style_when(
+            || !is_desktop_layout(),
+            |s| s.min_h(px(MOBILE_MIN_TOUCH_TARGET)),
+        )
         .px_5()
         .flex_row()
         .items_center()
@@ -52,8 +72,11 @@ pub fn hero_pill_button(
         .gap_2()
         .rounded(radius_pill)
         .bg(color_hero_pill_bg)
-        .hover(|s| s.opacity(0.9))
-        .active(|s| s.opacity(0.78))
+        .transition()
+        .duration(press_duration_ms)
+        .ease_out()
+        .hover(|s| s.opacity(0.92))
+        .active(|s| s.scale(active_press_scale).opacity(0.84))
         .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
         .when_some(leading_icon, |b, kind| {
             b.child(icon(kind, 15.0, color_hero_pill_fg))
@@ -75,6 +98,10 @@ pub fn glass_pill_button(
     button()
         .on_press(on_press)
         .min_h(px(40.0))
+        .style_when(
+            || !is_desktop_layout(),
+            |s| s.min_h(px(MOBILE_MIN_TOUCH_TARGET)),
+        )
         .px_4()
         .flex_row()
         .items_center()
@@ -84,8 +111,11 @@ pub fn glass_pill_button(
         .bg(pill_glass_surface)
         .border_1()
         .border_color(glass_hairline)
+        .transition()
+        .duration(press_duration_ms)
+        .ease_out()
         .hover(|s| s.bg(pill_glass_hover))
-        .active(|s| s.opacity(0.78))
+        .active(|s| s.scale(active_press_scale).opacity(0.84))
         .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
         .when_some(leading_icon, |b, kind| {
             b.child(icon(kind, 15.0, move || theme().foreground))
@@ -113,8 +143,11 @@ pub fn secondary_button(
         .bg(pill_glass_surface)
         .border_1()
         .border_color(glass_hairline)
+        .transition()
+        .duration(press_duration_ms)
+        .ease_out()
         .hover(|s| s.bg(pill_glass_hover))
-        .active(|s| s.opacity(0.75))
+        .active(|s| s.scale(active_press_scale).opacity(0.84))
         .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
         .child(
             text(label)
@@ -124,9 +157,49 @@ pub fn secondary_button(
         )
 }
 
+/// Icon-backed Back navigation button (`IconKind::ChevronLeft` + `"Back"`, >=48dp touch target).
+pub fn back_button(on_press: impl Fn() + 'static) -> impl IntoElement {
+    button()
+        .on_press(on_press)
+        .accessibility_label("Back")
+        .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+        .px_3p5()
+        .flex_row()
+        .items_center()
+        .justify_center()
+        .gap_1p5()
+        .rounded(radius_pill)
+        .bg(pill_glass_surface)
+        .border_1()
+        .border_color(glass_hairline)
+        .transition()
+        .duration(press_duration_ms)
+        .ease_out()
+        .hover(|s| s.bg(pill_glass_hover))
+        .active(|s| s.scale(active_press_scale).opacity(0.84))
+        .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
+        .child(icon(IconKind::ChevronLeft, 16.0, move || theme().foreground))
+        .child(
+            text("Back")
+                .text_sm()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(move || theme().foreground),
+        )
+}
+
 /// Mood / category filter chip (>= 48dp touch height on mobile, 36dp on desktop, zero truncation).
 pub fn mood_chip(
-    label: &'static str,
+    label: impl IntoReactive<SharedString>,
+    selected: impl Fn() -> bool + Copy + 'static,
+    on_press: impl Fn() + 'static,
+) -> impl IntoElement {
+    mood_chip_with_icon(None, label, selected, on_press)
+}
+
+/// Icon-backed mood / filter chip (e.g. `IconKind::Close` + `"Clear"`).
+pub fn mood_chip_with_icon(
+    leading_icon: Option<IconKind>,
+    label: impl IntoReactive<SharedString>,
     selected: impl Fn() -> bool + Copy + 'static,
     on_press: impl Fn() + 'static,
 ) -> impl IntoElement {
@@ -134,13 +207,15 @@ pub fn mood_chip(
         .on_press(on_press)
         .min_h(px(36.0))
         .style_when(
-            || !crate::ui::tokens::is_desktop_layout(),
+            || !is_desktop_layout(),
             |s| s.min_h(px(MOBILE_MIN_TOUCH_TARGET)),
         )
         .px_4()
+        .flex_row()
         .flex_shrink_0()
         .items_center()
         .justify_center()
+        .gap_1p5()
         .rounded(move || theme().radius)
         .bg(move || {
             if selected() {
@@ -151,8 +226,21 @@ pub fn mood_chip(
         })
         .border_1()
         .border_color(glass_hairline)
+        .transition()
+        .duration(press_duration_ms)
+        .ease_out()
         .hover(|s| s.bg(pill_glass_hover))
-        .active(|s| s.opacity(0.8))
+        .active(|s| s.scale(active_press_scale).opacity(0.86))
+        .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
+        .when_some(leading_icon, |b, kind| {
+            b.child(icon(kind, 13.0, move || {
+                if selected() {
+                    color_hero_pill_fg()
+                } else {
+                    theme().foreground
+                }
+            }))
+        })
         .child(
             text(label)
                 .number_of_lines(1)
@@ -185,8 +273,11 @@ pub fn icon_button(
         .rounded_full()
         .when(emphasized, |b| b.bg(color_control))
         .when(!emphasized, |b| b.bg(pill_glass_surface))
-        .hover(|s| s.opacity(0.88))
-        .active(|s| s.opacity(0.72))
+        .transition()
+        .duration(press_duration_ms)
+        .ease_out()
+        .hover(|s| s.opacity(0.9))
+        .active(|s| s.scale(active_press_scale).opacity(0.8))
         .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
         .child(
             text(glyph)
@@ -202,7 +293,7 @@ pub fn icon_button(
         )
 }
 
-/// Crisp SVG icon button with optional subtle ghost background.
+/// Crisp SVG icon button with optional subtle ghost background and tactile press feedback.
 pub fn svg_icon_button(
     kind: IconKind,
     icon_px: f32,
@@ -221,8 +312,11 @@ pub fn svg_icon_button(
         .justify_center()
         .rounded_full()
         .when(!ghost, |b| b.bg(pill_glass_surface))
+        .transition()
+        .duration(press_duration_ms)
+        .ease_out()
         .hover(|s| s.bg(pill_glass_hover))
-        .active(|s| s.opacity(0.72))
+        .active(|s| s.scale(active_press_scale).opacity(0.8))
         .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
         .child(icon(kind, icon_px, color_fn))
 }

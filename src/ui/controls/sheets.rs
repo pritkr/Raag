@@ -8,11 +8,23 @@ use crate::store::{self, AppTab};
 use crate::ui::controls::context_menu::{track_sheet_header_preview, track_youtube_music_url};
 use crate::ui::icons::{IconKind, icon};
 use crate::ui::tokens::{
-    MOBILE_MIN_TOUCH_TARGET, frosted_bar_surface, frosted_card_surface, glass_hairline,
-    pill_glass_hover, pill_glass_surface, radius_card, radius_panel, radius_pill,
+    MOBILE_MIN_TOUCH_TARGET, frosted_card_surface, glass_hairline, glass_specular_hairline, motion,
+    overlay_scrim, pill_glass_hover, pill_glass_surface, radius_card, radius_panel, radius_pill,
 };
 
-/// Frosted panel container for side drawers, queue/DSP sheets, and modal actions.
+fn sheet_transition_ms() -> f32 {
+    motion::transition_ms(motion::PRESS_MS, store::reduced_motion())
+}
+
+fn sheet_press_scale() -> f32 {
+    if store::reduced_motion() {
+        1.0
+    } else {
+        motion::PRESS_SCALE
+    }
+}
+
+/// Frosted glassmorphism panel container (`BackdropMaterial::Thick`) for modals & sheets.
 pub fn modal_panel_container(
     title: impl IntoReactive<SharedString>,
     subtitle: impl IntoReactive<SharedString>,
@@ -22,9 +34,13 @@ pub fn modal_panel_container(
         .p_4()
         .gap_3()
         .rounded(radius_panel)
+        .backdrop_blur(px(28.0))
+        .backdrop_material(BackdropMaterial::Thick)
         .bg(frosted_card_surface)
         .border_1()
         .border_color(glass_hairline)
+        .border_t_color(glass_specular_hairline)
+        .shadow_2xl()
         .child(
             view()
                 .gap_0p5()
@@ -57,8 +73,12 @@ pub fn action_sheet_row(
         .items_center()
         .gap_3()
         .rounded(move || theme().radius)
+        .transition()
+        .duration(sheet_transition_ms)
+        .ease_out()
         .hover(|s| s.bg(pill_glass_hover))
-        .active(|s| s.opacity(0.8))
+        .active(|s| s.scale(sheet_press_scale).opacity(0.84))
+        .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
         .child(icon(leading, 16.0, move || theme().foreground))
         .child(
             text(label)
@@ -106,7 +126,7 @@ pub fn track_action_sheet() -> impl IntoElement {
                 .test_id("track-action-sheet")
                 .absolute()
                 .inset_0()
-                .bg(frosted_bar_surface)
+                .bg(overlay_scrim)
                 .items_center()
                 .justify_center()
                 .p_4()
@@ -276,6 +296,12 @@ pub fn add_to_playlist_sheet() -> impl IntoElement {
                     })
                     .border_1()
                     .border_color(glass_hairline)
+                    .transition()
+                    .duration(sheet_transition_ms)
+                    .ease_out()
+                    .hover(|s| s.opacity(0.92))
+                    .active(|s| s.scale(sheet_press_scale))
+                    .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                     .child(
                         text(lbl)
                             .text_xs()
@@ -294,7 +320,7 @@ pub fn add_to_playlist_sheet() -> impl IntoElement {
                 .test_id("add-to-playlist-sheet")
                 .absolute()
                 .inset_0()
-                .bg(frosted_bar_surface)
+                .bg(overlay_scrim)
                 .items_center()
                 .justify_center()
                 .p_4()
@@ -362,6 +388,14 @@ pub fn add_to_playlist_sheet() -> impl IntoElement {
                                         .justify_center()
                                         .rounded(radius_pill)
                                         .bg(move || theme().primary)
+                                        .transition()
+                                        .duration(sheet_transition_ms)
+                                        .ease_out()
+                                        .hover(|s| s.opacity(0.92))
+                                        .active(|s| s.scale(sheet_press_scale))
+                                        .focus_visible(|s| {
+                                            s.outline(px(2.0)).outline_color(move || theme().ring)
+                                        })
                                         .child(
                                             text("Create & Add")
                                                 .text_sm()

@@ -11,7 +11,7 @@ use resonance_core::offline::CollectionOfflineProgress;
 use resonance_core::palette::palette_for_track;
 
 use crate::ui::controls::{
-    artwork_box, glass_pill_button, hero_pill_button, media_square_card, secondary_button,
+    artwork_box, back_button, glass_pill_button, hero_pill_button, media_square_card,
     track_row_view,
 };
 use crate::ui::icons::IconKind;
@@ -139,7 +139,7 @@ pub fn album_screen_with_detail(
                     .flex_row()
                     .items_center()
                     .justify_between()
-                    .child(secondary_button("← Back", move || cb_back())),
+                    .child(back_button(move || cb_back())),
             )
             .child(
                 view()
@@ -184,6 +184,10 @@ pub fn album_screen_with_detail(
                                         .self_start()
                                         .min_h(px(MOBILE_MIN_TOUCH_TARGET))
                                         .justify_center()
+                                        .rounded(move || theme().radius)
+                                        .focus_visible(|s| {
+                                            s.outline(px(2.0)).outline_color(move || theme().ring)
+                                        })
                                         .on_press(move || {
                                             if let Some(cid) = artist_id.as_ref() {
                                                 cb_art(cid.clone());

@@ -12,43 +12,63 @@ use resonance_contract::{DownloadStatus, LyricSyncKind, RepeatMode, format_durat
 
 use crate::store::{self, AppTab, NowPlayingTab};
 use crate::ui::controls::{
-    artwork_box, open_sleep_timer_sheet, open_speed_sheet, secondary_button, seek_slider,
-    setting_switch, sleep_timer_badge_label, speed_badge_label, status_card, svg_icon_button,
-    volume_slider,
+    ambient_shader_backdrop, animated_like_heart, animated_play_pause_icon, artwork_box,
+    open_sleep_timer_sheet, open_speed_sheet, secondary_button, seek_slider, setting_switch,
+    sleep_timer_badge_label, speed_badge_label, status_card, svg_icon_button, volume_slider,
 };
 use crate::ui::icons::{IconKind, icon, reactive_icon};
 use crate::ui::tokens::{
-    MOBILE_MIN_TOUCH_TARGET, ambient_accent_color, ambient_backdrop_color, color_control,
-    color_control_fg, color_liked, color_lyric_active, color_lyric_inactive, color_player_accent,
-    color_sponsor_badge, cover_gradient_pair, frosted_card_surface, glass_hairline,
-    is_desktop_layout, pill_glass_hover, pill_glass_surface, radius_card, radius_panel,
+    MOBILE_MIN_TOUCH_TARGET, ambient_accent_color, color_control, color_control_fg, color_liked,
+    color_lyric_active, color_lyric_inactive, color_player_accent, color_sponsor_badge,
+    cover_gradient_pair, frosted_card_surface, glass_hairline, glass_specular_hairline,
+    is_desktop_layout, motion, pill_glass_hover, pill_glass_surface, radius_card, radius_panel,
     radius_pill, sidebar_active_surface,
 };
+
+fn np_transition_ms() -> f32 {
+    motion::transition_ms(motion::PRESS_MS, store::reduced_motion())
+}
+
+fn np_press_scale() -> f32 {
+    if store::reduced_motion() {
+        1.0
+    } else {
+        motion::PRESS_SCALE
+    }
+}
 
 pub fn now_playing_screen() -> impl IntoElement {
     let has_track = move || store::player_snapshot().current_track.is_some();
 
     view()
+        .relative()
         .flex_1()
         .min_h(px(0.0))
-        .bg(move || ambient_backdrop_color(store::active_ambient_palette()))
+        .overflow_hidden()
+        .child(ambient_shader_backdrop())
         .child(
-            when(has_track, || {
-                when(is_desktop_layout, desktop_now_playing).otherwise(mobile_now_playing)
-            })
-            .otherwise(|| {
-                view()
-                    .flex_1()
-                    .items_center()
-                    .justify_center()
-                    .p_5()
-                    .child(status_card(
-                        "Nothing is playing",
-                        "Pick a song from Home or Search to begin playback.",
-                        Some("Browse Home"),
-                        Some(Box::new(|| store::set_tab(AppTab::Home))),
-                    ))
-            }),
+            view()
+                .relative()
+                .flex_1()
+                .min_h(px(0.0))
+                .child(
+                    when(has_track, || {
+                        when(is_desktop_layout, desktop_now_playing).otherwise(mobile_now_playing)
+                    })
+                    .otherwise(|| {
+                        view()
+                            .flex_1()
+                            .items_center()
+                            .justify_center()
+                            .p_5()
+                            .child(status_card(
+                                "Nothing is playing",
+                                "Pick a song from Home or Search to begin playback.",
+                                Some("Browse Home"),
+                                Some(Box::new(|| store::set_tab(AppTab::Home))),
+                            ))
+                    }),
+                ),
         )
 }
 
@@ -241,16 +261,28 @@ fn focal_artwork(size_px: f32) -> impl IntoElement {
     };
 
     view()
-        .p_2p5()
-        .rounded(radius_panel)
-        .bg(move || ambient_accent_color(store::active_ambient_palette()))
-        .border_1()
-        .border_color(glass_hairline)
+        .relative()
+        .p_2()
+        .items_center()
+        .justify_center()
         .child(
             view()
+                .absolute()
+                .inset_1()
+                .rounded(radius_panel)
+                .bg(move || ambient_accent_color(store::active_ambient_palette()))
+                .blur(px(30.0))
+                .opacity(0.62)
+                .pointer_events(PointerEvents::None)
+                .accessibility_elements_hidden(true),
+        )
+        .child(
+            view()
+                .relative()
                 .w(px(size_px))
                 .h(px(size_px))
                 .rounded(radius_card)
+                .shadow_xl()
                 .bg_linear_to_br()
                 .gradient_from(move || {
                     let seed = store::player_snapshot()
@@ -502,26 +534,18 @@ fn track_info_and_actions() -> impl IntoElement {
                         .bg(pill_glass_surface)
                         .border_1()
                         .border_color(glass_hairline)
+                        .transition()
+                        .duration(np_transition_ms)
+                        .ease_out()
                         .hover(|s| s.bg(pill_glass_hover))
-                        .active(|s| s.opacity(0.75))
+                        .active(|s| s.scale(np_press_scale).opacity(0.84))
                         .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                         .on_press(store::toggle_like_current)
-                        .child(reactive_icon(
-                            move || {
-                                if is_liked() {
-                                    IconKind::HeartFilled
-                                } else {
-                                    IconKind::Heart
-                                }
-                            },
+                        .child(animated_like_heart(
+                            is_liked,
                             19.0,
-                            move || {
-                                if is_liked() {
-                                    color_liked()
-                                } else {
-                                    theme().foreground
-                                }
-                            },
+                            color_liked,
+                            move || theme().foreground,
                         )),
                 )
                 .child(
@@ -681,18 +705,16 @@ fn transport_bar() -> impl IntoElement {
                 .justify_center()
                 .rounded_full()
                 .bg(color_control)
+                .shadow_lg()
+                .transition()
+                .duration(np_transition_ms)
+                .ease_out()
                 .hover(|s| s.opacity(0.92))
-                .active(|s| s.opacity(0.78))
+                .active(|s| s.scale(np_press_scale).opacity(0.86))
                 .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                 .on_press(store::toggle_play_pause)
-                .child(reactive_icon(
-                    move || {
-                        if is_playing() {
-                            IconKind::Pause
-                        } else {
-                            IconKind::Play
-                        }
-                    },
+                .child(animated_play_pause_icon(
+                    is_playing,
                     24.0,
                     color_control_fg,
                 )),
@@ -783,12 +805,10 @@ fn volume_strip(desktop: bool) -> impl IntoElement {
     view()
         .w_full()
         .gap_1p5()
-        .px_3()
-        .py_2()
+        .px_2p5()
+        .py_1p5()
         .rounded(radius_card)
-        .backdrop_blur(px(14.0))
-        .backdrop_material(BackdropMaterial::Thin)
-        .bg(frosted_card_surface)
+        .bg(pill_glass_surface)
         .border_1()
         .border_color(glass_hairline)
         .child(
@@ -864,6 +884,26 @@ fn volume_strip(desktop: bool) -> impl IntoElement {
         })
 }
 
+/// Frosted glass control dock grouping seek, transport, and volume controls with a 1px top specular hairline.
+fn now_playing_control_dock(desktop: bool) -> impl IntoElement {
+    view()
+        .test_id("now-playing-control-dock")
+        .w_full()
+        .p_4()
+        .gap_3p5()
+        .rounded(radius_panel)
+        .backdrop_blur(px(24.0))
+        .backdrop_material(BackdropMaterial::Regular)
+        .bg(frosted_card_surface)
+        .border_1()
+        .border_color(glass_hairline)
+        .border_t_color(glass_specular_hairline)
+        .shadow_xl()
+        .child(seek_section(!desktop))
+        .child(transport_bar())
+        .child(volume_strip(desktop))
+}
+
 fn sponsorblock_badge() -> impl IntoElement {
     when(
         || store::player_snapshot().sponsorblock_enabled,
@@ -897,7 +937,12 @@ fn now_playing_tab_bar() -> impl IntoElement {
         .p_1()
         .rounded(radius_card)
         .bg(pill_glass_surface)
-        .indicator_class("inset-y-1 rounded-lg bg-primary")
+        .indicator_style(|s| {
+            s.top_1()
+                .bottom_1()
+                .rounded(move || theme().radius)
+                .bg(move || theme().primary)
+        })
         .accessibility_label("Now Playing panels")
         .child(
             tab()
@@ -909,10 +954,13 @@ fn now_playing_tab_bar() -> impl IntoElement {
                 .items_center()
                 .justify_center()
                 .rounded(move || theme().radius)
+                .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                 .child(
-                    text("UP NEXT")
+                    text("Up Next")
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
+                        .uppercase()
+                        .letter_spacing(px(0.7))
                         .text_color(move || {
                             if is_up_next() {
                                 theme().primary_foreground
@@ -932,10 +980,13 @@ fn now_playing_tab_bar() -> impl IntoElement {
                 .items_center()
                 .justify_center()
                 .rounded(move || theme().radius)
+                .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                 .child(
-                    text("LYRICS")
+                    text("Lyrics")
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
+                        .uppercase()
+                        .letter_spacing(px(0.7))
                         .text_color(move || {
                             if is_lyrics() {
                                 theme().primary_foreground
@@ -955,10 +1006,13 @@ fn now_playing_tab_bar() -> impl IntoElement {
                 .items_center()
                 .justify_center()
                 .rounded(move || theme().radius)
+                .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                 .child(
-                    text("RELATED")
+                    text("Related")
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
+                        .uppercase()
+                        .letter_spacing(px(0.7))
                         .text_color(move || {
                             if is_related() {
                                 theme().primary_foreground
@@ -993,6 +1047,7 @@ fn now_playing_up_next_body() -> impl IntoElement {
                     .rounded(radius_card)
                     .style_when(active, |s| s.bg(sidebar_active_surface))
                     .hover(|s| s.bg(pill_glass_hover))
+                    .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                     .on_press(move || store::jump_queue(at.index()))
                     .child(
                         view()
@@ -1115,7 +1170,6 @@ fn now_playing_lyrics_body() -> impl IntoElement {
                                 == Some(at.index())
                         };
 
-                        // Zero backdrop blur inside virtual_list rows.
                         button()
                             .w_full()
                             .min_h(px(44.0))
@@ -1126,6 +1180,7 @@ fn now_playing_lyrics_body() -> impl IntoElement {
                             .style_when(move || !is_active(), |s| s.opacity(0.62))
                             .hover(|s| s.bg(pill_glass_hover))
                             .active(|s| s.opacity(0.85))
+                            .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                             .on_press(move || {
                                 if let Some(l) = line.get_untracked()
                                     && l.end_ms > 0
@@ -1232,6 +1287,8 @@ fn now_playing_related_body() -> impl IntoElement {
                             .flex_row()
                             .items_center()
                             .gap_2p5()
+                            .rounded(move || theme().radius)
+                            .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                             .on_press(move || store::play_track(t_play.clone()))
                             .child(artwork_box(art_url, mono, 42.0, 6.0))
                             .child(
@@ -1317,7 +1374,7 @@ fn desktop_now_playing() -> impl IntoElement {
                 .items_start()
                 .gap_10()
                 .child(
-                    scroll().w(px(380.0)).h_full().child(
+                    scroll().w(px(396.0)).h_full().child(
                         view()
                             .w_full()
                             .gap_4()
@@ -1325,9 +1382,7 @@ fn desktop_now_playing() -> impl IntoElement {
                             .pb_4()
                             .child(focal_artwork(340.0))
                             .child(track_info_and_actions())
-                            .child(seek_section(false))
-                            .child(transport_bar())
-                            .child(volume_strip(true)),
+                            .child(now_playing_control_dock(true)),
                     ),
                 )
                 .child(desktop_now_playing_right_panel()),
@@ -1369,6 +1424,7 @@ fn mobile_now_playing_tabs_card() -> impl IntoElement {
                             .rounded(radius_card)
                             .when(active, |b| b.bg(sidebar_active_surface))
                             .hover(|s| s.bg(pill_glass_hover))
+                            .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                             .on_press(move || store::jump_queue(idx))
                             .child(
                                 view()
@@ -1459,6 +1515,7 @@ fn mobile_now_playing_tabs_card() -> impl IntoElement {
                             .py_1p5()
                             .rounded(radius_card)
                             .hover(|s| s.bg(pill_glass_hover))
+                            .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                             .on_press(move || store::play_track(t_play.clone()))
                             .child(
                                 view()
@@ -1502,9 +1559,7 @@ fn mobile_now_playing() -> impl IntoElement {
             .child(top_header_bar(false))
             .child(focal_artwork(268.0))
             .child(track_info_and_actions())
-            .child(seek_section(true))
-            .child(transport_bar())
-            .child(volume_strip(false))
+            .child(now_playing_control_dock(false))
             .child(sponsorblock_badge())
             .child(mobile_now_playing_tabs_card())
             .child(

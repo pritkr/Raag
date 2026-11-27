@@ -9,9 +9,21 @@ use crate::store;
 use crate::ui::controls::primitives::setting_switch;
 use crate::ui::icons::{IconKind, icon};
 use crate::ui::tokens::{
-    MOBILE_MIN_TOUCH_TARGET, frosted_bar_surface, frosted_card_surface, glass_hairline,
-    pill_glass_hover, pill_glass_surface, radius_card, radius_panel, radius_pill,
+    MOBILE_MIN_TOUCH_TARGET, frosted_card_surface, glass_hairline, glass_specular_hairline, motion,
+    overlay_scrim, pill_glass_hover, pill_glass_surface, radius_card, radius_panel, radius_pill,
 };
+
+fn speed_transition_ms() -> f32 {
+    motion::transition_ms(motion::PRESS_MS, store::reduced_motion())
+}
+
+fn speed_press_scale() -> f32 {
+    if store::reduced_motion() {
+        1.0
+    } else {
+        motion::PRESS_SCALE
+    }
+}
 
 pub fn quantize_speed(speed: f32) -> f32 {
     let clamped = speed.clamp(0.50, 2.00);
@@ -81,8 +93,12 @@ fn speed_chip(val: f32, label: &'static str) -> impl IntoElement {
         })
         .border_1()
         .border_color(glass_hairline)
-        .hover(|s| s.opacity(0.9))
-        .active(|s| s.opacity(0.78))
+        .transition()
+        .duration(speed_transition_ms)
+        .ease_out()
+        .hover(|s| s.opacity(0.92))
+        .active(|s| s.scale(speed_press_scale).opacity(0.84))
+        .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
         .child(
             text(label)
                 .text_xs()
@@ -105,7 +121,7 @@ pub fn speed_sheet() -> impl IntoElement {
             .test_id("speed-sheet")
             .absolute()
             .inset_0()
-            .bg(frosted_bar_surface)
+            .bg(overlay_scrim)
             .items_center()
             .justify_center()
             .p_4()
@@ -116,9 +132,13 @@ pub fn speed_sheet() -> impl IntoElement {
                     .p_4()
                     .gap_4()
                     .rounded(radius_panel)
+                    .backdrop_blur(px(28.0))
+                    .backdrop_material(BackdropMaterial::Thick)
                     .bg(frosted_card_surface)
                     .border_1()
                     .border_color(glass_hairline)
+                    .border_t_color(glass_specular_hairline)
+                    .shadow_2xl()
                     .child(
                         view()
                             .flex_row()
@@ -145,7 +165,14 @@ pub fn speed_sheet() -> impl IntoElement {
                                     .items_center()
                                     .justify_center()
                                     .rounded_full()
+                                    .transition()
+                                    .duration(speed_transition_ms)
+                                    .ease_out()
                                     .hover(|s| s.bg(pill_glass_hover))
+                                    .active(|s| s.scale(speed_press_scale))
+                                    .focus_visible(|s| {
+                                        s.outline(px(2.0)).outline_color(move || theme().ring)
+                                    })
                                     .on_press(close_speed_sheet)
                                     .child(icon(IconKind::Close, 16.0, move || theme().foreground)),
                             ),
@@ -169,7 +196,14 @@ pub fn speed_sheet() -> impl IntoElement {
                                     .justify_center()
                                     .rounded_full()
                                     .bg(pill_glass_surface)
+                                    .transition()
+                                    .duration(speed_transition_ms)
+                                    .ease_out()
                                     .hover(|s| s.bg(pill_glass_hover))
+                                    .active(|s| s.scale(speed_press_scale))
+                                    .focus_visible(|s| {
+                                        s.outline(px(2.0)).outline_color(move || theme().ring)
+                                    })
                                     .on_press(|| step_playback_speed(-0.05))
                                     .child(
                                         text("−0.05")
@@ -201,7 +235,14 @@ pub fn speed_sheet() -> impl IntoElement {
                                     .justify_center()
                                     .rounded_full()
                                     .bg(pill_glass_surface)
+                                    .transition()
+                                    .duration(speed_transition_ms)
+                                    .ease_out()
                                     .hover(|s| s.bg(pill_glass_hover))
+                                    .active(|s| s.scale(speed_press_scale))
+                                    .focus_visible(|s| {
+                                        s.outline(px(2.0)).outline_color(move || theme().ring)
+                                    })
                                     .on_press(|| step_playback_speed(0.05))
                                     .child(
                                         text("+0.05")
@@ -241,7 +282,14 @@ pub fn speed_sheet() -> impl IntoElement {
                             .bg(pill_glass_surface)
                             .border_1()
                             .border_color(glass_hairline)
+                            .transition()
+                            .duration(speed_transition_ms)
+                            .ease_out()
                             .hover(|s| s.bg(pill_glass_hover))
+                            .active(|s| s.scale(speed_press_scale))
+                            .focus_visible(|s| {
+                                s.outline(px(2.0)).outline_color(move || theme().ring)
+                            })
                             .child(
                                 text("Reset to 1.0×")
                                     .text_sm()

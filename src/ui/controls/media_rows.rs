@@ -6,13 +6,26 @@ use nsh_core::prelude::*;
 use resonance_contract::{DownloadStatus, Track, format_duration_ms};
 
 use crate::store;
+use crate::ui::controls::ambient::live_equalizer_indicator;
 use crate::ui::controls::context_menu::{TrackMenuContext, track_context_menu};
 use crate::ui::controls::primitives::artwork_box;
 use crate::ui::icons::{IconKind, icon, reactive_icon};
 use crate::ui::tokens::{
     MOBILE_MIN_TOUCH_TARGET, color_liked, color_player_accent, frosted_bar_surface, glass_hairline,
-    is_desktop_layout, pill_glass_hover, pill_glass_surface, radius_card,
+    is_desktop_layout, motion, pill_glass_hover, pill_glass_surface, radius_card,
 };
+
+fn row_transition_ms() -> f32 {
+    motion::transition_ms(motion::PRESS_MS, store::reduced_motion())
+}
+
+fn row_press_scale() -> f32 {
+    if store::reduced_motion() {
+        1.0
+    } else {
+        motion::PRESS_SCALE
+    }
+}
 
 /// Reactive per-track download state badge & quick action button (>= 48dp touch target).
 pub fn download_state_badge(track: Track) -> impl IntoElement {
@@ -33,8 +46,12 @@ pub fn download_state_badge(track: Track) -> impl IntoElement {
         .justify_center()
         .gap_1()
         .rounded_full()
+        .transition()
+        .duration(row_transition_ms)
+        .ease_out()
         .hover(|s| s.bg(pill_glass_hover))
-        .active(|s| s.opacity(0.75))
+        .active(|s| s.scale(row_press_scale).opacity(0.8))
+        .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
         .on_press(move || match store::download_record(&track_id) {
             None => store::enqueue_download(track_for_press.clone()),
             Some(rec) => match rec.status {
@@ -136,10 +153,16 @@ pub fn compact_mix_row(
                 .flex_row()
                 .items_center()
                 .gap_3()
-                .active(|s| s.opacity(0.75))
+                .rounded(move || theme().radius)
+                .transition()
+                .duration(row_transition_ms)
+                .ease_out()
+                .active(|s| s.opacity(0.78))
+                .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                 .on_press(on_play)
                 .child(
                     view()
+                        .relative()
                         .w(px(46.0))
                         .h(px(46.0))
                         .child(artwork_box(art_url, monogram, 46.0, 6.0))
@@ -150,10 +173,13 @@ pub fn compact_mix_row(
                                     .inset_0()
                                     .rounded(px(6.0))
                                     .bg(frosted_bar_surface)
-                                    .opacity(0.55)
+                                    .opacity(0.76)
                                     .items_center()
                                     .justify_center()
-                                    .child(icon(IconKind::Play, 16.0, move || theme().foreground)),
+                                    .child(live_equalizer_indicator(
+                                        || store::player_snapshot().state.is_playing(),
+                                        18.0,
+                                    )),
                             )
                         }),
                 )
@@ -217,7 +243,12 @@ pub fn compact_mix_row(
                 .items_center()
                 .justify_center()
                 .rounded_full()
+                .transition()
+                .duration(row_transition_ms)
+                .ease_out()
                 .hover(|s| s.bg(pill_glass_hover))
+                .active(|s| s.scale(row_press_scale))
+                .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                 .on_press(move || store::toggle_like_track(track_for_like.clone()))
                 .child(reactive_icon(
                     move || {
@@ -243,7 +274,8 @@ pub fn compact_mix_row(
         ))
 }
 
-/// Full track list row with optional album column, heart, download badge, duration, and action sheet.
+/// Full track list row with optional album column, live equalizer badge, heart, download badge,
+/// duration, and action sheet.
 pub fn track_row_view(
     track: Track,
     is_current: bool,
@@ -285,9 +317,36 @@ pub fn track_row_view(
                 .flex_row()
                 .items_center()
                 .gap_3()
-                .active(|s| s.opacity(0.75))
+                .rounded(move || theme().radius)
+                .transition()
+                .duration(row_transition_ms)
+                .ease_out()
+                .active(|s| s.opacity(0.78))
+                .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                 .on_press(on_play)
-                .child(artwork_box(art_url, monogram, 44.0, 6.0))
+                .child(
+                    view()
+                        .relative()
+                        .w(px(44.0))
+                        .h(px(44.0))
+                        .child(artwork_box(art_url, monogram, 44.0, 6.0))
+                        .when(is_current, |v| {
+                            v.child(
+                                view()
+                                    .absolute()
+                                    .inset_0()
+                                    .rounded(px(6.0))
+                                    .bg(frosted_bar_surface)
+                                    .opacity(0.76)
+                                    .items_center()
+                                    .justify_center()
+                                    .child(live_equalizer_indicator(
+                                        || store::player_snapshot().state.is_playing(),
+                                        18.0,
+                                    )),
+                            )
+                        }),
+                )
                 .child(
                     view()
                         .flex_1()
@@ -392,7 +451,12 @@ pub fn track_row_view(
                         .items_center()
                         .justify_center()
                         .rounded_full()
+                        .transition()
+                        .duration(row_transition_ms)
+                        .ease_out()
                         .hover(|s| s.bg(pill_glass_hover))
+                        .active(|s| s.scale(row_press_scale))
+                        .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                         .on_press(move || store::toggle_like_track(like_track.clone()))
                         .child(reactive_icon(
                             move || {

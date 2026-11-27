@@ -1,6 +1,7 @@
-//! Semantic theme & motion tokens reading from `theme.json` via `nsh_base::theme()`.
+//! Semantic theme, glass, motion, and typography tokens reading from `theme.json` via `nsh_base::theme()`.
 //!
-//! Zero raw hex/RGB values in presentation code (`src/screens/`, `src/ui/controls.rs`).
+//! Zero raw hex/RGB values in presentation code (`src/screens/`, `src/ui/controls/`).
+//! All static glass, pill, cover-gradient, and genre-tint colors live in `theme.json`.
 
 use std::time::Duration;
 
@@ -25,12 +26,27 @@ pub mod motion {
     pub const NORMAL_MS: u64 = 180;
     pub const SPRING_MS: u64 = 240;
 
+    /// Micro-interaction press & hover transition duration (ms).
+    pub const PRESS_MS: f32 = 150.0;
+    /// Play/Pause icon cross-fade & scale swap duration (ms).
+    pub const SWAP_MS: f32 = 240.0;
+    /// Sidebar / side-panel collapse & sliding indicator duration (ms).
+    pub const LAYOUT_MS: f32 = 260.0;
+    /// Artwork-driven ambient shader palette cross-fade duration (ms).
+    pub const PALETTE_FADE_MS: f32 = 500.0;
+    /// Tactile button press scale (gated by `!store::reduced_motion()`).
+    pub const PRESS_SCALE: f32 = 0.96;
+
     pub fn duration_ms(base_ms: u64, reduced_motion: bool) -> Duration {
         if reduced_motion {
             Duration::from_millis(0)
         } else {
             Duration::from_millis(base_ms)
         }
+    }
+
+    pub fn transition_ms(base_ms: f32, reduced_motion: bool) -> f32 {
+        if reduced_motion { 0.0 } else { base_ms }
     }
 }
 
@@ -101,120 +117,142 @@ pub fn ambient_accent_color(palette: AmbientPalette) -> AdaptiveColor {
     )
 }
 
+/// Resolves an artwork `AmbientPalette` into a 3-color harmonic HSLA triple for the GPU ambient
+/// drift shader under the currently active color scheme (`c1` base, `c2` primary bloom, `c3` warm/cool drift).
+pub fn ambient_shader_palette_triple(palette: AmbientPalette) -> (Hsla, Hsla, Hsla) {
+    let base = color(ambient_backdrop_color(palette));
+    let accent = color(ambient_accent_color(palette));
+    let mut tertiary = accent;
+    tertiary.h = (tertiary.h + 0.085).fract();
+    tertiary.s = (tertiary.s * 0.92).clamp(0.08, 0.85);
+    tertiary.l = ((base.l * 0.55) + (accent.l * 0.45)).clamp(0.04, 0.96);
+    tertiary.a = 1.0;
+
+    let mut c1 = base;
+    c1.a = 1.0;
+    let mut c2 = accent;
+    c2.a = 1.0;
+    (c1, c2, tertiary)
+}
+
 /// Subtle warm top-ambient tint matching the reference YouTube Music Desktop canvas glow.
 pub fn color_ambient_warm() -> AdaptiveColor {
     theme().color("ambient-warm").unwrap_or(theme().accent)
 }
 
-/// Calibrated translucent frosted glass surface for Mini-Player & Bottom Navigation Bar.
+/// Calibrated translucent frosted glass surface for Desktop Player Bar, Mini-Player & Bottom Nav.
 pub fn frosted_bar_surface() -> AdaptiveColor {
-    let mut light_hsla: Hsla = rgb(0xffffff).into();
-    light_hsla.a = 0.90;
-    let mut dark_hsla: Hsla = rgb(0x0c0b0a).into();
-    dark_hsla.a = 0.92;
-    AdaptiveColor::new(light_hsla, dark_hsla)
+    theme()
+        .color("glass-bar")
+        .unwrap_or(theme().card)
+        .opacity(0.84)
 }
 
-/// Calibrated translucent glass card surface for Now Playing controls & floating headers.
+/// Calibrated translucent frosted glass surface for the sticky Desktop Top Header.
+pub fn frosted_header_surface() -> AdaptiveColor {
+    theme()
+        .color("glass-header")
+        .unwrap_or(theme().background)
+        .opacity(0.74)
+}
+
+/// Calibrated translucent glass card surface for Now Playing control dock, modals, and popovers.
 pub fn frosted_card_surface() -> AdaptiveColor {
-    let mut light_hsla: Hsla = rgb(0xffffff).into();
-    light_hsla.a = 0.78;
-    let mut dark_hsla: Hsla = rgb(0x181615).into();
-    dark_hsla.a = 0.76;
-    AdaptiveColor::new(light_hsla, dark_hsla)
+    theme()
+        .color("glass-card")
+        .unwrap_or(theme().card)
+        .opacity(0.76)
+}
+
+/// Soft dimmed overlay scrim behind glassmorphism modals and bottom sheets.
+pub fn overlay_scrim() -> AdaptiveColor {
+    theme()
+        .color("overlay-scrim")
+        .unwrap_or(theme().background)
+        .opacity(0.54)
 }
 
 /// Subtle translucent pill surface for search bar, mood chips, and action pills.
 pub fn pill_glass_surface() -> AdaptiveColor {
-    let mut light_hsla: Hsla = rgb(0x111214).into();
-    light_hsla.a = 0.06;
-    let mut dark_hsla: Hsla = rgb(0xffffff).into();
-    dark_hsla.a = 0.08;
-    AdaptiveColor::new(light_hsla, dark_hsla)
+    theme()
+        .color("glass-pill")
+        .unwrap_or(theme().foreground)
+        .opacity(0.07)
 }
 
 /// Hover state for translucent pills.
 pub fn pill_glass_hover() -> AdaptiveColor {
-    let mut light_hsla: Hsla = rgb(0x111214).into();
-    light_hsla.a = 0.11;
-    let mut dark_hsla: Hsla = rgb(0xffffff).into();
-    dark_hsla.a = 0.14;
-    AdaptiveColor::new(light_hsla, dark_hsla)
+    theme()
+        .color("glass-pill")
+        .unwrap_or(theme().foreground)
+        .opacity(0.13)
 }
 
 /// Active sidebar navigation pill background (subtle warm translucent highlight).
 pub fn sidebar_active_surface() -> AdaptiveColor {
-    let mut light_hsla: Hsla = rgb(0x111214).into();
-    light_hsla.a = 0.08;
-    let mut dark_hsla: Hsla = rgb(0xffffff).into();
-    dark_hsla.a = 0.10;
-    AdaptiveColor::new(light_hsla, dark_hsla)
+    theme()
+        .color("glass-pill")
+        .unwrap_or(theme().foreground)
+        .opacity(0.10)
 }
 
 /// Subtle 1px inner-highlight hairline border for translucent frosted surfaces.
 pub fn glass_hairline() -> AdaptiveColor {
-    let mut light_hsla: Hsla = rgb(0x000000).into();
-    light_hsla.a = 0.08;
-    let mut dark_hsla: Hsla = rgb(0xffffff).into();
-    dark_hsla.a = 0.09;
-    AdaptiveColor::new(light_hsla, dark_hsla)
+    theme()
+        .color("glass-hairline")
+        .unwrap_or(theme().border)
+        .opacity(0.10)
 }
 
-/// Deterministic editorial artwork cover gradient pair `(from, to)` from a seed string.
+/// Subtle 1px top specular highlight hairline for elevated glass docks and sheets.
+pub fn glass_specular_hairline() -> AdaptiveColor {
+    theme()
+        .color("glass-specular")
+        .unwrap_or(theme().foreground)
+        .opacity(0.18)
+}
+
+/// Deterministic editorial artwork cover gradient pair `(from, to)` resolved from `theme.json`.
 pub fn cover_gradient_pair(seed: &str) -> (AdaptiveColor, AdaptiveColor) {
     let mut hash: u64 = 14695981039346656037;
     for b in seed.bytes() {
         hash ^= b as u64;
         hash = hash.wrapping_mul(1099511628211);
     }
-    type RgbQuad = ([u8; 3], [u8; 3], [u8; 3], [u8; 3]);
-    const PAIRS: [RgbQuad; 6] = [
-        // Crimson & Deep Berry
-        ([235, 94, 110], [160, 32, 66], [156, 36, 54], [52, 18, 34]),
-        // Warm Sunset Amber & Terracotta
-        ([245, 168, 85], [202, 86, 48], [180, 96, 38], [64, 28, 18]),
-        // Midnight Indigo & Electric Violet
-        ([124, 134, 245], [88, 66, 188], [58, 72, 164], [24, 26, 68]),
-        // Emerald & Teal Lagoon
-        ([72, 196, 162], [32, 128, 118], [32, 122, 98], [16, 48, 46]),
-        // Magenta & Plum
-        (
-            [222, 108, 198],
-            [134, 48, 164],
-            [142, 46, 126],
-            [48, 18, 58],
-        ),
-        // Cobalt & Cyan
-        ([92, 168, 240], [44, 96, 192], [38, 92, 164], [16, 36, 68]),
+    const KEYS: [(&str, &str); 6] = [
+        ("cover-1-from", "cover-1-to"),
+        ("cover-2-from", "cover-2-to"),
+        ("cover-3-from", "cover-3-to"),
+        ("cover-4-from", "cover-4-to"),
+        ("cover-5-from", "cover-5-to"),
+        ("cover-6-from", "cover-6-to"),
     ];
-    let (lf, lt, df, dt) = PAIRS[(hash as usize) % PAIRS.len()];
+    let (from_key, to_key) = KEYS[(hash as usize) % KEYS.len()];
+    let t = theme();
     (
-        AdaptiveColor::new(rgb_u8_to_hsla(lf, 1.0), rgb_u8_to_hsla(df, 1.0)),
-        AdaptiveColor::new(rgb_u8_to_hsla(lt, 1.0), rgb_u8_to_hsla(dt, 1.0)),
+        t.color(from_key).unwrap_or(t.primary),
+        t.color(to_key).unwrap_or(t.accent),
     )
 }
 
-/// High-contrast solid white pill button fill on dark (obsidian fill on light), matching `▶ Play` in ref_4/ref_5.
+/// High-contrast solid pill button fill (`Play` / floating card play pill), sourced from `theme.json`.
 pub fn color_hero_pill_bg() -> AdaptiveColor {
-    AdaptiveColor::new(rgb(0x111214), rgb(0xf5f5f5))
+    theme().color("hero-pill").unwrap_or(theme().foreground)
 }
 
 pub fn color_hero_pill_fg() -> AdaptiveColor {
-    AdaptiveColor::new(rgb(0xffffff), rgb(0x09090b))
+    theme()
+        .color("hero-pill-foreground")
+        .unwrap_or(theme().background)
 }
 
-/// Rich genre card colors for Explore & Moods tiles.
+/// Rich genre card colors for Explore & Moods tiles, sourced from `theme.json`.
 pub fn genre_card_tint(index: usize) -> AdaptiveColor {
-    const TINTS: [([u8; 3], [u8; 3]); 6] = [
-        ([232, 210, 214], [54, 22, 28]),
-        ([214, 222, 244], [24, 34, 62]),
-        ([244, 226, 202], [60, 38, 18]),
-        ([206, 236, 224], [18, 52, 42]),
-        ([234, 214, 242], [48, 24, 60]),
-        ([212, 230, 244], [20, 42, 60]),
+    const KEYS: [&str; 6] = [
+        "genre-1", "genre-2", "genre-3", "genre-4", "genre-5", "genre-6",
     ];
-    let (l, d) = TINTS[index % TINTS.len()];
-    AdaptiveColor::new(rgb_u8_to_hsla(l, 1.0), rgb_u8_to_hsla(d, 1.0))
+    let t = theme();
+    t.color(KEYS[index % KEYS.len()]).unwrap_or(t.secondary)
 }
 
 pub fn color_player_surface() -> AdaptiveColor {
@@ -263,4 +301,43 @@ pub fn color_sponsor_badge() -> AdaptiveColor {
 
 pub fn color_status_ok() -> AdaptiveColor {
     theme().color("status-ok").unwrap_or(theme().primary)
+}
+
+// ---------------------------------------------------------------------------
+// Semantic Typography Helpers (replaces ad-hoc ALL-CAPS strings & repeated styles)
+// ---------------------------------------------------------------------------
+
+/// Uppercase tracked eyebrow / section kicker label (semantic Title Case input rendered uppercase).
+pub fn eyebrow_label(label: impl IntoReactive<SharedString>) -> impl IntoElement {
+    text(label)
+        .text_xs()
+        .font_weight(FontWeight::SEMIBOLD)
+        .uppercase()
+        .letter_spacing(px(0.9))
+        .text_color(move || theme().muted_foreground)
+}
+
+/// Primary shelf or screen section heading.
+pub fn section_title_label(label: impl IntoReactive<SharedString>) -> impl IntoElement {
+    text(label)
+        .text_lg()
+        .font_weight(FontWeight::BOLD)
+        .text_color(move || theme().foreground)
+}
+
+/// Single-line truncated card / row title.
+pub fn card_title_label(label: impl IntoReactive<SharedString>) -> impl IntoElement {
+    text(label)
+        .number_of_lines(1)
+        .text_sm()
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(move || theme().foreground)
+}
+
+/// Muted secondary caption / metadata label.
+pub fn muted_caption_label(label: impl IntoReactive<SharedString>) -> impl IntoElement {
+    text(label)
+        .number_of_lines(1)
+        .text_xs()
+        .text_color(move || theme().muted_foreground)
 }

@@ -55,7 +55,7 @@ fn mobile_dark_fixture_journey_covers_now_playing_lyrics_queue_search_and_librar
     // Tap Collection card on Home to browse Album/Playlist detail, then return
     app.press("Nocturne Telemetry")?;
     app.wait_for("Play All")?;
-    app.press("← Back")?;
+    app.press("Back")?;
     app.wait_for("Quick Picks")?;
 
     // Tap persistent Mini-Player to open Now Playing (Priority Surface #1)
@@ -96,7 +96,7 @@ fn mobile_dark_fixture_journey_covers_now_playing_lyrics_queue_search_and_librar
     // Open Queue (Priority Surface #3)
     app.press("Up Next Queue")?;
     app.wait_for("Queue")?;
-    app.wait_for("AUTOPLAY RADIO")?;
+    app.wait_for("Autoplay Radio")?;
 
     // Open Search & filter by Tokyo
     app.press("id:nav-search")?;

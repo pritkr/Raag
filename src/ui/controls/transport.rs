@@ -6,6 +6,7 @@ use nsh_core::prelude::*;
 use resonance_contract::format_duration_ms;
 
 use crate::store::{self, AppTab, DesktopSidePanel};
+use crate::ui::controls::ambient::{animated_like_heart, animated_play_pause_icon};
 use crate::ui::controls::context_menu::{TrackMenuContext, track_context_menu};
 use crate::ui::controls::primitives::svg_icon_button;
 use crate::ui::controls::sleep_timer_sheet::{open_sleep_timer_sheet, sleep_timer_badge_label};
@@ -13,9 +14,29 @@ use crate::ui::controls::speed_sheet::{open_speed_sheet, speed_badge_label};
 use crate::ui::icons::{IconKind, icon, reactive_icon};
 use crate::ui::tokens::{
     MOBILE_MIN_TOUCH_TARGET, color_control, color_control_fg, color_liked, color_player_accent,
-    color_player_surface, cover_gradient_pair, frosted_bar_surface, glass_hairline,
-    is_desktop_panel_visible, pill_glass_hover,
+    cover_gradient_pair, frosted_bar_surface, glass_hairline, glass_specular_hairline,
+    is_desktop_panel_visible, motion, pill_glass_hover,
 };
+
+fn btn_transition_ms() -> f32 {
+    motion::transition_ms(motion::PRESS_MS, store::reduced_motion())
+}
+
+fn btn_press_scale() -> f32 {
+    if store::reduced_motion() {
+        1.0
+    } else {
+        motion::PRESS_SCALE
+    }
+}
+
+fn trigger_panel_layout_animation() {
+    if !store::reduced_motion() {
+        let _ = std::panic::catch_unwind(|| {
+            animate_layout(LayoutAnimation::EASE_IN_EASE_OUT);
+        });
+    }
+}
 
 /// Interactive `nsh_base::slider` for track seeking (used in player bar & Now Playing).
 pub fn seek_slider(
@@ -76,7 +97,7 @@ pub fn volume_slider(
         })
 }
 
-/// Sleek full-width Desktop Bottom Player Bar with interactive YouTube Music top-edge seek slider.
+/// Sleek frosted-glass Desktop Bottom Player Bar (`BackdropMaterial::Chrome`) with top-edge seek slider.
 pub fn desktop_player_bar() -> impl IntoElement {
     let is_now_playing = move || store::active_tab() == AppTab::NowPlaying;
     let is_playing = move || store::player_snapshot().state.is_playing();
@@ -90,9 +111,11 @@ pub fn desktop_player_bar() -> impl IntoElement {
 
     view()
         .w_full()
-        .bg(color_player_surface)
+        .backdrop_blur(px(24.0))
+        .backdrop_material(BackdropMaterial::Chrome)
+        .bg(frosted_bar_surface)
         .border_t_1()
-        .border_color(glass_hairline)
+        .border_color(glass_specular_hairline)
         .child(
             view()
                 .test_id("mini-player-progress")
@@ -153,7 +176,15 @@ pub fn desktop_player_bar() -> impl IntoElement {
                                 .gap_3()
                                 .min_w(px(0.0))
                                 .max_w(px(280.0))
-                                .active(|s| s.opacity(0.8))
+                                .rounded(move || theme().radius)
+                                .transition()
+                                .duration(btn_transition_ms)
+                                .ease_out()
+                                .hover(|s| s.opacity(0.92))
+                                .active(|s| s.scale(btn_press_scale).opacity(0.84))
+                                .focus_visible(|s| {
+                                    s.outline(px(2.0)).outline_color(move || theme().ring)
+                                })
                                 .on_press(|| store::set_tab(AppTab::NowPlaying))
                                 .child(
                                     view()
@@ -255,24 +286,20 @@ pub fn desktop_player_bar() -> impl IntoElement {
                                 .items_center()
                                 .justify_center()
                                 .rounded_full()
+                                .transition()
+                                .duration(btn_transition_ms)
+                                .ease_out()
                                 .hover(|s| s.bg(pill_glass_hover))
+                                .active(|s| s.scale(btn_press_scale))
+                                .focus_visible(|s| {
+                                    s.outline(px(2.0)).outline_color(move || theme().ring)
+                                })
                                 .on_press(store::toggle_like_current)
-                                .child(reactive_icon(
-                                    move || {
-                                        if is_liked() {
-                                            IconKind::HeartFilled
-                                        } else {
-                                            IconKind::Heart
-                                        }
-                                    },
+                                .child(animated_like_heart(
+                                    is_liked,
                                     16.0,
-                                    move || {
-                                        if is_liked() {
-                                            color_liked()
-                                        } else {
-                                            theme().muted_foreground
-                                        }
-                                    },
+                                    color_liked,
+                                    move || theme().muted_foreground,
                                 )),
                         )
                         .child(
@@ -283,7 +310,14 @@ pub fn desktop_player_bar() -> impl IntoElement {
                                 .items_center()
                                 .justify_center()
                                 .rounded_full()
+                                .transition()
+                                .duration(btn_transition_ms)
+                                .ease_out()
                                 .hover(|s| s.bg(pill_glass_hover))
+                                .active(|s| s.scale(btn_press_scale))
+                                .focus_visible(|s| {
+                                    s.outline(px(2.0)).outline_color(move || theme().ring)
+                                })
                                 .on_press(store::toggle_dislike_current)
                                 .child(icon(IconKind::ThumbsDown, 15.0, move || {
                                     if is_disliked() {
@@ -323,7 +357,14 @@ pub fn desktop_player_bar() -> impl IntoElement {
                                 .items_center()
                                 .justify_center()
                                 .rounded_full()
+                                .transition()
+                                .duration(btn_transition_ms)
+                                .ease_out()
                                 .hover(|s| s.bg(pill_glass_hover))
+                                .active(|s| s.scale(btn_press_scale))
+                                .focus_visible(|s| {
+                                    s.outline(px(2.0)).outline_color(move || theme().ring)
+                                })
                                 .on_press(store::toggle_shuffle)
                                 .child(icon(IconKind::Shuffle, 16.0, move || {
                                     if is_shuffle() {
@@ -351,17 +392,17 @@ pub fn desktop_player_bar() -> impl IntoElement {
                                 .justify_center()
                                 .rounded_full()
                                 .bg(color_control)
+                                .transition()
+                                .duration(btn_transition_ms)
+                                .ease_out()
                                 .hover(|s| s.opacity(0.92))
-                                .active(|s| s.opacity(0.8))
+                                .active(|s| s.scale(btn_press_scale).opacity(0.86))
+                                .focus_visible(|s| {
+                                    s.outline(px(2.0)).outline_color(move || theme().ring)
+                                })
                                 .on_press(store::toggle_play_pause)
-                                .child(reactive_icon(
-                                    move || {
-                                        if is_playing() {
-                                            IconKind::Pause
-                                        } else {
-                                            IconKind::Play
-                                        }
-                                    },
+                                .child(animated_play_pause_icon(
+                                    is_playing,
                                     18.0,
                                     color_control_fg,
                                 )),
@@ -383,7 +424,14 @@ pub fn desktop_player_bar() -> impl IntoElement {
                                 .items_center()
                                 .justify_center()
                                 .rounded_full()
+                                .transition()
+                                .duration(btn_transition_ms)
+                                .ease_out()
                                 .hover(|s| s.bg(pill_glass_hover))
+                                .active(|s| s.scale(btn_press_scale))
+                                .focus_visible(|s| {
+                                    s.outline(px(2.0)).outline_color(move || theme().ring)
+                                })
                                 .on_press(store::cycle_repeat)
                                 .child(reactive_icon(
                                     move || match store::player_snapshot().queue.repeat {
@@ -428,11 +476,20 @@ pub fn desktop_player_bar() -> impl IntoElement {
                             || speed_badge_label().is_some(),
                             || {
                                 button()
+                                    .accessibility_label("Adjust Playback Speed")
                                     .on_press(open_speed_sheet)
                                     .px_2()
                                     .py_1()
                                     .rounded_full()
                                     .bg(move || theme().muted)
+                                    .transition()
+                                    .duration(btn_transition_ms)
+                                    .ease_out()
+                                    .hover(|s| s.bg(pill_glass_hover))
+                                    .active(|s| s.scale(btn_press_scale))
+                                    .focus_visible(|s| {
+                                        s.outline(px(2.0)).outline_color(move || theme().ring)
+                                    })
                                     .child(
                                         text(move || {
                                             SharedString::from(
@@ -450,6 +507,7 @@ pub fn desktop_player_bar() -> impl IntoElement {
                             || sleep_timer_badge_label().is_some(),
                             || {
                                 button()
+                                    .accessibility_label("Adjust Sleep Timer")
                                     .on_press(open_sleep_timer_sheet)
                                     .px_2()
                                     .py_1()
@@ -458,6 +516,14 @@ pub fn desktop_player_bar() -> impl IntoElement {
                                     .gap_1()
                                     .rounded_full()
                                     .bg(move || theme().muted)
+                                    .transition()
+                                    .duration(btn_transition_ms)
+                                    .ease_out()
+                                    .hover(|s| s.bg(pill_glass_hover))
+                                    .active(|s| s.scale(btn_press_scale))
+                                    .focus_visible(|s| {
+                                        s.outline(px(2.0)).outline_color(move || theme().ring)
+                                    })
                                     .child(icon(IconKind::Moon, 12.0, color_player_accent))
                                     .child(
                                         text(move || {
@@ -480,7 +546,14 @@ pub fn desktop_player_bar() -> impl IntoElement {
                                 .items_center()
                                 .justify_center()
                                 .rounded_full()
+                                .transition()
+                                .duration(btn_transition_ms)
+                                .ease_out()
                                 .hover(|s| s.bg(pill_glass_hover))
+                                .active(|s| s.scale(btn_press_scale))
+                                .focus_visible(|s| {
+                                    s.outline(px(2.0)).outline_color(move || theme().ring)
+                                })
                                 .on_press(store::toggle_mute)
                                 .child(reactive_icon(
                                     move || {
@@ -515,6 +588,7 @@ pub fn desktop_player_bar() -> impl IntoElement {
                             },
                             || {
                                 if is_desktop_panel_visible() {
+                                    trigger_panel_layout_animation();
                                     store::toggle_desktop_side_panel(DesktopSidePanel::Lyrics);
                                 } else {
                                     store::set_tab(AppTab::Lyrics);
@@ -538,6 +612,7 @@ pub fn desktop_player_bar() -> impl IntoElement {
                             },
                             || {
                                 if is_desktop_panel_visible() {
+                                    trigger_panel_layout_animation();
                                     store::toggle_desktop_side_panel(DesktopSidePanel::Queue);
                                 } else {
                                     store::set_tab(AppTab::Queue);
@@ -552,7 +627,14 @@ pub fn desktop_player_bar() -> impl IntoElement {
                                 .items_center()
                                 .justify_center()
                                 .rounded_full()
+                                .transition()
+                                .duration(btn_transition_ms)
+                                .ease_out()
                                 .hover(|s| s.bg(pill_glass_hover))
+                                .active(|s| s.scale(btn_press_scale))
+                                .focus_visible(|s| {
+                                    s.outline(px(2.0)).outline_color(move || theme().ring)
+                                })
                                 .on_press(move || {
                                     if is_now_playing() {
                                         store::go_back();
@@ -591,11 +673,11 @@ pub fn mini_player_bar(
 ) -> impl IntoElement {
     let monogram_rc = std::rc::Rc::new(monogram);
     view()
-        .backdrop_blur(px(16.0))
-        .backdrop_material(BackdropMaterial::Regular)
+        .backdrop_blur(px(20.0))
+        .backdrop_material(BackdropMaterial::Chrome)
         .bg(frosted_bar_surface)
         .border_t_1()
-        .border_color(glass_hairline)
+        .border_color(glass_specular_hairline)
         .child(
             view()
                 .w_full()
@@ -628,6 +710,12 @@ pub fn mini_player_bar(
                         .flex_row()
                         .items_center()
                         .gap_3()
+                        .rounded(move || theme().radius)
+                        .transition()
+                        .duration(btn_transition_ms)
+                        .ease_out()
+                        .active(|s| s.scale(btn_press_scale).opacity(0.84))
+                        .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                         .on_press(on_open_now_playing)
                         .child(
                             view()
@@ -712,14 +800,14 @@ pub fn mini_player_bar(
                         .justify_center()
                         .rounded_full()
                         .bg(color_control)
-                        .child(reactive_icon(
-                            move || {
-                                if is_playing() {
-                                    IconKind::Pause
-                                } else {
-                                    IconKind::Play
-                                }
-                            },
+                        .transition()
+                        .duration(btn_transition_ms)
+                        .ease_out()
+                        .hover(|s| s.opacity(0.92))
+                        .active(|s| s.scale(btn_press_scale).opacity(0.86))
+                        .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
+                        .child(animated_play_pause_icon(
+                            is_playing,
                             18.0,
                             color_control_fg,
                         )),

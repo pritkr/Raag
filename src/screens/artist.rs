@@ -10,7 +10,7 @@ use resonance_contract::{ArtistDetail, LibraryCollectionRef, Track};
 use resonance_core::palette::palette_for_track;
 
 use crate::ui::controls::{
-    artwork_box, glass_pill_button, hero_pill_button, media_square_card, secondary_button,
+    artwork_box, back_button, glass_pill_button, hero_pill_button, media_square_card,
     track_row_view,
 };
 use crate::ui::icons::IconKind;
@@ -154,7 +154,7 @@ pub fn artist_screen_with_detail(
                     .flex_row()
                     .items_center()
                     .justify_between()
-                    .child(secondary_button("← Back", move || cb_back())),
+                    .child(back_button(move || cb_back())),
             )
             .child(
                 view()
@@ -201,6 +201,9 @@ pub fn artist_screen_with_detail(
                                         .px_3()
                                         .rounded(radius_card)
                                         .bg(pill_glass_surface)
+                                        .focus_visible(|s| {
+                                            s.outline(px(2.0)).outline_color(move || theme().ring)
+                                        })
                                         .on_press(move || show_about.set(!show_about.get()))
                                         .child(
                                             text(move || {

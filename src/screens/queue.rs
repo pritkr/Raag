@@ -10,11 +10,14 @@ use nsh_core::prelude::*;
 use resonance_contract::{RepeatMode, format_duration_ms};
 
 use crate::store;
-use crate::ui::controls::{artwork_box, secondary_button, setting_switch, status_card};
+use crate::ui::controls::{
+    artwork_box, live_equalizer_indicator, secondary_button, setting_switch, status_card,
+};
 use crate::ui::icons::{IconKind, icon, reactive_icon};
 use crate::ui::tokens::{
-    MOBILE_MIN_TOUCH_TARGET, color_player_accent, cover_gradient_pair, frosted_bar_surface,
-    frosted_card_surface, glass_hairline, pill_glass_hover, pill_glass_surface, radius_card,
+    MOBILE_MIN_TOUCH_TARGET, color_player_accent, cover_gradient_pair, eyebrow_label,
+    frosted_bar_surface, frosted_card_surface, glass_hairline, pill_glass_hover,
+    pill_glass_surface, radius_card,
 };
 
 pub fn queue_screen() -> impl IntoElement {
@@ -28,7 +31,7 @@ pub fn queue_screen() -> impl IntoElement {
             .child(queue_header())
             .child(now_playing_pinned_card())
             .child(setting_switch(
-                "AUTOPLAY RADIO",
+                "Autoplay Radio",
                 || store::player_snapshot().queue.autoplay_radio,
                 store::set_autoplay_radio,
             ))
@@ -37,12 +40,7 @@ pub fn queue_screen() -> impl IntoElement {
                     .flex_row()
                     .items_center()
                     .justify_between()
-                    .child(
-                        text("UP NEXT")
-                            .text_xs()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(move || theme().muted_foreground),
-                    )
+                    .child(eyebrow_label("Up Next"))
                     .child(
                         text(move || SharedString::from(format!("{} tracks", store::queue_len())))
                             .text_xs()
@@ -56,7 +54,7 @@ pub fn queue_screen() -> impl IntoElement {
                     let is_active =
                         move || store::player_snapshot().queue.current_index == Some(at.index());
 
-                    // Performance rule: ZERO backdrop blur inside virtual_list rows.
+                    // Performance rule: ZERO blur inside virtual_list rows.
                     view()
                         .flex_row()
                         .items_center()
@@ -79,7 +77,11 @@ pub fn queue_screen() -> impl IntoElement {
                                 .flex_row()
                                 .items_center()
                                 .gap_3()
+                                .rounded(move || theme().radius)
                                 .active(|s| s.opacity(0.75))
+                                .focus_visible(|s| {
+                                    s.outline(px(2.0)).outline_color(move || theme().ring)
+                                })
                                 .on_press(move || store::jump_queue(at.index()))
                                 .child(queue_row_artwork(track, is_active))
                                 .child(
@@ -389,9 +391,11 @@ fn now_playing_pinned_card() -> impl IntoElement {
                     .border_1()
                     .border_color(glass_hairline)
                     .child(
-                        text("NOW PLAYING")
+                        text("Now Playing")
                             .text_xs()
                             .font_weight(FontWeight::SEMIBOLD)
+                            .uppercase()
+                            .letter_spacing(px(0.9))
                             .text_color(color_player_accent),
                     )
                     .child(
@@ -504,10 +508,13 @@ fn queue_row_artwork(
                 .absolute()
                 .inset_0()
                 .bg(frosted_bar_surface)
-                .opacity(0.6)
+                .opacity(0.76)
                 .items_center()
                 .justify_center()
-                .child(icon(IconKind::Play, 15.0, move || theme().foreground))
+                .child(live_equalizer_indicator(
+                    || store::player_snapshot().state.is_playing(),
+                    18.0,
+                ))
         }))
 }
 

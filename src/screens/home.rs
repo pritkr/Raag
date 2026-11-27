@@ -9,14 +9,14 @@ use resonance_contract::{HomeItem, HomeSection, Track};
 
 use crate::store::{self, AppTab};
 use crate::ui::controls::{
-    artwork_box, compact_mix_row, glass_pill_button, hero_pill_button, media_square_card,
-    mood_chip, secondary_button, set_text_input_focused, skeleton_row, status_card,
-    svg_icon_button, track_row_view,
+    artwork_box, back_button, compact_mix_row, glass_pill_button, hero_pill_button,
+    media_square_card, mood_chip, mood_chip_with_icon, set_text_input_focused, skeleton_row,
+    status_card, svg_icon_button, track_row_view,
 };
 use crate::ui::icons::IconKind;
 use crate::ui::tokens::{
-    MOBILE_MIN_TOUCH_TARGET, color_ambient_warm, glass_hairline, is_desktop_layout,
-    pill_glass_surface, radius_card, radius_pill,
+    MOBILE_MIN_TOUCH_TARGET, eyebrow_label, glass_hairline, is_desktop_layout, pill_glass_surface,
+    radius_card, radius_pill,
 };
 
 const HOME_MOODS: [&str; 11] = [
@@ -91,7 +91,7 @@ fn collection_detail_view() -> impl IntoElement {
                         .items_center()
                         .justify_between()
                         .gap_3()
-                        .child(secondary_button("← Back", store::close_collection)),
+                        .child(back_button(store::close_collection)),
                 )
                 .child(
                     view()
@@ -113,12 +113,7 @@ fn collection_detail_view() -> impl IntoElement {
                                 .flex_1()
                                 .min_w(px(0.0))
                                 .gap_2()
-                                .child(
-                                    text("PLAYLIST")
-                                        .text_xs()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(move || theme().muted_foreground),
-                                )
+                                .child(eyebrow_label("Playlist"))
                                 .child(
                                     text(playlist.title.clone())
                                         .number_of_lines(2)
@@ -295,13 +290,7 @@ fn section_header_with_pager(
                 .min_w(px(0.0))
                 .gap_0p5()
                 .when_some(eyebrow, |v, sub| {
-                    v.child(
-                        text(sub)
-                            .number_of_lines(1)
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(move || theme().muted_foreground),
-                    )
+                    v.child(eyebrow_label(sub))
                 })
                 .child(
                     text(title)
@@ -367,7 +356,7 @@ fn listen_again_shelf(
     view()
         .gap_3()
         .child(section_header_with_pager(
-            Some("YOUR RECENT ROTATION"),
+            Some("Your recent rotation"),
             title,
             header_id,
             total,
@@ -421,7 +410,7 @@ fn track_section_view(
     view()
         .gap_3()
         .child(section_header_with_pager(
-            Some("START RADIO FROM A SONG"),
+            Some("Start radio from a song"),
             section.title,
             sec_id.clone(),
             total,
@@ -508,7 +497,7 @@ fn collection_section_view(
     view()
         .gap_3()
         .child(section_header_with_pager(
-            Some("MIXES & ALBUMS"),
+            Some("Mixes & albums"),
             title,
             header_id,
             total,
@@ -571,6 +560,9 @@ fn collection_section_view(
                             .border_color(glass_hairline)
                             .hover(|s| s.bg(move || theme().muted))
                             .active(|s| s.opacity(0.8))
+                            .focus_visible(|s| {
+                                s.outline(px(2.0)).outline_color(move || theme().ring)
+                            })
                             .on_press(move || {
                                 if id_btn.starts_with("MPRE") {
                                     store::open_album_entity(id_btn.clone());
@@ -619,9 +611,6 @@ fn home_feed_view() -> impl IntoElement {
     scroll()
         .flex_1()
         .min_h(px(0.0))
-        .bg_linear_to_b()
-        .gradient_from(color_ambient_warm)
-        .gradient_to(move || theme().background)
         .child(
             view()
                 .p_3()
@@ -650,8 +639,9 @@ fn home_feed_view() -> impl IntoElement {
 
                             let mut row = view().flex_row().items_center().gap_2().py_1();
                             if active.is_some() {
-                                row = row.child(mood_chip(
-                                    "× Clear",
+                                row = row.child(mood_chip_with_icon(
+                                    Some(IconKind::Close),
+                                    "Clear",
                                     || false,
                                     store::clear_home_mood,
                                 ));

@@ -7,11 +7,12 @@ use nsh_base::{button, theme};
 use nsh_core::prelude::*;
 use resonance_contract::{CastDevice, CastProtocol, CastSessionState};
 
+use crate::store;
 use crate::ui::controls::primitives::{secondary_button, svg_icon_button};
 use crate::ui::controls::sheets::modal_panel_container;
 use crate::ui::icons::{IconKind, icon};
 use crate::ui::tokens::{
-    MOBILE_MIN_TOUCH_TARGET, pill_glass_hover, pill_glass_surface, radius_card, radius_pill,
+    MOBILE_MIN_TOUCH_TARGET, motion, pill_glass_hover, pill_glass_surface, radius_card, radius_pill,
 };
 
 fn protocol_badge_label(protocol: CastProtocol) -> &'static str {
@@ -122,7 +123,20 @@ pub fn cast_picker_sheet(
                         .py_2()
                         .rounded(radius_card)
                         .bg(pill_glass_surface)
+                        .transition()
+                        .duration(|| motion::transition_ms(motion::PRESS_MS, store::reduced_motion()))
+                        .ease_out()
                         .hover(|s| s.bg(pill_glass_hover))
+                        .active(|s| {
+                            s.scale(|| {
+                                if store::reduced_motion() {
+                                    1.0
+                                } else {
+                                    motion::PRESS_SCALE
+                                }
+                            })
+                        })
+                        .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                         .flex_row()
                         .items_center()
                         .justify_between()
@@ -247,6 +261,8 @@ pub fn active_cast_banner(
                 .flex_row()
                 .items_center()
                 .gap_2()
+                .rounded(move || theme().radius)
+                .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                 .on_press(on_open_picker)
                 .child(icon(IconKind::Radio, 16.0, move || theme().primary))
                 .child(

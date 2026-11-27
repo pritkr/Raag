@@ -9,9 +9,21 @@ use crate::store;
 use crate::store::ui_slice::{SleepTimerMode, SleepTimerTickAction};
 use crate::ui::icons::{IconKind, icon};
 use crate::ui::tokens::{
-    MOBILE_MIN_TOUCH_TARGET, frosted_bar_surface, frosted_card_surface, glass_hairline,
-    pill_glass_hover, pill_glass_surface, radius_card, radius_panel, radius_pill,
+    MOBILE_MIN_TOUCH_TARGET, frosted_card_surface, glass_hairline, glass_specular_hairline, motion,
+    overlay_scrim, pill_glass_hover, pill_glass_surface, radius_card, radius_panel, radius_pill,
 };
+
+fn timer_transition_ms() -> f32 {
+    motion::transition_ms(motion::PRESS_MS, store::reduced_motion())
+}
+
+fn timer_press_scale() -> f32 {
+    if store::reduced_motion() {
+        1.0
+    } else {
+        motion::PRESS_SCALE
+    }
+}
 
 pub fn open_sleep_timer_sheet() {
     store::open_sleep_timer_sheet();
@@ -105,8 +117,12 @@ fn preset_row(
                 glass_hairline()
             }
         })
+        .transition()
+        .duration(timer_transition_ms)
+        .ease_out()
         .hover(|s| s.bg(pill_glass_hover))
-        .active(|s| s.opacity(0.8))
+        .active(|s| s.scale(timer_press_scale).opacity(0.84))
+        .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
         .child(
             text(label)
                 .text_sm()
@@ -132,7 +148,7 @@ pub fn sleep_timer_sheet() -> impl IntoElement {
             .test_id("sleep-timer-sheet")
             .absolute()
             .inset_0()
-            .bg(frosted_bar_surface)
+            .bg(overlay_scrim)
             .items_center()
             .justify_center()
             .p_4()
@@ -143,9 +159,13 @@ pub fn sleep_timer_sheet() -> impl IntoElement {
                     .p_4()
                     .gap_3()
                     .rounded(radius_panel)
+                    .backdrop_blur(px(28.0))
+                    .backdrop_material(BackdropMaterial::Thick)
                     .bg(frosted_card_surface)
                     .border_1()
                     .border_color(glass_hairline)
+                    .border_t_color(glass_specular_hairline)
+                    .shadow_2xl()
                     .child(
                         view()
                             .flex_row()
@@ -172,7 +192,14 @@ pub fn sleep_timer_sheet() -> impl IntoElement {
                                     .items_center()
                                     .justify_center()
                                     .rounded_full()
+                                    .transition()
+                                    .duration(timer_transition_ms)
+                                    .ease_out()
                                     .hover(|s| s.bg(pill_glass_hover))
+                                    .active(|s| s.scale(timer_press_scale))
+                                    .focus_visible(|s| {
+                                        s.outline(px(2.0)).outline_color(move || theme().ring)
+                                    })
                                     .on_press(close_sleep_timer_sheet)
                                     .child(icon(IconKind::Close, 16.0, move || theme().foreground)),
                             ),
@@ -224,7 +251,14 @@ pub fn sleep_timer_sheet() -> impl IntoElement {
                                 .bg(pill_glass_surface)
                                 .border_1()
                                 .border_color(glass_hairline)
+                                .transition()
+                                .duration(timer_transition_ms)
+                                .ease_out()
                                 .hover(|s| s.bg(pill_glass_hover))
+                                .active(|s| s.scale(timer_press_scale))
+                                .focus_visible(|s| {
+                                    s.outline(px(2.0)).outline_color(move || theme().ring)
+                                })
                                 .child(
                                     text("+5 minutes")
                                         .text_sm()

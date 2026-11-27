@@ -8,7 +8,7 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use nsh_base::{avatar, button, input, tab, tabs, theme};
+use nsh_base::{avatar, button, input, popover, tab, tabs, theme};
 use nsh_core::element::ImageSrc;
 use nsh_core::prelude::*;
 use resonance_core::offline::PinnedCollectionKind;
@@ -26,19 +26,55 @@ use crate::store::{
     self, AppTab, DesktopSidePanel, EntityRoute, LibraryFilter, SidebarPlaylist,
 };
 use crate::ui::controls::{
-    add_to_playlist_sheet, artwork_box, cast_picker_sheet, desktop_player_bar, mini_player_bar,
-    sleep_timer_sheet, speed_sheet, svg_icon_button, track_action_sheet,
+    add_to_playlist_sheet, artwork_box, back_button, cast_picker_sheet, desktop_player_bar,
+    live_equalizer_indicator, mini_player_bar, sleep_timer_sheet, speed_sheet, svg_icon_button,
+    track_action_sheet,
 };
 use crate::ui::icons::{IconKind, icon, liked_music_tile_svg, raag_brand_icon};
 use crate::ui::tokens::{
     MOBILE_MIN_TOUCH_TARGET, color_ambient_warm, color_sidebar_border, color_sidebar_surface,
-    cover_gradient_pair, frosted_bar_surface, glass_hairline, is_desktop_layout,
-    is_desktop_panel_visible, pill_glass_hover, pill_glass_surface, radius_card, radius_pill,
-    sidebar_active_surface,
+    cover_gradient_pair, eyebrow_label, frosted_bar_surface, frosted_card_surface,
+    frosted_header_surface, glass_hairline, glass_specular_hairline, is_desktop_layout,
+    is_desktop_panel_visible, motion, overlay_scrim, pill_glass_hover, pill_glass_surface,
+    radius_card, radius_panel, radius_pill, sidebar_active_surface,
 };
+
+fn shell_transition_ms() -> f32 {
+    motion::transition_ms(motion::PRESS_MS, store::reduced_motion())
+}
+
+fn shell_press_scale() -> f32 {
+    if store::reduced_motion() {
+        1.0
+    } else {
+        motion::PRESS_SCALE
+    }
+}
+
+fn trigger_shell_layout_animation() {
+    if !store::reduced_motion() {
+        let _ = std::panic::catch_unwind(|| {
+            animate_layout(LayoutAnimation::EASE_IN_EASE_OUT);
+        });
+    }
+}
+
+fn primary_nav_index(tab: AppTab) -> Option<usize> {
+    match tab {
+        AppTab::Home => Some(0),
+        AppTab::Explore => Some(1),
+        AppTab::Library => Some(2),
+        AppTab::ListenTogether => Some(3),
+        AppTab::NowPlaying => Some(4),
+        AppTab::Lyrics => Some(5),
+        AppTab::Queue => Some(6),
+        AppTab::Search | AppTab::Settings => None,
+    }
+}
 
 fn side_panel_queue_artwork(
     track: Memo<Option<resonance_contract::Track>>,
+    is_active: impl Fn() -> bool + Copy + 'static,
 ) -> impl IntoElement {
     let has_art = move || {
         track.with(|t| {
@@ -49,6 +85,7 @@ fn side_panel_queue_artwork(
     };
 
     view()
+        .relative()
         .w(px(38.0))
         .h(px(38.0))
         .rounded(px(6.0))
@@ -99,6 +136,19 @@ fn side_panel_queue_artwork(
                 .text_color(move || theme().primary_foreground)
             }),
         )
+        .child(when(is_active, || {
+            view()
+                .absolute()
+                .inset_0()
+                .bg(frosted_bar_surface)
+                .opacity(0.76)
+                .items_center()
+                .justify_center()
+                .child(live_equalizer_indicator(
+                    || store::player_snapshot().state.is_playing(),
+                    16.0,
+                ))
+        }))
 }
 
 fn nav_test_id(tab: AppTab) -> &'static str {
@@ -119,6 +169,7 @@ fn desktop_nav_item(
     tab_kind: AppTab,
     label: &'static str,
     icon_kind: IconKind,
+    show_static_bg: bool,
 ) -> impl IntoElement {
     let selected = move || store::active_tab() == tab_kind;
     let collapsed = store::sidebar_collapsed;
@@ -128,15 +179,21 @@ fn desktop_nav_item(
         .accessibility_label(label)
         .on_press(move || store::set_tab(tab_kind))
         .w_full()
-        .min_h(px(40.0))
+        .h(px(40.0))
         .flex_row()
         .items_center()
         .style_when(collapsed, |s| s.justify_center().px_2())
         .style_when(move || !collapsed(), |s| s.gap_3().px_3())
         .rounded(radius_card)
-        .style_when(selected, |s| s.bg(sidebar_active_surface))
+        .style_when(
+            move || show_static_bg && selected(),
+            |s| s.bg(sidebar_active_surface),
+        )
+        .transition()
+        .duration(shell_transition_ms)
+        .ease_out()
         .hover(|s| s.bg(pill_glass_surface))
-        .active(|s| s.opacity(0.76))
+        .active(|s| s.scale(shell_press_scale).opacity(0.84))
         .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
         .child(icon(icon_kind, 18.0, move || {
             if selected() {
@@ -217,23 +274,7 @@ fn entity_loading_or_error_view(kind_label: &'static str, id: String, is_album: 
         .flex_1()
         .p_6()
         .gap_4()
-        .child(
-            button()
-                .accessibility_label("Go Back")
-                .self_start()
-                .min_h(px(MOBILE_MIN_TOUCH_TARGET))
-                .px_4()
-                .rounded_full()
-                .bg(pill_glass_surface)
-                .hover(|s| s.bg(pill_glass_hover))
-                .on_press(store::go_back)
-                .child(
-                    text("← Back")
-                        .text_sm()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(move || theme().foreground),
-                ),
-        )
+        .child(view().self_start().child(back_button(store::go_back)))
         .child(if let Some(err_msg) = err {
             view()
                 .p_5()
@@ -260,6 +301,12 @@ fn entity_loading_or_error_view(kind_label: &'static str, id: String, is_album: 
                         .px_5()
                         .rounded_full()
                         .bg(move || theme().primary)
+                        .transition()
+                        .duration(shell_transition_ms)
+                        .ease_out()
+                        .hover(|s| s.opacity(0.92))
+                        .active(|s| s.scale(shell_press_scale))
+                        .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                         .on_press(move || {
                             if is_album {
                                 store::open_album_entity(id_retry.clone());
@@ -477,6 +524,7 @@ fn status_toast() -> impl IntoElement {
                         .justify_center()
                         .rounded(radius_card)
                         .hover(|s| s.bg(pill_glass_hover))
+                        .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                         .on_press(store::dismiss_banner)
                         .child(icon(IconKind::Close, 16.0, move || {
                             theme().accent_foreground
@@ -610,9 +658,134 @@ fn sidebar_playlist_row(pl: SidebarPlaylist, collapsed: bool) -> impl IntoElemen
         })
 }
 
+fn shortcut_legend_row(keys: &'static str, action: &'static str) -> impl IntoElement {
+    view()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .gap_4()
+        .child(
+            text(action)
+                .text_xs()
+                .text_color(move || theme().muted_foreground),
+        )
+        .child(
+            view()
+                .px_2()
+                .py_0p5()
+                .rounded(px(6.0))
+                .bg(pill_glass_surface)
+                .border_1()
+                .border_color(glass_hairline)
+                .child(
+                    text(keys)
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .tabular_nums()
+                        .text_color(move || theme().foreground),
+                ),
+        )
+}
+
+fn keyboard_shortcuts_popover() -> impl IntoElement {
+    popover()
+        .placement(Placement::Bottom)
+        .align(Align::End)
+        .offset(px(8.0))
+        .margin(px(12.0))
+        .popup_style(|s| {
+            s.rounded(radius_panel)
+                .backdrop_blur(px(28.0))
+                .backdrop_material(BackdropMaterial::Thick)
+                .bg(frosted_card_surface)
+                .border_1()
+                .border_color(glass_hairline)
+                .border_t_color(glass_specular_hairline)
+                .shadow_2xl()
+        })
+        .trigger(
+            button()
+                .test_id("shortcuts-help-btn")
+                .accessibility_label("Keyboard Shortcuts")
+                .w(px(34.0))
+                .h(px(34.0))
+                .items_center()
+                .justify_center()
+                .rounded_full()
+                .bg(pill_glass_surface)
+                .border_1()
+                .border_color(glass_hairline)
+                .transition()
+                .duration(shell_transition_ms)
+                .ease_out()
+                .hover(|s| s.bg(pill_glass_hover))
+                .active(|s| s.scale(shell_press_scale))
+                .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
+                .child(icon(IconKind::HelpCircle, 16.0, move || theme().foreground)),
+        )
+        .child(
+            view()
+                .test_id("shortcuts-popover")
+                .w(px(264.0))
+                .p_3p5()
+                .gap_2p5()
+                .child(
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .child(icon(IconKind::HelpCircle, 15.0, move || theme().primary))
+                        .child(
+                            text("Keyboard Shortcuts")
+                                .text_sm()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(move || theme().foreground),
+                        ),
+                )
+                .child(view().h(px(1.0)).w_full().bg(glass_hairline))
+                .child(shortcut_legend_row("Space", "Play / Pause"))
+                .child(shortcut_legend_row("← / →", "Seek ±5 seconds"))
+                .child(shortcut_legend_row("N / P", "Next / Previous track"))
+                .child(shortcut_legend_row("L", "Like current track"))
+                .child(shortcut_legend_row("M", "Mute / Unmute")),
+        )
+}
+
 fn desktop_sidebar() -> impl IntoElement {
     let collapsed = store::sidebar_collapsed;
     let playlists_memo = computed(store::sidebar_playlists);
+
+    // Smooth sliding active pill behind the 7 primary nav items (40px item + 4px gap = 44px pitch).
+    const NAV_PITCH: f32 = 44.0;
+    let init_idx = primary_nav_index(store::active_tab());
+    let nav_y = animated_value(init_idx.unwrap_or(0) as f32 * NAV_PITCH);
+    let nav_visible = animated_value(if init_idx.is_some() { 1.0 } else { 0.0 });
+
+    let nav_y_eff = nav_y.clone();
+    let nav_vis_eff = nav_visible.clone();
+    effect(move || {
+        let idx_opt = primary_nav_index(store::active_tab());
+        let reduced = store::reduced_motion();
+        match idx_opt {
+            Some(idx) => {
+                let target = idx as f32 * NAV_PITCH;
+                if reduced {
+                    nav_y_eff.set(target);
+                    nav_vis_eff.set(1.0);
+                } else {
+                    nav_y_eff.timing(target, motion::LAYOUT_MS, Easing::EaseInOut);
+                    nav_vis_eff.timing(1.0, motion::PRESS_MS, Easing::EaseOut);
+                }
+            }
+            None => {
+                if reduced {
+                    nav_vis_eff.set(0.0);
+                } else {
+                    nav_vis_eff.timing(0.0, motion::PRESS_MS, Easing::EaseOut);
+                }
+            }
+        }
+    });
 
     view()
         .w(move || if collapsed() { px(72.0) } else { px(236.0) })
@@ -638,7 +811,10 @@ fn desktop_sidebar() -> impl IntoElement {
                     "Toggle Sidebar",
                     true,
                     move || theme().foreground,
-                    store::toggle_sidebar,
+                    || {
+                        trigger_shell_layout_animation();
+                        store::toggle_sidebar();
+                    },
                 ))
                 .child(when(
                     move || !collapsed(),
@@ -671,42 +847,82 @@ fn desktop_sidebar() -> impl IntoElement {
                     },
                 )),
         )
-        // Primary navigation
-        .child(desktop_nav_item(AppTab::Home, "Home", IconKind::Home))
-        .child(desktop_nav_item(
-            AppTab::Explore,
-            "Explore",
-            IconKind::Explore,
-        ))
-        .child(desktop_nav_item(
-            AppTab::Library,
-            "Library",
-            IconKind::Library,
-        ))
-        .child(desktop_nav_item(
-            AppTab::ListenTogether,
-            "Radio & Rooms",
-            IconKind::ListenTogether,
-        ))
-        .child(desktop_nav_item(
-            AppTab::NowPlaying,
-            "Now Playing",
-            IconKind::NowPlaying,
-        ))
-        .child(desktop_nav_item(AppTab::Lyrics, "Lyrics", IconKind::Lyrics))
-        .child(desktop_nav_item(AppTab::Queue, "Queue", IconKind::Queue))
-        // Divider + PLAYLISTS header
+        // Primary navigation with smoothly sliding active indicator pill
+        .child(
+            view()
+                .relative()
+                .gap_1()
+                .child(
+                    view()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .h(px(40.0))
+                        .rounded(radius_card)
+                        .bg(sidebar_active_surface)
+                        .border_1()
+                        .border_color(glass_hairline)
+                        .flex_row()
+                        .items_center()
+                        .pointer_events(PointerEvents::None)
+                        .accessibility_elements_hidden(true)
+                        .bind_translate_y(&nav_y)
+                        .bind_opacity(&nav_visible)
+                        .child(when(
+                            move || !collapsed(),
+                            || {
+                                view()
+                                    .w(px(3.0))
+                                    .h(px(18.0))
+                                    .rounded_full()
+                                    .bg(move || theme().primary)
+                            },
+                        )),
+                )
+                .child(desktop_nav_item(AppTab::Home, "Home", IconKind::Home, false))
+                .child(desktop_nav_item(
+                    AppTab::Explore,
+                    "Explore",
+                    IconKind::Explore,
+                    false,
+                ))
+                .child(desktop_nav_item(
+                    AppTab::Library,
+                    "Library",
+                    IconKind::Library,
+                    false,
+                ))
+                .child(desktop_nav_item(
+                    AppTab::ListenTogether,
+                    "Radio & Rooms",
+                    IconKind::ListenTogether,
+                    false,
+                ))
+                .child(desktop_nav_item(
+                    AppTab::NowPlaying,
+                    "Now Playing",
+                    IconKind::NowPlaying,
+                    false,
+                ))
+                .child(desktop_nav_item(
+                    AppTab::Lyrics,
+                    "Lyrics",
+                    IconKind::Lyrics,
+                    false,
+                ))
+                .child(desktop_nav_item(
+                    AppTab::Queue,
+                    "Queue",
+                    IconKind::Queue,
+                    false,
+                )),
+        )
+        // Divider + Playlists header
         .child(view().h(px(1.0)).w_full().bg(color_sidebar_border).my_2())
         .child(when(
             move || !collapsed(),
-            || {
-                view().px_3().pb_1().child(
-                    text("PLAYLISTS")
-                        .text_xs()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(move || theme().muted_foreground),
-                )
-            },
+            || view().px_3().pb_1().child(eyebrow_label("Playlists")),
         ))
         // Scrollable playlists list
         .child(scroll().flex_1().min_h(px(0.0)).child(dynamic(move || {
@@ -717,29 +933,13 @@ fn desktop_sidebar() -> impl IntoElement {
                     .map(move |pl| sidebar_playlist_row(pl, is_collapsed)),
             )
         })))
-        // Pinned footer: Settings + shortcut legend
+        // Clean pinned footer: Settings only (shortcuts moved to header `?` popover)
         .child(view().h(px(1.0)).w_full().bg(color_sidebar_border).my_1())
         .child(desktop_nav_item(
             AppTab::Settings,
             "Settings",
             IconKind::Settings,
-        ))
-        .child(when(
-            move || !collapsed(),
-            || {
-                view()
-                    .mt_1()
-                    .px_3()
-                    .py_1p5()
-                    .rounded(radius_card)
-                    .bg(pill_glass_surface)
-                    .child(
-                        text("Shortcuts: Space · ←/→ · N/P · L · M")
-                            .number_of_lines(1)
-                            .text_xs()
-                            .text_color(move || theme().muted_foreground),
-                    )
-            },
+            true,
         ))
 }
 
@@ -756,6 +956,9 @@ fn desktop_top_header() -> impl IntoElement {
         move || store::active_tab() != AppTab::NowPlaying,
         move || {
             view()
+                .sticky()
+                .top_0()
+                .z_index(20)
                 .w_full()
                 .flex_row()
                 .items_center()
@@ -763,6 +966,11 @@ fn desktop_top_header() -> impl IntoElement {
                 .gap_4()
                 .px_6()
                 .py_3()
+                .backdrop_blur(px(20.0))
+                .backdrop_material(BackdropMaterial::Thin)
+                .bg(frosted_header_surface)
+                .border_b_1()
+                .border_color(glass_hairline)
                 // Left: Back / Forward / Refresh + Pill Search Bar
                 .child(
                     view()
@@ -784,8 +992,14 @@ fn desktop_top_header() -> impl IntoElement {
                                         .items_center()
                                         .justify_center()
                                         .rounded_full()
+                                        .transition()
+                                        .duration(shell_transition_ms)
+                                        .ease_out()
                                         .hover(|s| s.bg(pill_glass_hover))
-                                        .active(|s| s.opacity(0.72))
+                                        .active(|s| s.scale(shell_press_scale).opacity(0.8))
+                                        .focus_visible(|s| {
+                                            s.outline(px(2.0)).outline_color(move || theme().ring)
+                                        })
                                         .on_press(store::go_back)
                                         .child(icon(IconKind::ChevronLeft, 18.0, move || {
                                             if store::can_go_back() {
@@ -803,8 +1017,14 @@ fn desktop_top_header() -> impl IntoElement {
                                         .items_center()
                                         .justify_center()
                                         .rounded_full()
+                                        .transition()
+                                        .duration(shell_transition_ms)
+                                        .ease_out()
                                         .hover(|s| s.bg(pill_glass_hover))
-                                        .active(|s| s.opacity(0.72))
+                                        .active(|s| s.scale(shell_press_scale).opacity(0.8))
+                                        .focus_visible(|s| {
+                                            s.outline(px(2.0)).outline_color(move || theme().ring)
+                                        })
                                         .on_press(store::go_forward)
                                         .child(icon(IconKind::ChevronRight, 18.0, move || {
                                             if store::can_go_forward() {
@@ -847,7 +1067,14 @@ fn desktop_top_header() -> impl IntoElement {
                                         .items_center()
                                         .justify_center()
                                         .rounded_full()
+                                        .transition()
+                                        .duration(shell_transition_ms)
+                                        .ease_out()
                                         .hover(|s| s.bg(pill_glass_hover))
+                                        .active(|s| s.scale(shell_press_scale))
+                                        .focus_visible(|s| {
+                                            s.outline(px(2.0)).outline_color(move || theme().ring)
+                                        })
                                         .on_press(move || {
                                             store::run_search(&header_query.get_untracked());
                                             store::set_tab(AppTab::Search);
@@ -920,36 +1147,46 @@ fn desktop_top_header() -> impl IntoElement {
                                 ),
                         ),
                 )
-                // Right: Account Avatar opening Settings
+                // Right: Keyboard Shortcuts `?` Popover + Account Avatar
                 .child(
-                    button()
-                        .accessibility_label("Account & Settings")
-                        .rounded_full()
-                        .hover(|s| s.opacity(0.88))
-                        .active(|s| s.opacity(0.75))
-                        .focus_visible(|s| {
-                            s.outline(px(2.0)).outline_color(move || theme().ring)
-                        })
-                        .on_press(|| store::set_tab(AppTab::Settings))
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .gap_2p5()
+                        .child(keyboard_shortcuts_popover())
                         .child(
-                            avatar()
-                                .name(move || {
-                                    let (signed_in, acct) = store::auth_info();
-                                    if signed_in {
-                                        SharedString::from(
-                                            acct.unwrap_or_else(|| "Raag User".into()),
-                                        )
-                                    } else {
-                                        SharedString::from("Raag")
-                                    }
-                                })
-                                .accessibility_label("")
-                                .fallback_class("size-9 rounded-full items-center justify-center bg-secondary text-foreground text-xs font-bold")
-                                .size_9()
+                            button()
+                                .accessibility_label("Account & Settings")
                                 .rounded_full()
-                                .overflow_hidden()
-                                .border_1()
-                                .border_color(glass_hairline),
+                                .transition()
+                                .duration(shell_transition_ms)
+                                .ease_out()
+                                .hover(|s| s.opacity(0.88))
+                                .active(|s| s.scale(shell_press_scale).opacity(0.8))
+                                .focus_visible(|s| {
+                                    s.outline(px(2.0)).outline_color(move || theme().ring)
+                                })
+                                .on_press(|| store::set_tab(AppTab::Settings))
+                                .child(
+                                    avatar()
+                                        .name(move || {
+                                            let (signed_in, acct) = store::auth_info();
+                                            if signed_in {
+                                                SharedString::from(
+                                                    acct.unwrap_or_else(|| "Raag User".into()),
+                                                )
+                                            } else {
+                                                SharedString::from("Raag")
+                                            }
+                                        })
+                                        .accessibility_label("")
+                                        .fallback_class("size-9 rounded-full items-center justify-center bg-secondary text-foreground text-xs font-bold")
+                                        .size_9()
+                                        .rounded_full()
+                                        .overflow_hidden()
+                                        .border_1()
+                                        .border_color(glass_hairline),
+                                ),
                         ),
                 )
         },
@@ -994,7 +1231,12 @@ fn desktop_side_panel() -> impl IntoElement {
                             .p_1()
                             .rounded(radius_card)
                             .bg(pill_glass_surface)
-                            .indicator_class("inset-y-1 rounded-lg bg-primary")
+                            .indicator_style(|s| {
+                                s.top_1()
+                                    .bottom_1()
+                                    .rounded(move || theme().radius)
+                                    .bg(move || theme().primary)
+                            })
                             .accessibility_label("Side panel sections")
                             .child(
                                 tab()
@@ -1008,6 +1250,9 @@ fn desktop_side_panel() -> impl IntoElement {
                                     .items_center()
                                     .justify_center()
                                     .rounded(move || theme().radius)
+                                    .focus_visible(|s| {
+                                        s.outline(px(2.0)).outline_color(move || theme().ring)
+                                    })
                                     .child(
                                         text("Up Next")
                                             .text_xs()
@@ -1033,8 +1278,11 @@ fn desktop_side_panel() -> impl IntoElement {
                                     .items_center()
                                     .justify_center()
                                     .rounded(move || theme().radius)
+                                    .focus_visible(|s| {
+                                        s.outline(px(2.0)).outline_color(move || theme().ring)
+                                    })
                                     .child(
-                                        text("Lyrics")
+                                        text("Synced Lyrics")
                                             .text_xs()
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .text_color(move || {
@@ -1058,6 +1306,9 @@ fn desktop_side_panel() -> impl IntoElement {
                                     .items_center()
                                     .justify_center()
                                     .rounded(move || theme().radius)
+                                    .focus_visible(|s| {
+                                        s.outline(px(2.0)).outline_color(move || theme().ring)
+                                    })
                                     .child(
                                         text("Related")
                                             .text_xs()
@@ -1079,7 +1330,10 @@ fn desktop_side_panel() -> impl IntoElement {
                         "Close Side Panel",
                         true,
                         move || theme().muted_foreground,
-                        move || store::toggle_desktop_side_panel(store::desktop_side_panel()),
+                        move || {
+                            trigger_shell_layout_animation();
+                            store::toggle_desktop_side_panel(store::desktop_side_panel());
+                        },
                     )),
             )
             .child(
@@ -1097,6 +1351,9 @@ fn desktop_side_panel() -> impl IntoElement {
                             .rounded(radius_card)
                             .style_when(active, |s| s.bg(sidebar_active_surface))
                             .hover(|s| s.bg(pill_glass_surface))
+                            .focus_visible(|s| {
+                                s.outline(px(2.0)).outline_color(move || theme().ring)
+                            })
                             .on_press(move || store::jump_queue(at.index()))
                             .child(
                                 view()
@@ -1105,7 +1362,7 @@ fn desktop_side_panel() -> impl IntoElement {
                                     .gap_2p5()
                                     .w_full()
                                     .min_w(px(0.0))
-                                    .child(side_panel_queue_artwork(track))
+                                    .child(side_panel_queue_artwork(track, active))
                                     .child(
                                         view()
                                             .flex_1()
@@ -1175,6 +1432,10 @@ fn desktop_side_panel() -> impl IntoElement {
                                     .rounded(radius_card)
                                     .style_when(active, |s| s.bg(sidebar_active_surface))
                                     .style_when(move || !active(), |s| s.opacity(0.68))
+                                    .hover(|s| s.bg(pill_glass_hover))
+                                    .focus_visible(|s| {
+                                        s.outline(px(2.0)).outline_color(move || theme().ring)
+                                    })
                                     .on_press(move || {
                                         if let Some(l) = line.get_untracked()
                                             && l.end_ms > 0
@@ -1269,6 +1530,11 @@ fn desktop_side_panel() -> impl IntoElement {
                                                 .flex_row()
                                                 .items_center()
                                                 .gap_2p5()
+                                                .rounded(move || theme().radius)
+                                                .focus_visible(|s| {
+                                                    s.outline(px(2.0))
+                                                        .outline_color(move || theme().ring)
+                                                })
                                                 .on_press(move || store::play_track(t_play.clone()))
                                                 .child(artwork_box(art_url, mono, 38.0, 6.0))
                                                 .child(
@@ -1356,6 +1622,9 @@ fn mobile_top_header() -> impl IntoElement {
                                 .justify_center()
                                 .rounded_full()
                                 .hover(|s| s.bg(pill_glass_hover))
+                                .focus_visible(|s| {
+                                    s.outline(px(2.0)).outline_color(move || theme().ring)
+                                })
                                 .on_press(|| store::set_tab(AppTab::ListenTogether))
                                 .child(icon(IconKind::ListenTogether, 20.0, move || {
                                     if store::active_tab() == AppTab::ListenTogether {
@@ -1375,6 +1644,9 @@ fn mobile_top_header() -> impl IntoElement {
                                 .justify_center()
                                 .rounded_full()
                                 .hover(|s| s.bg(pill_glass_hover))
+                                .focus_visible(|s| {
+                                    s.outline(px(2.0)).outline_color(move || theme().ring)
+                                })
                                 .on_press(|| store::set_tab(AppTab::Queue))
                                 .child(icon(IconKind::Queue, 20.0, move || {
                                     if store::active_tab() == AppTab::Queue {
@@ -1394,6 +1666,9 @@ fn mobile_top_header() -> impl IntoElement {
                                 .justify_center()
                                 .rounded_full()
                                 .hover(|s| s.bg(pill_glass_hover))
+                                .focus_visible(|s| {
+                                    s.outline(px(2.0)).outline_color(move || theme().ring)
+                                })
                                 .on_press(|| store::set_tab(AppTab::Settings))
                                 .child(icon(IconKind::Settings, 20.0, move || {
                                     if store::active_tab() == AppTab::Settings {
@@ -1454,10 +1729,11 @@ pub fn app_shell() -> impl IntoElement {
                             .child(desktop_sidebar())
                             .child(
                                 view()
+                                    .relative()
                                     .flex_1()
                                     .min_w(px(0.0))
                                     .min_h(px(0.0))
-                                    // Subtle warm top-ambient glow behind non-NowPlaying desktop views
+                                    // Seamless full-canvas atmospheric wash behind header & mood chips
                                     .child(when(
                                         move || store::active_tab() != AppTab::NowPlaying,
                                         || {
@@ -1466,11 +1742,36 @@ pub fn app_shell() -> impl IntoElement {
                                                 .top_0()
                                                 .left_0()
                                                 .right_0()
-                                                .h(px(260.0))
+                                                .h(px(520.0))
                                                 .pointer_events(PointerEvents::None)
+                                                .accessibility_elements_hidden(true)
                                                 .bg_linear_to_b()
-                                                .gradient_from(color_ambient_warm)
-                                                .gradient_to(move || theme().background)
+                                                .gradient_from(move || {
+                                                    color_ambient_warm().opacity(0.76)
+                                                })
+                                                .gradient_via(move || {
+                                                    color_ambient_warm().opacity(0.24)
+                                                })
+                                                .gradient_via_position(percentage(0.45))
+                                                .gradient_to(move || {
+                                                    theme().background.opacity(0.0)
+                                                })
+                                                .child(
+                                                    view()
+                                                        .absolute()
+                                                        .top_0()
+                                                        .left_0()
+                                                        .right_0()
+                                                        .h(px(340.0))
+                                                        .pointer_events(PointerEvents::None)
+                                                        .bg_radial()
+                                                        .gradient_from(move || {
+                                                            color_ambient_warm().opacity(0.42)
+                                                        })
+                                                        .gradient_to(move || {
+                                                            theme().background.opacity(0.0)
+                                                        }),
+                                                )
                                         },
                                     ))
                                     .child(desktop_top_header())
@@ -1520,16 +1821,26 @@ pub fn app_shell() -> impl IntoElement {
             },
         ))
         .child(when(store::cast_sheet_open, || {
-            dynamic(|| {
-                cast_picker_sheet(
-                    store::cast_devices(),
-                    store::cast_session(),
-                    store::select_cast_device,
-                    store::disconnect_cast,
-                    store::set_cast_volume,
-                    || store::set_cast_sheet_open(false),
+            view()
+                .test_id("cast-picker-overlay")
+                .absolute()
+                .inset_0()
+                .bg(overlay_scrim)
+                .items_center()
+                .justify_center()
+                .p_4()
+                .child(
+                    view().w_full().max_w(px(420.0)).child(dynamic(|| {
+                        cast_picker_sheet(
+                            store::cast_devices(),
+                            store::cast_session(),
+                            store::select_cast_device,
+                            store::disconnect_cast,
+                            store::set_cast_volume,
+                            || store::set_cast_sheet_open(false),
+                        )
+                        .into_element()
+                    })),
                 )
-                .into_element()
-            })
         }))
 }
