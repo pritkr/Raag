@@ -9,7 +9,7 @@ import java.nio.ByteBuffer
 
 /**
  * Zero-copy Media3 [BaseAudioProcessor] routing decoded PCM direct [ByteBuffer]s
- * straight into Resonance's Rust `DspPipeline` (10-band EQ, ReplayGain, Silence Skip)
+ * straight into Raag's Rust `DspPipeline` (10-band EQ, ReplayGain, Silence Skip)
  * without JVM byte-array copies.
  */
 @OptIn(UnstableApi::class)

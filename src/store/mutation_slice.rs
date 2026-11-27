@@ -199,6 +199,12 @@ impl MutationSlice {
                         col.tracks.insert(target_idx, item);
                     }
                 }
+                PlaylistEditOp::Rename { title, .. } => {
+                    let clean = title.trim();
+                    if !clean.is_empty() {
+                        col.title = clean.to_owned();
+                    }
+                }
             }
         }
 
@@ -215,6 +221,12 @@ impl MutationSlice {
                     pl.track_count = Some(pl.track_count.unwrap_or(1).saturating_sub(1));
                 }
                 PlaylistEditOp::MoveVideoBefore { .. } => {}
+                PlaylistEditOp::Rename { title, .. } => {
+                    let clean = title.trim();
+                    if !clean.is_empty() {
+                        pl.title = clean.to_owned();
+                    }
+                }
             }
         }
 
@@ -289,7 +301,13 @@ impl MutationSlice {
                     }
                 }
             }
-            _ => {}
+            MutationCommand::CreatePlaylist { local_temp_id, .. } => {
+                library.playlists.retain(|p| {
+                    p.playlist_id.as_deref() != Some(local_temp_id.as_str())
+                        && p.browse_id != local_temp_id
+                });
+            }
+            MutationCommand::DeletePlaylist { .. } | MutationCommand::ReportAtr(_) => {}
         }
     }
 

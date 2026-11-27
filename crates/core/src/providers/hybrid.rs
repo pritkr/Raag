@@ -13,9 +13,9 @@ use resonance_contract::{
     AccountProfile, AlbumDetail, ArtistDetail, AuthSession, CacheStore, CatalogExtProvider,
     CoreError, CoreResult, ExplorePage, HomeSection, InnerTubeMutations,
     LIBRARY_SNAPSHOT_METADATA_KEY, LibraryCollectionRef, LibrarySnapshot, LikeAction,
-    LyricsDocument, MusicProvider, MutationError, MutationReceipt, Playlist, PlaylistEditOp,
-    PoTokenDiagnostics, PoTokenHealthStatus, PoTokenProvider, ProviderError, SearchCategory,
-    SearchResults, StreamInfo, Track, WatchtimeReport,
+    LyricsDocument, MoodCategory, MusicProvider, MutationError, MutationReceipt, Playlist,
+    PlaylistEditOp, PoTokenDiagnostics, PoTokenHealthStatus, PoTokenProvider, ProviderError,
+    SearchCategory, SearchResults, StreamInfo, Track, WatchtimeReport,
 };
 use serde::{Deserialize, Serialize};
 
@@ -232,6 +232,29 @@ impl HybridMusicProvider {
         if let Some(inner) = &self.inner {
             inner.update_client_matrix(matrix);
         }
+    }
+
+    pub async fn warm_player_solver(&self) {
+        if let Some(inner) = &self.inner {
+            let _ = inner.warm_player_solver().await;
+        }
+    }
+
+    /// Loads `FEmusic_home` filtered by optional mood `params`, returning both shelves and
+    /// live YouTube Music mood chips when available.
+    pub async fn home_with_mood(
+        &self,
+        params: Option<&str>,
+    ) -> CoreResult<(Vec<HomeSection>, Vec<MoodCategory>)> {
+        if let Some(inner) = &self.inner {
+            if let Ok((sections, chips)) = inner.home_with_params(params).await
+                && !sections.is_empty()
+            {
+                return Ok((sections, chips));
+            }
+        }
+        let sections = self.home().await?;
+        Ok((sections, Vec::new()))
     }
 
     pub fn set_po_token_provider(&self, provider: Option<Arc<dyn PoTokenProvider>>) {
@@ -582,13 +605,21 @@ impl CatalogExtProvider for HybridMusicProvider {
             moods_and_genres: ytmapi_page.map(|p| p.moods_and_genres).unwrap_or_default(),
         };
 
-        if page.new_releases.is_empty()
-            && page.charts.is_empty()
-            && page.moods_and_genres.is_empty()
-            && let Some(inner) = &self.inner
+        if let Some(inner) = &self.inner
+            && (page.new_releases.is_empty()
+                || page.charts.is_empty()
+                || page.moods_and_genres.is_empty())
+            && let Ok(inner_page) = inner.explore_page().await
         {
-            let sections = inner.explore().await.unwrap_or_default();
-            page.charts = sections;
+            if page.new_releases.is_empty() {
+                page.new_releases = inner_page.new_releases;
+            }
+            if page.charts.is_empty() {
+                page.charts = inner_page.charts;
+            }
+            if page.moods_and_genres.is_empty() {
+                page.moods_and_genres = inner_page.moods_and_genres;
+            }
         }
         Ok(page)
     }
@@ -597,6 +628,13 @@ impl CatalogExtProvider for HybridMusicProvider {
         #[cfg(feature = "provider-ytmapi")]
         if let Some(ytmapi) = &self.ytmapi
             && let Ok(list) = ytmapi.mood_playlists(params).await
+            && !list.is_empty()
+        {
+            return Ok(list);
+        }
+        if let Some(inner) = &self.inner
+            && let Ok(list) = inner.mood_playlists_by_params(params).await
+            && !list.is_empty()
         {
             return Ok(list);
         }
@@ -675,8 +713,13 @@ impl CatalogExtProvider for HybridMusicProvider {
             return Ok(detail);
         }
         #[cfg(feature = "provider-rustypipe")]
-        if let Some(rp) = &self.rp_browse {
-            return rp.fetch_artist(channel_id).await;
+        if let Some(rp) = &self.rp_browse
+            && let Ok(detail) = rp.fetch_artist(channel_id).await
+        {
+            return Ok(detail);
+        }
+        if let Some(inner) = &self.inner {
+            return inner.fetch_artist_detail(channel_id).await;
         }
         Err(CoreError::Provider(ProviderError::Parse(
             "no provider available for fetch_artist".into(),
@@ -691,8 +734,15 @@ impl CatalogExtProvider for HybridMusicProvider {
             return Ok(detail);
         }
         #[cfg(feature = "provider-rustypipe")]
-        if let Some(rp) = &self.rp_browse {
-            return rp.fetch_album(browse_id).await;
+        if let Some(rp) = &self.rp_browse
+            && let Ok(detail) = rp.fetch_album(browse_id).await
+        {
+            return Ok(detail);
+        }
+        if let Some(inner) = &self.inner
+            && let Ok(detail) = inner.fetch_album_detail(browse_id).await
+        {
+            return Ok(detail);
         }
         let pl = self.browse_collection(browse_id).await?;
         let total_duration_ms = pl.tracks.iter().map(|t| t.duration_ms).sum();
@@ -759,6 +809,30 @@ impl InnerTubeMutations for HybridMusicProvider {
             .as_ref()
             .ok_or_else(|| MutationError::InvalidInput("no InnerTubeClient configured".into()))?;
         inner.edit_playlist(playlist_id, op).await
+    }
+
+    async fn create_playlist(
+        &self,
+        title: &str,
+        description: &str,
+        privacy: resonance_contract::PlaylistPrivacy,
+        initial_video_ids: &[resonance_contract::TrackId],
+    ) -> Result<MutationReceipt, MutationError> {
+        let inner = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| MutationError::InvalidInput("no InnerTubeClient configured".into()))?;
+        inner
+            .create_playlist(title, description, privacy, initial_video_ids)
+            .await
+    }
+
+    async fn delete_playlist(&self, playlist_id: &str) -> Result<MutationReceipt, MutationError> {
+        let inner = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| MutationError::InvalidInput("no InnerTubeClient configured".into()))?;
+        inner.delete_playlist(playlist_id).await
     }
 }
 

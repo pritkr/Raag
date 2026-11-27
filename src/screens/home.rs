@@ -143,16 +143,7 @@ fn collection_detail_view() -> impl IntoElement {
                                             "Play All",
                                             Some(IconKind::Play),
                                             move || {
-                                                if let Some(first) =
-                                                    tracks_for_play_all.first().cloned()
-                                                {
-                                                    store::play_track(first);
-                                                    for extra in
-                                                        tracks_for_play_all.iter().skip(1).cloned()
-                                                    {
-                                                        store::play_last(extra);
-                                                    }
-                                                }
+                                                store::play_queue(tracks_for_play_all.clone(), 0);
                                             },
                                         ))
                                         .child(glass_pill_button(
@@ -169,16 +160,7 @@ fn collection_detail_view() -> impl IntoElement {
                                             Some(IconKind::Radio),
                                             move || {
                                                 store::set_autoplay_radio(true);
-                                                if let Some(first) =
-                                                    tracks_for_radio.first().cloned()
-                                                {
-                                                    store::play_track(first);
-                                                    for extra in
-                                                        tracks_for_radio.iter().skip(1).cloned()
-                                                    {
-                                                        store::play_last(extra);
-                                                    }
-                                                }
+                                                store::play_queue(tracks_for_radio.clone(), 0);
                                                 store::set_status_banner(format!(
                                                     "Radio started from \"{}\"",
                                                     radio_title
@@ -372,6 +354,7 @@ fn paginated_slice<T: Clone>(items: &[T], page: usize, page_size: usize) -> Vec<
 
 fn listen_again_shelf(
     section_id: String,
+    title: String,
     tracks: Vec<Track>,
     current_id_memo: Memo<Option<String>>,
     desktop: bool,
@@ -385,7 +368,7 @@ fn listen_again_shelf(
         .gap_3()
         .child(section_header_with_pager(
             Some("YOUR RECENT ROTATION"),
-            "Listen again".into(),
+            title,
             header_id,
             total,
             page_size,
@@ -560,12 +543,16 @@ fn collection_section_view(
                             card_w,
                             false,
                             move || {
-                                store::open_collection(
-                                    id_btn.clone(),
-                                    title_btn.clone(),
-                                    sub_btn.clone(),
-                                    art_btn.clone(),
-                                );
+                                if id_btn.starts_with("MPRE") {
+                                    store::open_album_entity(id_btn.clone());
+                                } else {
+                                    store::open_collection(
+                                        id_btn.clone(),
+                                        title_btn.clone(),
+                                        sub_btn.clone(),
+                                        art_btn.clone(),
+                                    );
+                                }
                             },
                             None,
                         )
@@ -585,12 +572,16 @@ fn collection_section_view(
                             .hover(|s| s.bg(move || theme().muted))
                             .active(|s| s.opacity(0.8))
                             .on_press(move || {
-                                store::open_collection(
-                                    id_btn.clone(),
-                                    title_btn.clone(),
-                                    sub_btn.clone(),
-                                    art_btn.clone(),
-                                );
+                                if id_btn.starts_with("MPRE") {
+                                    store::open_album_entity(id_btn.clone());
+                                } else {
+                                    store::open_collection(
+                                        id_btn.clone(),
+                                        title_btn.clone(),
+                                        sub_btn.clone(),
+                                        art_btn.clone(),
+                                    );
+                                }
                             })
                             .child(artwork_box(col.artwork_url, mono, 44.0, 8.0))
                             .child(
@@ -636,21 +627,51 @@ fn home_feed_view() -> impl IntoElement {
                 .p_3()
                 .gap_3()
                 .style_when(is_desktop_layout, |s| s.px_8().py_5().gap_6())
-                // Mood / category filter chips row
+                // Mood / category filter chips row (in-place YouTube Music home filtering)
                 .child(
                     scroll()
                         .horizontal()
                         .w_full()
                         .min_h(px(MOBILE_MIN_TOUCH_TARGET))
-                        .child(view().flex_row().items_center().gap_2().py_1().children(
-                            HOME_MOODS.into_iter().map(|mood| {
+                        .child(dynamic(|| {
+                            let live_chips = store::home_mood_chips();
+                            let active = store::selected_mood();
+                            let chips: Vec<(String, Option<String>)> = if !live_chips.is_empty() {
+                                live_chips
+                                    .into_iter()
+                                    .map(|c| (c.title, Some(c.params)))
+                                    .collect()
+                            } else {
+                                HOME_MOODS
+                                    .into_iter()
+                                    .map(|m| (m.to_owned(), None))
+                                    .collect()
+                            };
+
+                            let mut row = view().flex_row().items_center().gap_2().py_1();
+                            if active.is_some() {
+                                row = row.child(mood_chip(
+                                    "× Clear",
+                                    || false,
+                                    store::clear_home_mood,
+                                ));
+                            }
+                            row.children(chips.into_iter().map(|(label, params)| {
+                                let label_cmp = label.clone();
+                                let label_click = label.clone();
                                 mood_chip(
-                                    mood,
-                                    move || store::selected_mood().as_deref() == Some(mood),
-                                    move || store::select_mood(mood),
+                                    SharedString::from(label),
+                                    move || {
+                                        store::selected_mood().as_deref()
+                                            == Some(label_cmp.as_str())
+                                    },
+                                    move || {
+                                        store::select_home_mood(&label_click, params.clone());
+                                    },
                                 )
-                            }),
-                        )),
+                            }))
+                            .into_element()
+                        })),
                 )
                 // Loading skeletons
                 .child(when(store::is_home_loading, || {
@@ -691,7 +712,6 @@ fn home_feed_view() -> impl IntoElement {
                     }
 
                     let mut children = Vec::new();
-                    let mut rendered_listen_again = false;
 
                     for section in sections {
                         let mut tracks = Vec::new();
@@ -715,22 +735,26 @@ fn home_feed_view() -> impl IntoElement {
                         }
 
                         if !tracks.is_empty() && tracks.len() >= collections.len() {
-                            if desktop && !rendered_listen_again {
+                            let lower = section.title.to_lowercase();
+                            if desktop
+                                && (lower.contains("listen again") || lower.contains("recent"))
+                            {
                                 children.push(
                                     listen_again_shelf(
-                                        section.id.clone(),
-                                        tracks.clone(),
+                                        section.id,
+                                        section.title,
+                                        tracks,
                                         current_id_memo,
                                         desktop,
                                     )
                                     .into_element(),
                                 );
-                                rendered_listen_again = true;
+                            } else {
+                                children.push(
+                                    track_section_view(section, tracks, current_id_memo, desktop)
+                                        .into_element(),
+                                );
                             }
-                            children.push(
-                                track_section_view(section, tracks, current_id_memo, desktop)
-                                    .into_element(),
-                            );
                         } else if !collections.is_empty() {
                             children.push(
                                 collection_section_view(

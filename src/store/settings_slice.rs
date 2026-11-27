@@ -20,6 +20,7 @@ pub struct SettingsSlice {
     pub auth_backend_status: AuthBackendStatus,
     pub account_profile: Option<AccountProfile>,
     pub remote_config_status: RemoteConfigStatus,
+    pub dsp_capability: AudioDspCapability,
     pub dsp_config: DspConfig,
     pub po_token_diagnostics: PoTokenDiagnostics,
     pub offline_quota_bytes: u64,
@@ -83,6 +84,7 @@ impl SettingsSlice {
                 signature_verified: false,
                 last_sync_unix_secs: None,
             },
+            dsp_capability: AudioDspCapability::ExternalUrlStreamOnly,
             dsp_config: DspConfig::default(),
             po_token_diagnostics: if fixture {
                 PoTokenDiagnostics {
@@ -241,11 +243,43 @@ impl SettingsSlice {
         self.auth_backend_status.account_name = None;
         self.auth_backend_status.has_sapisid = false;
         self.auth_backend_status.has_3papisid = false;
+        self.tv_oauth_user_code = None;
+        self.tv_oauth_verification_url = None;
+        self.tv_oauth_expires_in_secs = 0;
+        self.tv_oauth_status = None;
         "Signed out — running in anonymous mode".into()
     }
 
+    pub fn apply_tv_oauth_device_code(
+        &mut self,
+        user_code: String,
+        verification_url: String,
+        expires_in_secs: u64,
+    ) {
+        self.tv_oauth_user_code = Some(user_code);
+        self.tv_oauth_verification_url = Some(verification_url);
+        self.tv_oauth_expires_in_secs = expires_in_secs;
+    }
+
+    pub fn apply_tv_oauth_status(&mut self, status: String) {
+        self.tv_oauth_status = Some(status);
+    }
+
+    pub fn apply_tv_oauth_completed(&mut self, ok: bool, message: String) {
+        self.tv_oauth_user_code = None;
+        self.tv_oauth_expires_in_secs = 0;
+        self.tv_oauth_status = Some(message);
+        if ok {
+            self.auth_sheet_open = false;
+        }
+    }
+
     pub fn dsp_capability(&self) -> AudioDspCapability {
-        AudioDspCapability::ExternalUrlStreamOnly
+        self.dsp_capability
+    }
+
+    pub fn set_dsp_capability(&mut self, capability: AudioDspCapability) {
+        self.dsp_capability = capability;
     }
 
     pub fn set_loudness_normalization(&mut self, enabled: bool) {
@@ -261,6 +295,18 @@ impl SettingsSlice {
         self.dsp_config.eq_preset = next;
         self.dsp_config.eq_gains_db = next.gains_db();
         next.label()
+    }
+
+    pub fn set_eq_band_gain(&mut self, band_idx: usize, gain_db: f32) {
+        if let Some(slot) = self.dsp_config.eq_gains_db.get_mut(band_idx) {
+            *slot = gain_db.clamp(-12.0, 12.0);
+            self.dsp_config.eq_preset = resonance_contract::EqPreset::Custom;
+        }
+    }
+
+    pub fn reset_eq_flat(&mut self) {
+        self.dsp_config.eq_preset = resonance_contract::EqPreset::Flat;
+        self.dsp_config.eq_gains_db = [0.0; 10];
     }
 
     pub fn cycle_crossfade_ms(&mut self) -> u32 {

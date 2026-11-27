@@ -25,6 +25,7 @@ pub struct PlaybackController {
     audio: Arc<dyn AudioBackend>,
     cache: Arc<dyn CacheStore>,
     offline: Option<Arc<dyn OfflineStore>>,
+    local_media: Option<Arc<crate::local_media::LocalMediaStore>>,
     proxy: Arc<LoopbackProxy>,
     lyrics: Arc<dyn LyricsProvider>,
     sponsorblock: Arc<dyn resonance_contract::SponsorBlockProvider>,
@@ -52,6 +53,7 @@ impl PlaybackController {
             audio,
             cache,
             offline: None,
+            local_media: None,
             proxy,
             lyrics,
             sponsorblock,
@@ -70,6 +72,14 @@ impl PlaybackController {
 
     pub fn with_offline_store(mut self, offline: Arc<dyn OfflineStore>) -> Self {
         self.offline = Some(offline);
+        self
+    }
+
+    pub fn with_local_media(
+        mut self,
+        local_media: Arc<crate::local_media::LocalMediaStore>,
+    ) -> Self {
+        self.local_media = Some(local_media);
         self
     }
 
@@ -213,6 +223,14 @@ impl PlaybackController {
         Ok(())
     }
 
+    /// Clears upcoming tracks after the currently playing track without interrupting audio playback.
+    pub async fn clear_up_next(&self) -> CoreResult<usize> {
+        let mut fsm = self.fsm.lock().await;
+        let removed = QueueManager::clear_up_next(&mut fsm.snapshot.queue);
+        self.publish_and_persist(&fsm);
+        Ok(removed)
+    }
+
     pub async fn toggle_shuffle(&self) {
         let mut fsm = self.fsm.lock().await;
         QueueManager::toggle_shuffle(&mut fsm.snapshot.queue);
@@ -297,19 +315,64 @@ impl PlaybackController {
             t
         };
 
-        let offline_hit = self.offline.as_ref().and_then(|o| {
-            let rec = o.get_completed_download(&track.id).ok().flatten()?;
-            let rel = rec.relative_path.as_deref()?;
-            if crate::offline::resolve_confined_path(&o.downloads_root(), rel)
-                .is_ok_and(|p| p.is_file())
-            {
-                Some(rec)
-            } else {
-                None
-            }
-        });
+        let is_local_track = track.id.starts_with("local:");
+        let local_record = if is_local_track {
+            self.local_media
+                .as_ref()
+                .and_then(|lm| lm.get_track_by_id(&track.id).ok().flatten())
+        } else {
+            None
+        };
 
-        let (proxy_url, duration_ms, offline_used, codec_badge) = if let Some(rec) = offline_hit {
+        let offline_hit = if is_local_track {
+            None
+        } else {
+            self.offline.as_ref().and_then(|o| {
+                let rec = o.get_completed_download(&track.id).ok().flatten()?;
+                let rel = rec.relative_path.as_deref()?;
+                if crate::offline::resolve_confined_path(&o.downloads_root(), rel)
+                    .is_ok_and(|p| p.is_file())
+                {
+                    Some(rec)
+                } else {
+                    None
+                }
+            })
+        };
+
+        let (proxy_url, duration_ms, offline_used, codec_badge) = if is_local_track {
+            let (dur, bitrate, sample_rate, codec) = match local_record.as_ref() {
+                Some(rec) => {
+                    let codec = match rec.mime_type.as_str() {
+                        "audio/mp4" => AudioCodec::Aac,
+                        "audio/ogg" => AudioCodec::Opus,
+                        _ => AudioCodec::Unknown,
+                    };
+                    (
+                        rec.track.duration_ms.max(track.duration_ms),
+                        rec.bitrate_kbps.unwrap_or(0),
+                        rec.sample_rate_hz,
+                        codec,
+                    )
+                }
+                None => (track.duration_ms, 0, None, AudioCodec::Unknown),
+            };
+            (
+                format!(
+                    "{}/local/{}?gen={proxy_gen}",
+                    self.proxy.base_url(),
+                    track.id
+                ),
+                dur,
+                true,
+                Some(CodecBadgeInfo {
+                    codec,
+                    bitrate_kbps: bitrate,
+                    sample_rate_hz: sample_rate,
+                    source_label: "Local File".to_owned(),
+                }),
+            )
+        } else if let Some(rec) = offline_hit {
             let codec = if matches!(rec.itag, 140 | 141) {
                 AudioCodec::Aac
             } else {
@@ -481,31 +544,71 @@ impl PlaybackController {
         let sb_provider = self.sponsorblock.clone();
         let bus = self.bus.clone();
         let track_for_bg = track.clone();
+        let embedded_local_lyrics = local_record.and_then(|r| r.embedded_lyrics);
         tokio::spawn(async move {
-            let lyrics = lyrics_provider
-                .fetch_lyrics(&track_for_bg)
-                .await
-                .ok()
-                .flatten();
+            let lyrics = if let Some(raw_lrc) = embedded_local_lyrics {
+                let parsed = crate::lyrics::parse_lrc(&raw_lrc);
+                if parsed.is_empty() {
+                    let plain_lines: Vec<resonance_contract::LyricLine> = raw_lrc
+                        .lines()
+                        .map(str::trim)
+                        .filter(|l| !l.is_empty())
+                        .map(|l| resonance_contract::LyricLine {
+                            start_ms: 0,
+                            end_ms: 0,
+                            text: l.to_owned(),
+                            words: Vec::new(),
+                            is_instrumental: false,
+                        })
+                        .collect();
+                    if plain_lines.is_empty() {
+                        None
+                    } else {
+                        Some(resonance_contract::LyricsDocument {
+                            video_id: track_for_bg.id.clone(),
+                            provider: "Embedded / Local".to_owned(),
+                            sync_kind: resonance_contract::LyricSyncKind::Plain,
+                            lines: plain_lines,
+                        })
+                    }
+                } else {
+                    Some(resonance_contract::LyricsDocument {
+                        video_id: track_for_bg.id.clone(),
+                        provider: "Embedded / Sidecar LRC".to_owned(),
+                        sync_kind: resonance_contract::LyricSyncKind::Line,
+                        lines: parsed,
+                    })
+                }
+            } else if is_local_track {
+                None
+            } else {
+                lyrics_provider
+                    .fetch_lyrics(&track_for_bg)
+                    .await
+                    .ok()
+                    .flatten()
+            };
             bus.publish(AppEvent::LyricsLoaded {
                 video_id: track_for_bg.id.clone(),
                 lyrics,
             });
         });
 
-        let segs = sb_provider
-            .fetch_segments(&track.id)
-            .await
-            .unwrap_or_default();
-        if !segs.is_empty() {
-            let mut fsm = self.fsm.lock().await;
-            if fsm
-                .snapshot
-                .current_track
-                .as_ref()
-                .is_some_and(|t| t.id == track.id)
-            {
-                fsm.sponsor_segments = segs;
+        if !is_local_track {
+            let segs = sb_provider
+                .fetch_segments(&track.id)
+                .await
+                .unwrap_or_default();
+            if !segs.is_empty() {
+                let mut fsm = self.fsm.lock().await;
+                if fsm
+                    .snapshot
+                    .current_track
+                    .as_ref()
+                    .is_some_and(|t| t.id == track.id)
+                {
+                    fsm.sponsor_segments = segs;
+                }
             }
         }
 

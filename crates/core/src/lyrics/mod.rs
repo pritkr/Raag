@@ -33,7 +33,7 @@ impl CascadeLyricsProvider {
     pub fn new(music: Arc<dyn MusicProvider>, cache: Arc<dyn CacheStore>) -> Self {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(6))
-            .user_agent("Resonance/0.1 (Pure Rust NSH YouTube Music Client)")
+            .user_agent("Raag/0.1 (Pure Rust NSH YouTube Music Client)")
             .build()
             .unwrap_or_default();
         Self { http, music, cache }

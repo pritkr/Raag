@@ -1,24 +1,31 @@
-//! Explore & Discovery Screen:
-//! - Quick category pills (`New releases`, `Charts`, `Moods & genres`)
-//! - "New releases for you" paginated horizontal shelf of square artwork cards
-//! - "Charts" paginated horizontal shelf (`Trending`, `Top Songs`, `Global Top 100`, `Indie Spotlight`)
-//! - "Moods & genres" responsive grid of tinted editorial cards with left accent stripes
+//! Explore & Discovery Screen — Original YouTube Music Architecture:
+//! - 3 iconic top category tiles (`New releases`, `Charts`, `Moods & genres`)
+//! - Live "New albums & singles" horizontal shelf routing `MPRE*` albums to Album Entity screen
+//! - Live "Charts & Trending" sections backed by real InnerTube `page.charts` (zero fake monogram cards)
+//! - Live "Moods & genres" tinted editorial grid with inline playlist shelf & Clear/Back control
 
 use nsh_base::{button, theme};
 use nsh_core::prelude::*;
 use resonance_contract::{HomeItem, Track};
 
-use crate::store::{self, AppTab};
-use crate::ui::controls::{media_square_card, mood_chip, svg_icon_button};
-use crate::ui::icons::IconKind;
+use crate::store;
+use crate::ui::controls::{
+    compact_mix_row, media_square_card, secondary_button, skeleton_row, status_card,
+    svg_icon_button, track_row_view,
+};
+use crate::ui::icons::{IconKind, icon};
 use crate::ui::tokens::{
     MOBILE_MIN_TOUCH_TARGET, color_ambient_warm, cover_gradient_pair, genre_card_tint,
-    glass_hairline, is_desktop_layout, radius_card,
+    glass_hairline, is_desktop_layout, pill_glass_hover, pill_glass_surface, radius_card,
 };
 
-const QUICK_CATEGORIES: [&str; 3] = ["New releases", "Charts", "Moods & genres"];
+const QUICK_CATEGORIES: [(&str, IconKind); 3] = [
+    ("New releases", IconKind::Radio),
+    ("Charts", IconKind::NowPlaying),
+    ("Moods & genres", IconKind::Explore),
+];
 
-const MOODS_AND_GENRES: [&str; 10] = [
+const FALLBACK_MOODS_AND_GENRES: [&str; 10] = [
     "Chill",
     "Workout",
     "Focus",
@@ -40,88 +47,6 @@ enum ReleaseCardKind {
         subtitle: String,
         artwork_url: Option<String>,
     },
-    DiscoveryMix {
-        title: String,
-        subtitle: String,
-        monogram: String,
-        query: String,
-    },
-}
-
-#[derive(Clone, Copy)]
-struct ChartEntry {
-    title: &'static str,
-    subtitle: &'static str,
-    monogram: &'static str,
-    query: &'static str,
-}
-
-const CHART_CARDS: [ChartEntry; 6] = [
-    ChartEntry {
-        title: "Trending",
-        subtitle: "Rising right now • Daily",
-        monogram: "TR",
-        query: "Trending",
-    },
-    ChartEntry {
-        title: "Top Songs",
-        subtitle: "Most played • Global",
-        monogram: "TS",
-        query: "Top Songs",
-    },
-    ChartEntry {
-        title: "Global Top 100",
-        subtitle: "Worldwide weekly chart",
-        monogram: "100",
-        query: "Global Top 100",
-    },
-    ChartEntry {
-        title: "Indie Spotlight",
-        subtitle: "Fresh independent picks",
-        monogram: "IS",
-        query: "Indie",
-    },
-    ChartEntry {
-        title: "Synthwave Pulse",
-        subtitle: "Electronic & night drives",
-        monogram: "SW",
-        query: "Synthwave",
-    },
-    ChartEntry {
-        title: "Acoustic Sessions",
-        subtitle: "Stripped back & live",
-        monogram: "AC",
-        query: "Acoustic",
-    },
-];
-
-fn curated_discovery_mixes() -> Vec<ReleaseCardKind> {
-    vec![
-        ReleaseCardKind::DiscoveryMix {
-            title: "Midnight Analog".into(),
-            subtitle: "Synth & warm tape • Mix".into(),
-            monogram: "MA".into(),
-            query: "Midnight".into(),
-        },
-        ReleaseCardKind::DiscoveryMix {
-            title: "Tokyo Afterhours".into(),
-            subtitle: "City pop & neon grooves".into(),
-            monogram: "TA".into(),
-            query: "Tokyo".into(),
-        },
-        ReleaseCardKind::DiscoveryMix {
-            title: "Velvet Acoustic".into(),
-            subtitle: "Warm strings & vocals".into(),
-            monogram: "VA".into(),
-            query: "Acoustic".into(),
-        },
-        ReleaseCardKind::DiscoveryMix {
-            title: "Subterranean Bass".into(),
-            subtitle: "Deep electronic cuts".into(),
-            monogram: "SB".into(),
-            query: "Pulse".into(),
-        },
-    ]
 }
 
 fn build_new_releases() -> Vec<ReleaseCardKind> {
@@ -137,15 +62,7 @@ fn build_new_releases() -> Vec<ReleaseCardKind> {
         }
     }
     if items.is_empty() {
-        let sections = {
-            let exp = store::explore_sections();
-            if exp.is_empty() {
-                store::home_sections()
-            } else {
-                exp
-            }
-        };
-        for section in sections {
+        for section in store::explore_sections() {
             for item in section.items {
                 match item {
                     HomeItem::Collection {
@@ -164,9 +81,6 @@ fn build_new_releases() -> Vec<ReleaseCardKind> {
             }
         }
     }
-    if store::is_fixture_mode() {
-        items.extend(curated_discovery_mixes());
-    }
     items
 }
 
@@ -184,8 +98,8 @@ fn paginated_slice<T: Clone>(items: &[T], page: usize, page_size: usize) -> Vec<
 }
 
 fn explore_section_header(
-    title: &'static str,
-    section_id: &'static str,
+    title: String,
+    section_id: String,
     total_items: usize,
     page_size: usize,
     desktop: bool,
@@ -195,6 +109,8 @@ fn explore_section_header(
     } else {
         MOBILE_MIN_TOUCH_TARGET
     };
+    let sec_prev = section_id.clone();
+    let sec_next = section_id;
 
     view()
         .flex_row()
@@ -221,7 +137,7 @@ fn explore_section_header(
                     "Previous page",
                     false,
                     move || theme().foreground,
-                    move || store::shift_section_page(section_id, -1, total_items, page_size),
+                    move || store::shift_section_page(&sec_prev, -1, total_items, page_size),
                 ))
                 .child(svg_icon_button(
                     IconKind::ChevronRight,
@@ -230,21 +146,37 @@ fn explore_section_header(
                     "Next page",
                     false,
                     move || theme().foreground,
-                    move || store::shift_section_page(section_id, 1, total_items, page_size),
+                    move || store::shift_section_page(&sec_next, 1, total_items, page_size),
                 )),
         )
 }
 
+fn open_explore_collection(
+    browse_id: String,
+    title: String,
+    subtitle: String,
+    artwork_url: Option<String>,
+) {
+    if browse_id.starts_with("MPRE") {
+        store::open_album_entity(browse_id);
+    } else {
+        store::open_collection(browse_id, title, subtitle, artwork_url);
+    }
+}
+
 fn new_releases_section(current_id_memo: Memo<Option<String>>, desktop: bool) -> impl IntoElement {
     const SECTION_ID: &str = "explore-new-releases";
-    const PAGE_SIZE: usize = 6;
-    let home_memo = computed(store::home_sections);
+    const PAGE_SIZE: usize = 8;
+    let page_memo = computed(store::explore_page);
     let explore_memo = computed(store::explore_sections);
 
     view().gap_3().child(dynamic(move || {
-        let _ = home_memo.get();
+        let _ = page_memo.get();
         let _ = explore_memo.get();
         let all_releases = build_new_releases();
+        if all_releases.is_empty() {
+            return view().into_element();
+        }
         let total = all_releases.len();
         let page = store::section_page(SECTION_ID);
         let slice = paginated_slice(&all_releases, page, PAGE_SIZE);
@@ -253,8 +185,8 @@ fn new_releases_section(current_id_memo: Memo<Option<String>>, desktop: bool) ->
         view()
             .gap_3()
             .child(explore_section_header(
-                "New releases for you",
-                SECTION_ID,
+                "New albums & singles".to_owned(),
+                SECTION_ID.to_owned(),
                 total,
                 PAGE_SIZE,
                 desktop,
@@ -266,81 +198,60 @@ fn new_releases_section(current_id_memo: Memo<Option<String>>, desktop: bool) ->
                         .items_start()
                         .gap_4()
                         .py_1()
-                        .children(slice.into_iter().map(move |entry| {
-                            match entry {
-                                ReleaseCardKind::Track(track) => {
-                                    let is_active = active_id.as_deref() == Some(track.id.as_str());
-                                    let t_open = track.clone();
-                                    let t_next = track.clone();
-                                    let mono = track.fallback_monogram();
-                                    let art = track.artwork_url.clone();
-                                    let title = track.title.clone();
-                                    let sub = track.artist_display();
-                                    media_square_card(
-                                        art,
-                                        mono,
-                                        title,
-                                        sub,
-                                        168.0,
-                                        is_active,
-                                        move || store::play_track(t_open.clone()),
-                                        Some(Box::new(move || store::play_next(t_next.clone()))),
-                                    )
-                                    .into_element()
-                                }
-                                ReleaseCardKind::Collection {
-                                    browse_id,
+                        .children(slice.into_iter().map(move |entry| match entry {
+                            ReleaseCardKind::Track(track) => {
+                                let is_active = active_id.as_deref() == Some(track.id.as_str());
+                                let t_open = track.clone();
+                                let t_next = track.clone();
+                                let mono = track.fallback_monogram();
+                                let art = track.artwork_url.clone();
+                                let title = track.title.clone();
+                                let sub = track.artist_display();
+                                media_square_card(
+                                    art,
+                                    mono,
                                     title,
-                                    subtitle,
+                                    sub,
+                                    168.0,
+                                    is_active,
+                                    move || store::play_track(t_open.clone()),
+                                    Some(Box::new(move || store::play_next(t_next.clone()))),
+                                )
+                                .into_element()
+                            }
+                            ReleaseCardKind::Collection {
+                                browse_id,
+                                title,
+                                subtitle,
+                                artwork_url,
+                            } => {
+                                let mono = title
+                                    .chars()
+                                    .find(|c| c.is_alphanumeric())
+                                    .map(|c| c.to_uppercase().to_string())
+                                    .unwrap_or_else(|| "♫".into());
+                                let b_id = browse_id.clone();
+                                let b_title = title.clone();
+                                let b_sub = subtitle.clone();
+                                let b_art = artwork_url.clone();
+                                media_square_card(
                                     artwork_url,
-                                } => {
-                                    let mono = title
-                                        .chars()
-                                        .find(|c| c.is_alphanumeric())
-                                        .map(|c| c.to_uppercase().to_string())
-                                        .unwrap_or_else(|| "♫".into());
-                                    let b_id = browse_id.clone();
-                                    let b_title = title.clone();
-                                    let b_sub = subtitle.clone();
-                                    let b_art = artwork_url.clone();
-                                    media_square_card(
-                                        artwork_url,
-                                        mono,
-                                        title,
-                                        subtitle,
-                                        168.0,
-                                        false,
-                                        move || {
-                                            store::open_collection(
-                                                b_id.clone(),
-                                                b_title.clone(),
-                                                b_sub.clone(),
-                                                b_art.clone(),
-                                            );
-                                        },
-                                        None,
-                                    )
-                                    .into_element()
-                                }
-                                ReleaseCardKind::DiscoveryMix {
-                                    title,
-                                    subtitle,
-                                    monogram,
-                                    query,
-                                } => media_square_card(
-                                    None,
-                                    monogram,
+                                    mono,
                                     title,
                                     subtitle,
                                     168.0,
                                     false,
                                     move || {
-                                        store::run_search(&query);
-                                        store::set_tab(AppTab::Search);
+                                        open_explore_collection(
+                                            b_id.clone(),
+                                            b_title.clone(),
+                                            b_sub.clone(),
+                                            b_art.clone(),
+                                        );
                                     },
                                     None,
                                 )
-                                .into_element(),
+                                .into_element()
                             }
                         })),
                 ),
@@ -349,46 +260,163 @@ fn new_releases_section(current_id_memo: Memo<Option<String>>, desktop: bool) ->
     }))
 }
 
-fn charts_section(desktop: bool) -> impl IntoElement {
-    const SECTION_ID: &str = "explore-charts";
-    const PAGE_SIZE: usize = 4;
+fn charts_section(current_id_memo: Memo<Option<String>>, desktop: bool) -> impl IntoElement {
+    let page_memo = computed(store::explore_page);
+    let fallback_memo = computed(store::explore_sections);
 
-    view()
-        .gap_3()
-        .child(explore_section_header(
-            "Charts",
-            SECTION_ID,
-            CHART_CARDS.len(),
-            PAGE_SIZE,
-            desktop,
-        ))
-        .child(dynamic(move || {
-            let page = store::section_page(SECTION_ID);
-            let slice = paginated_slice(&CHART_CARDS, page, PAGE_SIZE);
+    view().gap_5().child(dynamic(move || {
+        let live_charts = page_memo
+            .get()
+            .map(|p| p.charts)
+            .filter(|c| !c.is_empty())
+            .unwrap_or_else(|| fallback_memo.get());
 
-            scroll()
-                .horizontal()
-                .w_full()
-                .child(view().flex_row().items_start().gap_4().py_1().children(
-                    slice.into_iter().map(|chart| {
-                        media_square_card(
-                            None,
-                            chart.monogram.to_owned(),
-                            chart.title.to_owned(),
-                            chart.subtitle.to_owned(),
-                            168.0,
-                            false,
-                            move || {
-                                store::set_search_filter(store::SearchFilter::All);
-                                store::run_search(chart.query);
-                                store::set_tab(AppTab::Search);
-                            },
-                            None,
-                        )
-                    }),
-                ))
-                .into_element()
-        }))
+        if live_charts.is_empty() {
+            return status_card(
+                "Charts unavailable right now",
+                "Refresh Explore to load live Trending and Top Charts from YouTube Music.",
+                Some("Refresh Explore"),
+                Some(Box::new(store::refresh_explore)),
+            )
+            .into_element();
+        }
+
+        let active_id = current_id_memo.get();
+        let mut rendered = Vec::new();
+
+        for (sec_idx, section) in live_charts.into_iter().enumerate() {
+            let mut tracks = Vec::new();
+            let mut collections = Vec::new();
+            for item in section.items {
+                match item {
+                    HomeItem::Track(t) => tracks.push(t),
+                    HomeItem::Collection {
+                        browse_id,
+                        title,
+                        subtitle,
+                        artwork_url,
+                    } => collections.push((browse_id, title, subtitle, artwork_url)),
+                }
+            }
+
+            let sec_key = format!("explore-chart-{sec_idx}-{}", section.id);
+            if !tracks.is_empty() && tracks.len() >= collections.len() {
+                let page_size = if desktop { 9 } else { 6 };
+                let page = store::section_page(&sec_key);
+                let slice = paginated_slice(&tracks, page, page_size);
+                let active_id_sec = active_id.clone();
+
+                let body = if desktop {
+                    view()
+                        .gap_1()
+                        .children(slice.chunks(3).map(|row_tracks| {
+                            let mut cols = Vec::with_capacity(3);
+                            for track in row_tracks {
+                                let is_cur = active_id_sec.as_deref() == Some(track.id.as_str());
+                                let t_play = track.clone();
+                                let t_next = track.clone();
+                                cols.push(
+                                    view()
+                                        .flex_1()
+                                        .min_w(px(0.0))
+                                        .child(compact_mix_row(
+                                            track.clone(),
+                                            is_cur,
+                                            move || store::play_track(t_play.clone()),
+                                            move || store::play_next(t_next.clone()),
+                                        ))
+                                        .into_element(),
+                                );
+                            }
+                            while cols.len() < 3 {
+                                cols.push(view().flex_1().min_w(px(0.0)).into_element());
+                            }
+                            view().flex_row().gap_3().children(cols)
+                        }))
+                        .into_element()
+                } else {
+                    view()
+                        .gap_1()
+                        .children(slice.into_iter().map(move |track| {
+                            let is_cur = active_id_sec.as_deref() == Some(track.id.as_str());
+                            let t_play = track.clone();
+                            let t_next = track.clone();
+                            track_row_view(
+                                track,
+                                is_cur,
+                                move || store::play_track(t_play.clone()),
+                                move || store::play_next(t_next.clone()),
+                            )
+                        }))
+                        .into_element()
+                };
+
+                rendered.push(
+                    view()
+                        .gap_3()
+                        .child(explore_section_header(
+                            section.title,
+                            sec_key,
+                            tracks.len(),
+                            page_size,
+                            desktop,
+                        ))
+                        .child(body)
+                        .into_element(),
+                );
+            } else if !collections.is_empty() {
+                let page_size = 8;
+                let page = store::section_page(&sec_key);
+                let slice = paginated_slice(&collections, page, page_size);
+                rendered.push(
+                    view()
+                        .gap_3()
+                        .child(explore_section_header(
+                            section.title,
+                            sec_key,
+                            collections.len(),
+                            page_size,
+                            desktop,
+                        ))
+                        .child(scroll().horizontal().w_full().child(
+                            view().flex_row().items_start().gap_4().py_1().children(
+                                slice.into_iter().map(|(id, title, sub, art)| {
+                                    let mono = title
+                                        .chars()
+                                        .find(|c| c.is_alphanumeric())
+                                        .map(|c| c.to_uppercase().to_string())
+                                        .unwrap_or_else(|| "♫".into());
+                                    let id_c = id.clone();
+                                    let title_c = title.clone();
+                                    let sub_c = sub.clone();
+                                    let art_c = art.clone();
+                                    media_square_card(
+                                        art,
+                                        mono,
+                                        title,
+                                        sub,
+                                        168.0,
+                                        false,
+                                        move || {
+                                            open_explore_collection(
+                                                id_c.clone(),
+                                                title_c.clone(),
+                                                sub_c.clone(),
+                                                art_c.clone(),
+                                            );
+                                        },
+                                        None,
+                                    )
+                                }),
+                            ),
+                        ))
+                        .into_element(),
+                );
+            }
+        }
+
+        view().gap_6().children(rendered).into_element()
+    }))
 }
 
 fn moods_and_genres_section(desktop: bool) -> impl IntoElement {
@@ -411,7 +439,7 @@ fn moods_and_genres_section(desktop: bool) -> impl IntoElement {
         let cards: Vec<(String, Option<String>)> = if !live_moods.is_empty() {
             live_moods
         } else {
-            MOODS_AND_GENRES
+            FALLBACK_MOODS_AND_GENRES
                 .iter()
                 .map(|g| ((*g).to_owned(), None))
                 .collect()
@@ -441,6 +469,7 @@ fn moods_and_genres_section(desktop: bool) -> impl IntoElement {
                                 let genre_label = genre.clone();
                                 let genre_click = genre.clone();
                                 let params_click = params.clone();
+                                let is_selected = active_mood.as_deref() == Some(genre.as_str());
                                 cells.push(
                                     button()
                                         .accessibility_label(genre_label.clone())
@@ -455,7 +484,13 @@ fn moods_and_genres_section(desktop: bool) -> impl IntoElement {
                                         .rounded(radius_card)
                                         .bg(move || genre_card_tint(idx))
                                         .border_1()
-                                        .border_color(glass_hairline)
+                                        .border_color(move || {
+                                            if is_selected {
+                                                theme().primary
+                                            } else {
+                                                glass_hairline()
+                                            }
+                                        })
                                         .hover(|s| s.opacity(0.9))
                                         .active(|s| s.opacity(0.76))
                                         .focus_visible(|s| {
@@ -465,7 +500,7 @@ fn moods_and_genres_section(desktop: bool) -> impl IntoElement {
                                             if let Some(ref p) = params_click {
                                                 store::load_mood_playlists(&genre_click, p);
                                             } else {
-                                                store::select_mood(&genre_click);
+                                                store::select_home_mood(&genre_click, None);
                                             }
                                         })
                                         .child(view().w(px(6.0)).h_full().bg(move || stripe_color))
@@ -497,10 +532,18 @@ fn moods_and_genres_section(desktop: bool) -> impl IntoElement {
                     .gap_2()
                     .pt_2()
                     .child(
-                        text(heading)
-                            .text_base()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(move || theme().foreground),
+                        view()
+                            .flex_row()
+                            .items_center()
+                            .justify_between()
+                            .gap_2()
+                            .child(
+                                text(heading)
+                                    .text_base()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(move || theme().foreground),
+                            )
+                            .child(secondary_button("Clear", store::clear_mood_playlists)),
                     )
                     .child(scroll().horizontal().w_full().child(
                         view().flex_row().items_start().gap_4().py_1().children(
@@ -523,7 +566,7 @@ fn moods_and_genres_section(desktop: bool) -> impl IntoElement {
                                     168.0,
                                     false,
                                     move || {
-                                        store::open_collection(
+                                        open_explore_collection(
                                             id.clone(),
                                             title.clone(),
                                             sub.clone(),
@@ -560,40 +603,118 @@ pub fn explore_screen() -> impl IntoElement {
                 .p_4()
                 .when(desktop, |v| v.px_8().py_6())
                 .gap_6()
+                // Header + YouTube Music 3 iconic category tiles
                 .child(
                     view()
                         .gap_3()
                         .child(
-                            text("Explore")
-                                .when(desktop, |t| t.text_3xl())
-                                .when(!desktop, |t| t.text_2xl())
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(move || theme().foreground),
+                            view()
+                                .flex_row()
+                                .items_center()
+                                .justify_between()
+                                .child(
+                                    text("Explore")
+                                        .when(desktop, |t| t.text_3xl())
+                                        .when(!desktop, |t| t.text_2xl())
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(move || theme().foreground),
+                                )
+                                .child(svg_icon_button(
+                                    IconKind::Refresh,
+                                    16.0,
+                                    if desktop { 36.0 } else { MOBILE_MIN_TOUCH_TARGET },
+                                    "Refresh Explore",
+                                    desktop,
+                                    move || theme().muted_foreground,
+                                    store::refresh_explore,
+                                )),
                         )
-                        .child(scroll().horizontal().w_full().child(
-                            view().flex_row().items_center().gap_2().py_1().children(
-                                QUICK_CATEGORIES.into_iter().map(move |cat| {
-                                    mood_chip(
-                                        cat,
-                                        move || selected_cat.get() == Some(cat),
-                                        move || {
+                        .child(
+                            view()
+                                .flex_row()
+                                .flex_wrap()
+                                .gap_3()
+                                .children(QUICK_CATEGORIES.into_iter().map(move |(cat, ic)| {
+                                    let is_active = active_cat == Some(cat);
+                                    button()
+                                        .accessibility_label(cat)
+                                        .flex_1()
+                                        .min_w(px(140.0))
+                                        .min_h(px(54.0))
+                                        .px_4()
+                                        .py_3()
+                                        .flex_row()
+                                        .items_center()
+                                        .gap_3()
+                                        .rounded(radius_card)
+                                        .bg(move || {
+                                            if is_active {
+                                                theme().primary
+                                            } else {
+                                                pill_glass_surface()
+                                            }
+                                        })
+                                        .border_1()
+                                        .border_color(glass_hairline)
+                                        .hover(|s| s.bg(pill_glass_hover))
+                                        .active(|s| s.opacity(0.8))
+                                        .on_press(move || {
                                             if selected_cat.get_untracked() == Some(cat) {
                                                 selected_cat.set(None);
                                             } else {
                                                 selected_cat.set(Some(cat));
                                             }
-                                        },
-                                    )
-                                }),
-                            ),
-                        )),
+                                        })
+                                        .child(icon(ic, 20.0, move || {
+                                            if is_active {
+                                                theme().primary_foreground
+                                            } else {
+                                                theme().foreground
+                                            }
+                                        }))
+                                        .child(
+                                            text(cat)
+                                                .flex_1()
+                                                .number_of_lines(1)
+                                                .text_sm()
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_color(move || {
+                                                    if is_active {
+                                                        theme().primary_foreground
+                                                    } else {
+                                                        theme().foreground
+                                                    }
+                                                }),
+                                        )
+                                })),
+                        ),
                 )
+                // Loading skeletons
+                .child(when(store::explore_loading, || {
+                    view()
+                        .gap_2()
+                        .child(skeleton_row())
+                        .child(skeleton_row())
+                        .child(skeleton_row())
+                }))
+                // Error card
+                .child(when(
+                    || store::explore_error().is_some(),
+                    || {
+                        status_card(
+                            "Unable to load Explore",
+                            move || SharedString::from(store::explore_error().unwrap_or_default()),
+                            Some("Retry"),
+                            Some(Box::new(store::refresh_explore)),
+                        )
+                    },
+                ))
                 .when(
                     active_cat.is_none() || active_cat == Some("New releases"),
                     |v| v.child(new_releases_section(current_id_memo, desktop)),
                 )
                 .when(active_cat.is_none() || active_cat == Some("Charts"), |v| {
-                    v.child(charts_section(desktop))
+                    v.child(charts_section(current_id_memo, desktop))
                 })
                 .when(
                     active_cat.is_none() || active_cat == Some("Moods & genres"),

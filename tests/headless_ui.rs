@@ -120,7 +120,7 @@ fn mobile_dark_fixture_journey_covers_now_playing_lyrics_queue_search_and_librar
 fn desktop_wide_layout_and_mobile_light_theme_render_cleanly() -> Result<(), String> {
     let mut desktop = start_desktop();
     desktop.wait_for("Raag")?;
-    desktop.wait_for("YouTube Music")?;
+    desktop.wait_for("Music")?;
     desktop.press("id:nav-now-playing")?;
     desktop.wait_for("Now Playing")?;
 

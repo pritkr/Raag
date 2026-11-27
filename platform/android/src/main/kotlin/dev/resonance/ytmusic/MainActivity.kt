@@ -90,7 +90,7 @@ class MainActivity : Activity() {
                 setPadding(48, 64, 48, 64)
             }
             val title = TextView(this).apply {
-                text = "Resonance"
+                text = "Raag"
                 textSize = 26f
                 setTextColor(Color.parseColor("#F4F5F7"))
                 gravity = Gravity.CENTER

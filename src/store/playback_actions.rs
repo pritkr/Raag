@@ -42,14 +42,74 @@ pub fn current_lyrics() -> Option<LyricsDocument> {
     playback_signal().with(|p| p.lyrics.clone())
 }
 
+pub fn related_tracks() -> Vec<Track> {
+    playback_signal().with(|p| p.related_tracks.clone())
+}
+
+pub fn set_related_tracks(video_id: String, tracks: Vec<Track>) {
+    playback_signal().update(|p| {
+        if p.player
+            .current_track
+            .as_ref()
+            .is_some_and(|t| t.id == video_id)
+            || p.related_seed_id.as_deref() == Some(video_id.as_str())
+        {
+            p.related_seed_id = Some(video_id);
+            p.related_tracks = tracks;
+        }
+    });
+}
+
 pub fn play_track(track: Track) {
     let live = !is_fixture_mode();
     let track_for_live = track.clone();
     let url = proxy_stream_url(&track.id);
-    playback_signal().update(|p| p.play_track(track.clone(), live, url));
+    playback_signal().update(|p| {
+        p.play_track(track.clone(), live, url);
+        p.related_seed_id = Some(track.id.clone());
+        if !live {
+            p.related_tracks = resonance_core::fixture::fixture_tracks()
+                .into_iter()
+                .filter(|t| t.id != track.id)
+                .collect();
+        }
+    });
     library_signal().update(|l| l.record_play(track));
     if live {
         live_engine::dispatch(EngineCommand::PlayTrack(track_for_live));
+    }
+}
+
+/// Atomically replaces the active queue with `tracks` and begins playback at `start_index`.
+pub fn play_queue(tracks: Vec<Track>, start_index: usize) {
+    if tracks.is_empty() {
+        return;
+    }
+    let live = !is_fixture_mode();
+    let clamped = start_index.min(tracks.len().saturating_sub(1));
+    let tracks_for_live = tracks.clone();
+    let mut started = None;
+    playback_signal().update(|p| {
+        started = p.play_queue(tracks, clamped, live, proxy_stream_url);
+        if let Some(ref active) = started {
+            p.related_seed_id = Some(active.id.clone());
+            if !live {
+                p.related_tracks = resonance_core::fixture::fixture_tracks()
+                    .into_iter()
+                    .filter(|t| t.id != active.id)
+                    .collect();
+            }
+        }
+    });
+    if let Some(ref t) = started {
+        library_signal().update(|l| l.record_play(t.clone()));
+    }
+    if live && started.is_some() {
+        live_engine::dispatch(EngineCommand::PlayQueue {
+            tracks: tracks_for_live,
+            start_index: clamped,
+            shuffle: false,
+        });
     }
 }
 
@@ -177,6 +237,23 @@ pub fn remove_queue_item(index: usize) {
     if !is_fixture_mode() {
         live_engine::dispatch(EngineCommand::RemoveQueueItem(index));
     }
+}
+
+pub fn clear_up_next() {
+    let mut removed = 0usize;
+    playback_signal().update(|p| {
+        removed = p.clear_up_next();
+    });
+    if !is_fixture_mode() {
+        live_engine::dispatch(EngineCommand::ClearUpNext);
+    }
+    ui_signal().update(|u| {
+        u.set_status_banner(if removed == 0 {
+            "Up Next is already empty".to_owned()
+        } else {
+            format!("Cleared {removed} upcoming track(s)")
+        });
+    });
 }
 
 pub fn clear_queue() {

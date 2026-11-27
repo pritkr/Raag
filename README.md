@@ -1,19 +1,19 @@
-# Resonance (`Raag`)
+# Raag
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Rust Edition](https://img.shields.io/badge/Rust-2024-orange.svg)](Cargo.toml)
 [![NSH](https://img.shields.io/badge/NSH-0.7.0-informational.svg)](https://nsh.dev)
 
-**Resonance** is a Pure Rust YouTube Music client built on [Native Shell (`nsh.dev`)](https://nsh.dev), targeting **Desktop** (macOS, Linux, Windows) and **Android** (API 26+, `arm64-v8a`).
+**Raag** is a Pure Rust YouTube Music client built on [Native Shell (`nsh.dev`)](https://nsh.dev), targeting **Desktop** (macOS, Linux, Windows) and **Android** (API 26+, `arm64-v8a`).
 
 ## Features
 
 - **Pure Rust UI & Reactivity:** Built with `nsh-core` / `nsh-base` (`=0.7.0`), adaptive Desktop sidebar & Mobile bottom-navigation layouts, Light/Dark semantic theming ([`theme.json`](theme.json)), and `>= 48dp` touch targets.
-- **In-Process Loopback HTTP Proxy (`127.0.0.1`):** Streams audio through a local Rust proxy with a 256 KB atomic chunk cache, SQLite WAL metadata cache, artwork LRU cache, monotonic request cancellation, and transparent mid-stream HTTP `403` URL re-resolution.
+- **In-Process Loopback HTTP Proxy (`127.0.0.1`):** Incrementally streams audio through a local Rust proxy with a 256 KB atomic chunk cache, SQLite WAL metadata cache, artwork LRU cache, monotonic request cancellation, zero-network local/offline playback, and transparent mid-stream HTTP `403` URL re-resolution.
 - **Native QuickJS-NG EJS Solver:** Uses `rquickjs` (`0.12.0`) on a dedicated worker thread with a 10s interrupt watchdog, SHA-256 verified hot-updatable `yt-dlp-ejs` manifests ([`assets/ejs/solver_manifest.json`](assets/ejs/solver_manifest.json)), and per-player `n`-parameter memoization.
-- **Data-Driven InnerTube Client Matrix:** Configured via [`config/client_matrix.json`](config/client_matrix.json) with explicit `AuthMode` isolation (`ANDROID_VR` never receives browser cookies), `PoTokenPolicy`, decoder-driven format selection (Android Opus-first, Desktop AAC-first, iOS AAC-only), and a standalone `client_probe` binary.
-- **Rich Playback Experience:** 50% next-track pre-resolution, synced karaoke lyrics cascade (YouTube Music → LRCLIB → Better Lyrics), SponsorBlock `music_offtopic` auto-skip, and deterministic `--fixture` QA mode.
-- **Platform Bridges:** Native `nsh/audio` (`platform/nsh_audio.rs`), optional Desktop MPRIS/SMTC media keys (`desktop-mpris`), and thin Android Kotlin shims for Media3 `PlaybackForegroundService`, `AndroidKeyStore` AES-256-GCM, and `; wv`-stripped WebView sign-in.
+- **Data-Driven InnerTube Client Matrix & Hybrid Providers:** Configured via [`config/client_matrix.json`](config/client_matrix.json) with explicit `AuthMode` isolation (`ANDROID_VR` never receives browser cookies), `PoTokenPolicy`, default `ytmapi-rs` + `rustypipe` failover, decoder-driven format selection, and a standalone `client_probe` binary.
+- **Rich Playback & Social Experience:** 50% next-track pre-resolution, synced karaoke lyrics cascade (YouTube Music → LRCLIB → Better Lyrics), SponsorBlock auto-skip, Album & Artist entity pages, Local Media folder scanning, Listen Together rooms, LAN Casting, signed auto-updater, and deterministic `--fixture` QA mode.
+- **Platform Bridges:** Native `nsh/audio` (`platform/nsh_audio.rs`), optional Desktop MPRIS/SMTC media keys (`desktop-mpris`), and thin Android Kotlin shims for Media3 `PlaybackForegroundService` (with DSP audio processor & Android Auto browse tree), `AndroidKeyStore` AES-256-GCM, SAF folder picking, and `; wv`-stripped WebView sign-in.
 
 ## Architecture
 

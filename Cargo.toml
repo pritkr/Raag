@@ -70,7 +70,7 @@ name = "resonance"
 crate-type = ["rlib", "cdylib"]
 
 [features]
-default = []
+default = ["provider-ytmapi", "provider-rustypipe", "lan-casting"]
 desktop-keyring = ["dep:keyring"]
 desktop-mpris = ["dep:souvlaki"]
 desktop-native = ["desktop-mpris", "desktop-keyring"]

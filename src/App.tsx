@@ -381,18 +381,34 @@ export default function App() {
           <svg
             viewBox="0 0 48 48"
             className="w-7 h-7 shrink-0"
-            aria-label="YouTube Music Icon"
+            aria-label="Raag Logo"
           >
-            <circle cx="24" cy="24" r="22" fill="#FF0033" />
-            <circle
-              cx="24"
-              cy="24"
-              r="13.5"
+            <defs>
+              <linearGradient id="raag-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stopColor="#E12D39" />
+                <stop offset="100%" stopColor="#FF5A36" />
+              </linearGradient>
+            </defs>
+            <rect x="2" y="2" width="44" height="44" rx="13" fill="url(#raag-grad)" />
+            <path
+              d="M13 30c0-6.1 4.9-11 11-11s11 4.9 11 11"
               fill="none"
               stroke="#FFFFFF"
-              strokeWidth="2.2"
+              strokeWidth="2.6"
+              strokeLinecap="round"
+              opacity="0.45"
             />
-            <polygon points="20,17 32,24 20,31" fill="#FFFFFF" />
+            <path
+              d="M18 30c0-3.3 2.7-6 6-6s6 2.7 6 6"
+              fill="none"
+              stroke="#FFFFFF"
+              strokeWidth="2.8"
+              strokeLinecap="round"
+              opacity="0.8"
+            />
+            <rect x="22" y="13" width="4" height="19" rx="2" fill="#FFFFFF" />
+            <rect x="15" y="19" width="3.5" height="13" rx="1.75" fill="#FFFFFF" opacity="0.9" />
+            <rect x="29.5" y="17" width="3.5" height="15" rx="1.75" fill="#FFFFFF" opacity="0.9" />
           </svg>
           <div>
             <div className="text-sm font-semibold leading-tight">
@@ -466,8 +482,8 @@ export default function App() {
 
           {tree?.apkAvailable && (
             <a
-              href="/resonance-arm64-debug.apk"
-              download="resonance-arm64-debug.apk"
+              href="/raag-arm64-debug.apk"
+              download="raag-arm64-debug.apk"
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#d92638] hover:bg-[#e13244] text-white text-xs font-semibold transition"
             >
               <Download className="w-3.5 h-3.5" />

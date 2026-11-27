@@ -1,19 +1,21 @@
 //! Background engine bootstrap, service wiring, and event/telemetry pumps.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use async_trait::async_trait;
 use crossbeam_channel::{Sender, unbounded};
 use resonance_contract::{
-    AppEvent, AudioBackend, AudioTelemetry, AuthSession, CacheStore, EventBus, MediaCommand,
-    SettingsV1,
+    AppEvent, AudioBackend, AudioDspCapability, AudioTelemetry, AuthSession, CacheStore,
+    CoreResult, DownloadStatus, EventBus, MediaCommand, SettingsV1, UpdateChannel,
 };
 use resonance_core::cache::{
     ArtworkCache, ChunkCache, DEFAULT_ARTWORK_DISK_CAP, DEFAULT_MAX_AUDIO_CACHE_BYTES,
     SqliteCacheStore, load_cached_library_snapshot, load_persisted_settings,
     save_persisted_settings,
 };
+use resonance_core::casting::{CastManager, CastPlaybackDelegate};
 use resonance_core::innertube::auth::redact_secrets;
 use resonance_core::innertube::{InnerTubeClient, MutationWorker, RemoteConfigSyncService};
 use resonance_core::local_media::LocalMediaStore;
@@ -25,6 +27,7 @@ use resonance_core::providers::{AtrReporter, HybridMusicProvider};
 use resonance_core::proxy::LoopbackProxy;
 use resonance_core::sponsorblock::HttpSponsorBlockProvider;
 use resonance_core::storage::{bootstrap_st1_services, resolve_app_paths};
+use resonance_core::updater::UpdaterService;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
@@ -32,6 +35,20 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use super::EngineCommand;
 use super::{AppEngine, LiveUpdate};
 use crate::platform::{create_platform_auth_store, platform_auth_status};
+
+struct PlaybackCastDelegate(Arc<PlaybackController>);
+
+#[async_trait]
+impl CastPlaybackDelegate for PlaybackCastDelegate {
+    async fn pause_local(&self) -> CoreResult<()> {
+        self.0.pause().await
+    }
+
+    async fn resume_local_at(&self, position_ms: u64) -> CoreResult<()> {
+        let _ = self.0.seek_ms(position_ms).await;
+        self.0.resume().await
+    }
+}
 
 impl AppEngine {
     /// Boots the production background engine on a dedicated Tokio runtime.
@@ -75,6 +92,7 @@ impl AppEngine {
             InnerTubeClient::new(cache.clone(), auth, st1.solver.clone())
                 .map_err(|e| format!("InnerTubeClient init failed: {e}"))?,
         );
+        inner_client.set_player_fetcher(st1.player_fetcher.clone());
         if let Ok(matrix) = st1.remote_config.load_cached_matrix_sync() {
             inner_client.update_client_matrix(matrix);
         }
@@ -102,8 +120,9 @@ impl AppEngine {
             .map(Arc::new)
             .map_err(|e| format!("LoopbackProxy start failed: {e}"))
         })?;
-        if let Ok(local_store) = LocalMediaStore::open(&dir) {
-            proxy.set_local_media_store(Arc::new(local_store));
+        let local_media = LocalMediaStore::open(&dir).ok().map(Arc::new);
+        if let Some(ref local_store) = local_media {
+            proxy.set_local_media_store(local_store.clone());
         }
 
         #[cfg(target_os = "android")]
@@ -134,7 +153,7 @@ impl AppEngine {
                 inner_client,
                 cache.clone(),
                 chunks.clone(),
-                artwork,
+                artwork.clone(),
                 lyrics.clone(),
                 bus.clone(),
             )
@@ -143,18 +162,31 @@ impl AppEngine {
         let vault = Arc::new(OfflineVault::new(cache.clone(), download_manager));
         let _ = rt.block_on(vault.startup_recovery());
 
-        let controller = Arc::new(
-            PlaybackController::new(
-                provider.clone(),
-                audio,
-                cache.clone(),
-                proxy.clone(),
-                lyrics,
-                sponsorblock,
-                bus.clone(),
-            )
-            .with_offline_store(cache.clone()),
-        );
+        let mut controller_builder = PlaybackController::new(
+            provider.clone(),
+            audio,
+            cache.clone(),
+            proxy.clone(),
+            lyrics,
+            sponsorblock,
+            bus.clone(),
+        )
+        .with_offline_store(cache.clone());
+        if let Some(ref local_store) = local_media {
+            controller_builder = controller_builder.with_local_media(local_store.clone());
+        }
+        let controller = Arc::new(controller_builder);
+
+        let updater = Arc::new(UpdaterService::new(
+            paths.cache_dir.clone(),
+            env!("CARGO_PKG_VERSION"),
+        ));
+        let cast_manager = Arc::new(CastManager::new(
+            proxy.addr(),
+            Arc::new(PlaybackCastDelegate(controller.clone())),
+        ));
+        let cast_discovery = Arc::new(Mutex::new(None));
+        let room_tx = Arc::new(Mutex::new(None));
 
         let (tx, rx) = unbounded();
 
@@ -195,11 +227,17 @@ impl AppEngine {
         let auth_status = platform_auth_status(current_session.as_ref());
         let proxy_base = format!("http://{}", proxy.addr());
         crate::store::set_proxy_base_url(&proxy_base);
+        #[cfg(target_os = "android")]
+        let dsp_capability = AudioDspCapability::AndroidAudioProcessorJni;
+        #[cfg(not(target_os = "android"))]
+        let dsp_capability = AudioDspCapability::ExternalUrlStreamOnly;
+
         let _ = tx.send(LiveUpdate::Ready {
-            proxy_base_url: proxy_base,
-            snapshot: initial_snap,
+            proxy_base_url: proxy_base.clone(),
+            snapshot: initial_snap.clone(),
             cache_stats: stats,
             signed_in,
+            dsp_capability,
         });
         let _ = tx.send(LiveUpdate::SettingsLoaded(persisted_settings.clone()));
         let _ = tx.send(LiveUpdate::AuthStatus(auth_status));
@@ -207,12 +245,34 @@ impl AppEngine {
         let _ = tx.send(LiveUpdate::PoTokenDiagnostics(
             provider.po_token_diagnostics(),
         ));
+        crate::platform::android::update_android_auto_tab(
+            "tab_downloads",
+            initial_downloads
+                .iter()
+                .filter(|r| r.status == DownloadStatus::Completed)
+                .map(|r| r.track.clone())
+                .collect(),
+        );
+        crate::platform::android::update_android_auto_tab(
+            "tab_queue",
+            initial_snap.queue.tracks.clone(),
+        );
         let _ = tx.send(LiveUpdate::DownloadsLoaded(initial_downloads));
         let initial_pinned = vault.list_pinned_collections().unwrap_or_default();
         let _ = tx.send(LiveUpdate::PinnedCollectionsLoaded(initial_pinned));
 
+        if let Some(ref local_store) = local_media {
+            let roots = local_store.list_roots().unwrap_or_default();
+            let tracks = local_store.list_tracks().unwrap_or_default();
+            let _ = tx.send(LiveUpdate::LocalMediaLoaded { roots, tracks });
+        }
+
         // Synchronous local library hydration (< 10ms) before touching the network.
         if let Some(cached_lib) = load_cached_library_snapshot(cache.as_ref()) {
+            crate::platform::android::update_android_auto_tab(
+                "tab_library",
+                cached_lib.liked_tracks.clone(),
+            );
             let _ = tx.send(LiveUpdate::LibraryLoaded(cached_lib));
         }
 
@@ -224,6 +284,19 @@ impl AppEngine {
                 &tx,
                 current_session,
             );
+            // Delayed background update check (5s after boot) so startup stays instant.
+            let updater_for_boot = updater.clone();
+            let tx_for_upd = tx.clone();
+            let channel = if persisted_settings.update_channel.eq_ignore_ascii_case("beta") {
+                UpdateChannel::Beta
+            } else {
+                UpdateChannel::Stable
+            };
+            rt.spawn(async move {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                let phase = updater_for_boot.check_for_updates(channel, None).await;
+                let _ = tx_for_upd.send(LiveUpdate::UpdaterPhaseUpdated(phase));
+            });
         }
 
         let settings_tx = spawn_settings_persister(&rt, cache.clone());
@@ -231,18 +304,26 @@ impl AppEngine {
         Ok(Self {
             rt,
             provider,
-            _player_fetcher: st1.player_fetcher,
+            player_fetcher: st1.player_fetcher,
             remote_config: st1.remote_config,
             cache,
             chunks,
+            artwork,
+            local_media,
+            proxy_base_url: proxy_base,
             vault,
             controller,
+            updater,
+            cast_manager,
+            cast_discovery,
+            room_tx,
             #[cfg(target_os = "android")]
             android_bridge,
             mutations,
             bus,
             auth_generation,
             explicit_sign_out_pending,
+            tv_oauth_cancel: Arc::new(Mutex::new(None)),
             atr_enabled,
             settings_tx,
             tx,
@@ -354,7 +435,7 @@ fn spawn_online_bootstrap(
     tx: &Sender<LiveUpdate>,
     current_session: Option<AuthSession>,
 ) {
-    // Background Remote Config sync.
+    // Background Remote Config sync + EJS player script pre-warm.
     let rc_for_sync = remote_config.clone();
     let provider_for_rc = provider.clone();
     let tx_for_rc = tx.clone();
@@ -363,6 +444,12 @@ fn spawn_online_bootstrap(
             provider_for_rc.update_client_matrix(matrix);
         }
         let _ = rc_for_sync.sync_solver_manifest(false).await;
+        if let Err(err) = provider_for_rc.warm_player_solver().await {
+            log::debug!(
+                "background EJS player script warm skipped: {}",
+                redact_secrets(&err.to_string())
+            );
+        }
         let _ = tx_for_rc.send(LiveUpdate::RemoteConfigUpdated(rc_for_sync.status()));
     });
 

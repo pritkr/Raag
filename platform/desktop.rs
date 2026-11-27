@@ -434,8 +434,8 @@ impl SystemMediaControlsBridge {
         let pos_ref = self.position_ms.clone();
         let dur_ref = self.duration_ms.clone();
         let config = PlatformConfig {
-            dbus_name: "resonance",
-            display_name: "Resonance",
+            dbus_name: "raag",
+            display_name: "Raag",
             hwnd: raw_hwnd,
         };
         match MediaControls::new(config) {

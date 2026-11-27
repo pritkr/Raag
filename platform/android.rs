@@ -1204,3 +1204,416 @@ pub extern "system" fn Java_dev_resonance_ytmusic_ResonanceNativeBridge_nativeOn
 ) {
     handle_inbound_auth_cancelled();
 }
+
+/// Non-blocking in-memory snapshot served immediately to Android Auto Binder queries.
+#[derive(Debug, Clone, Default)]
+pub struct AndroidAutoBrowseCache {
+    pub downloads: Vec<resonance_contract::Track>,
+    pub home: Vec<resonance_contract::Track>,
+    pub library: Vec<resonance_contract::Track>,
+    pub queue: Vec<resonance_contract::Track>,
+}
+
+static ANDROID_AUTO_BROWSE_CACHE: std::sync::OnceLock<Mutex<AndroidAutoBrowseCache>> =
+    std::sync::OnceLock::new();
+
+fn auto_browse_cache() -> &'static Mutex<AndroidAutoBrowseCache> {
+    ANDROID_AUTO_BROWSE_CACHE.get_or_init(|| Mutex::new(AndroidAutoBrowseCache::default()))
+}
+
+pub fn update_android_auto_tab(tab_id: &str, tracks: Vec<resonance_contract::Track>) {
+    if let Ok(mut cache) = auto_browse_cache().lock() {
+        match tab_id {
+            "tab_downloads" => cache.downloads = tracks,
+            "tab_home" => cache.home = tracks,
+            "tab_library" => cache.library = tracks,
+            "tab_queue" => cache.queue = tracks,
+            _ => {}
+        }
+    }
+}
+
+pub fn serialize_android_auto_children_json(parent_id: &str) -> String {
+    let tracks = auto_browse_cache()
+        .lock()
+        .ok()
+        .map(|c| match parent_id {
+            "tab_downloads" => c.downloads.clone(),
+            "tab_home" => c.home.clone(),
+            "tab_library" => c.library.clone(),
+            "tab_queue" => c.queue.clone(),
+            _ => Vec::new(),
+        })
+        .unwrap_or_default();
+
+    let items: Vec<serde_json::Value> = tracks
+        .into_iter()
+        .take(100)
+        .map(|t| {
+            serde_json::json!({
+                "id": t.id,
+                "title": t.title,
+                "artist": t.artist_display(),
+                "album": t.album.as_ref().map(|a| a.title.as_str()).unwrap_or(""),
+                "artwork_url": t.artwork_url.unwrap_or_default(),
+            })
+        })
+        .collect();
+    serde_json::to_string(&items).unwrap_or_else(|_| "[]".to_owned())
+}
+
+static LAST_ANDROID_DSP_CONFIG: std::sync::OnceLock<Mutex<resonance_core::audio_dsp::DspConfig>> =
+    std::sync::OnceLock::new();
+
+fn last_android_dsp_config() -> &'static Mutex<resonance_core::audio_dsp::DspConfig> {
+    LAST_ANDROID_DSP_CONFIG
+        .get_or_init(|| Mutex::new(resonance_core::audio_dsp::DspConfig::default()))
+}
+
+/// Thread-safe handle owned by Android's `ResonanceDspAudioProcessor` across JNI calls.
+///
+/// Reuses a single `f32` scratch buffer so real-time audio callbacks perform zero heap
+/// allocations after warmup.
+pub struct AndroidDspHandle {
+    pipeline: Mutex<resonance_core::audio_dsp::DspPipeline>,
+    scratch: Mutex<Vec<f32>>,
+}
+
+impl AndroidDspHandle {
+    pub fn new(sample_rate: u32, channel_count: usize) -> Self {
+        let cfg = last_android_dsp_config()
+            .lock()
+            .map(|c| c.clone())
+            .unwrap_or_default();
+        Self {
+            pipeline: Mutex::new(resonance_core::audio_dsp::DspPipeline::new(
+                sample_rate.max(8_000),
+                channel_count.clamp(1, 8),
+                &cfg,
+            )),
+            scratch: Mutex::new(Vec::with_capacity(4096)),
+        }
+    }
+
+    pub fn update_config(
+        &self,
+        loudness_enabled: bool,
+        silence_skip_enabled: bool,
+        eq_gains_db: [f32; 10],
+        track_loudness_db: Option<f32>,
+    ) {
+        let has_eq = eq_gains_db.iter().any(|g| g.abs() >= 0.01);
+        let cfg = resonance_core::audio_dsp::DspConfig {
+            loudness_normalization: loudness_enabled,
+            eq_preset: if has_eq {
+                resonance_core::audio_dsp::EqPreset::Custom
+            } else {
+                resonance_core::audio_dsp::EqPreset::Flat
+            },
+            eq_gains_db,
+            silence_skip_enabled,
+            crossfade_ms: 0,
+        };
+        if let Ok(mut guard) = last_android_dsp_config().lock() {
+            *guard = cfg.clone();
+        }
+        if let Ok(mut pipeline) = self.pipeline.lock() {
+            pipeline.apply_config(&cfg);
+            if let Some(db) = track_loudness_db {
+                pipeline.set_track_loudness_db(Some(db));
+            }
+        }
+    }
+
+    /// Processes little-endian PCM-16 or PCM-F32 bytes from `input` into `output`.
+    /// Returns `true` to keep the processed audio block, or `false` if skipped as silence.
+    pub fn process_pcm_bytes(&self, input: &[u8], output: &mut [u8], is_float: bool) -> bool {
+        if input.is_empty() || output.len() < input.len() {
+            return true;
+        }
+        let Ok(mut pipeline) = self.pipeline.lock() else {
+            output[..input.len()].copy_from_slice(input);
+            return true;
+        };
+        let Ok(mut scratch) = self.scratch.lock() else {
+            output[..input.len()].copy_from_slice(input);
+            return true;
+        };
+
+        if is_float {
+            if input.len() % 4 != 0 {
+                output[..input.len()].copy_from_slice(input);
+                return true;
+            }
+            let samples = input.len() / 4;
+            scratch.clear();
+            scratch.reserve(samples.saturating_sub(scratch.capacity()));
+            for chunk in input.chunks_exact(4) {
+                scratch.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+            }
+            let keep = pipeline.process_interleaved(&mut scratch[..samples]);
+            if keep {
+                for (i, sample) in scratch.iter().copied().enumerate() {
+                    let bytes = sample.to_le_bytes();
+                    let off = i * 4;
+                    output[off..off + 4].copy_from_slice(&bytes);
+                }
+            }
+            keep
+        } else {
+            if input.len() % 2 != 0 {
+                output[..input.len()].copy_from_slice(input);
+                return true;
+            }
+            let samples = input.len() / 2;
+            scratch.clear();
+            scratch.reserve(samples.saturating_sub(scratch.capacity()));
+            for chunk in input.chunks_exact(2) {
+                let s = i16::from_le_bytes([chunk[0], chunk[1]]);
+                scratch.push(s as f32 / 32768.0);
+            }
+            let keep = pipeline.process_interleaved(&mut scratch[..samples]);
+            if keep {
+                for (i, sample) in scratch.iter().copied().enumerate() {
+                    let pcm = (sample.clamp(-1.0, 1.0) * 32767.0).round() as i16;
+                    let bytes = pcm.to_le_bytes();
+                    let off = i * 2;
+                    output[off..off + 2].copy_from_slice(&bytes);
+                }
+            }
+            keep
+        }
+    }
+}
+
+/// Pushes live `DspConfig` changes to Android's Media3 `ResonanceDspAudioProcessor`.
+pub fn update_android_dsp(cfg: &resonance_core::audio_dsp::DspConfig) {
+    if let Ok(mut guard) = last_android_dsp_config().lock() {
+        *guard = cfg.clone();
+    }
+    #[cfg(target_os = "android")]
+    {
+        if let Some(host) = ANDROID_JNI_HOST.get()
+            && let Ok(mut env) = host.vm.attach_current_thread()
+            && let Ok(gains_arr) = env.new_float_array(10)
+            && env
+                .set_float_array_region(&gains_arr, 0, &cfg.eq_gains_db)
+                .is_ok()
+        {
+            let class = <&jni::objects::JClass>::from(host.bridge_class.as_obj());
+            let _ = env.call_static_method(
+                class,
+                "audioUpdateDsp",
+                "(ZZ[FF)V",
+                &[
+                    jni::objects::JValue::Bool(u8::from(cfg.loudness_normalization)),
+                    jni::objects::JValue::Bool(u8::from(cfg.silence_skip_enabled)),
+                    jni::objects::JValue::Object(&gains_arr),
+                    jni::objects::JValue::Float(f32::NAN),
+                ],
+            );
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = cfg;
+    }
+}
+
+/// Copies UTF-8 text to the Android system clipboard via `ResonanceNativeBridge.copyToClipboard`.
+#[cfg(target_os = "android")]
+pub fn copy_to_android_clipboard(text: &str) -> Result<(), String> {
+    let host = ANDROID_JNI_HOST
+        .get()
+        .ok_or_else(|| "Android JNI host not initialized".to_owned())?;
+    let mut env = host
+        .vm
+        .attach_current_thread()
+        .map_err(|e| format!("JNI attach failed: {e}"))?;
+    let jtext = env
+        .new_string(text)
+        .map_err(|e| format!("JNI string alloc failed: {e}"))?;
+    let class = <&jni::objects::JClass>::from(host.bridge_class.as_obj());
+    let ok = env
+        .call_static_method(
+            class,
+            "copyToClipboard",
+            "(Ljava/lang/String;)Z",
+            &[jni::objects::JValue::Object(&jtext)],
+        )
+        .and_then(|v| v.z())
+        .map_err(|e| format!("Android clipboard error: {e}"))?;
+    if ok {
+        Ok(())
+    } else {
+        Err("Android clipboard unavailable".to_owned())
+    }
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_resonance_ytmusic_ResonanceDspAudioProcessor_nativeCreateDspHandle(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    sample_rate: jni::sys::jint,
+    channel_count: jni::sys::jint,
+) -> jni::sys::jlong {
+    let sr = sample_rate.max(8_000) as u32;
+    let ch = channel_count.clamp(1, 8) as usize;
+    Box::into_raw(Box::new(AndroidDspHandle::new(sr, ch))) as jni::sys::jlong
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_resonance_ytmusic_ResonanceDspAudioProcessor_nativeProcessPcm(
+    env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    handle: jni::sys::jlong,
+    input_buffer: jni::objects::JByteBuffer<'_>,
+    input_offset: jni::sys::jint,
+    byte_length: jni::sys::jint,
+    output_buffer: jni::objects::JByteBuffer<'_>,
+    is_float: jni::sys::jboolean,
+) -> jni::sys::jboolean {
+    if handle == 0 || input_offset < 0 || byte_length <= 0 {
+        return 1;
+    }
+    let Ok(in_ptr) = env.get_direct_buffer_address(&input_buffer) else {
+        return 1;
+    };
+    let Ok(in_cap) = env.get_direct_buffer_capacity(&input_buffer) else {
+        return 1;
+    };
+    let Ok(out_ptr) = env.get_direct_buffer_address(&output_buffer) else {
+        return 1;
+    };
+    let Ok(out_cap) = env.get_direct_buffer_capacity(&output_buffer) else {
+        return 1;
+    };
+
+    let off = input_offset as usize;
+    let len = byte_length as usize;
+    let Some(end) = off.checked_add(len) else {
+        return 1;
+    };
+    if in_ptr.is_null() || out_ptr.is_null() || end > in_cap || len > out_cap {
+        return 1;
+    }
+
+    // SAFETY: Pointers and capacities were verified against JNI direct buffer bounds above,
+    // and `handle` was created by `nativeCreateDspHandle` and remains valid until `nativeDestroyDspHandle`.
+    let dsp = unsafe { &*(handle as *const AndroidDspHandle) };
+    let in_slice = unsafe { std::slice::from_raw_parts(in_ptr.add(off), len) };
+    let out_slice = unsafe { std::slice::from_raw_parts_mut(out_ptr, len) };
+    u8::from(dsp.process_pcm_bytes(in_slice, out_slice, is_float != 0))
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_resonance_ytmusic_ResonanceDspAudioProcessor_nativeUpdateDspConfig(
+    env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    handle: jni::sys::jlong,
+    loudness_enabled: jni::sys::jboolean,
+    silence_skip_enabled: jni::sys::jboolean,
+    eq_gains_db: jni::objects::JFloatArray<'_>,
+    track_loudness_db: jni::sys::jfloat,
+) {
+    if handle == 0 {
+        return;
+    }
+    let mut gains = [0.0_f32; 10];
+    if let Ok(arr_len) = env.get_array_length(&eq_gains_db) {
+        let count = (arr_len.max(0) as usize).min(10);
+        if count > 0 {
+            let _ = env.get_float_array_region(&eq_gains_db, 0, &mut gains[..count]);
+        }
+    }
+    let track_db = if track_loudness_db.is_finite() {
+        Some(track_loudness_db)
+    } else {
+        None
+    };
+    // SAFETY: `handle` is owned by `ResonanceDspAudioProcessor` until `nativeDestroyDspHandle`.
+    let dsp = unsafe { &*(handle as *const AndroidDspHandle) };
+    dsp.update_config(
+        loudness_enabled != 0,
+        silence_skip_enabled != 0,
+        gains,
+        track_db,
+    );
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_resonance_ytmusic_ResonanceDspAudioProcessor_nativeDestroyDspHandle(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    handle: jni::sys::jlong,
+) {
+    if handle != 0 {
+        // SAFETY: Releases the `Box<AndroidDspHandle>` created in `nativeCreateDspHandle`.
+        unsafe {
+            drop(Box::from_raw(handle as *mut AndroidDspHandle));
+        }
+    }
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_resonance_ytmusic_ResonanceNativeBridge_nativeGetAutoBrowseChildren(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    parent_id: jni::objects::JString<'_>,
+) -> jni::sys::jstring {
+    let parent: String = env
+        .get_string(&parent_id)
+        .map(Into::into)
+        .unwrap_or_default();
+    let json = serialize_android_auto_children_json(&parent);
+    env.new_string(json)
+        .map(|s| s.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_resonance_ytmusic_ResonanceNativeBridge_nativeOnAutoPlayTrack(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    video_id: jni::objects::JString<'_>,
+) {
+    let Ok(vid) = env.get_string(&video_id) else {
+        return;
+    };
+    let vid_str: String = vid.into();
+    let found = auto_browse_cache().lock().ok().and_then(|c| {
+        c.downloads
+            .iter()
+            .chain(c.home.iter())
+            .chain(c.library.iter())
+            .chain(c.queue.iter())
+            .find(|t| t.id == vid_str)
+            .cloned()
+    });
+    if let Some(track) = found {
+        crate::live_engine::dispatch(crate::live_engine::EngineCommand::PlayTrack(track));
+    }
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_resonance_ytmusic_ResonanceNativeBridge_nativeOnLocalFolderPicked(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    tree_uri: jni::objects::JString<'_>,
+) {
+    if let Ok(uri) = env.get_string(&tree_uri) {
+        let uri_str: String = uri.into();
+        if !uri_str.trim().is_empty() {
+            crate::live_engine::dispatch(crate::live_engine::EngineCommand::AddLocalFolder(
+                PathBuf::from(uri_str),
+            ));
+        }
+    }
+}

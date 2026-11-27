@@ -56,6 +56,8 @@ pub struct AudioDriverSnapshot {
 pub struct PlaybackSlice {
     pub player: PlayerSnapshot,
     pub lyrics: Option<LyricsDocument>,
+    pub related_tracks: Vec<Track>,
+    pub related_seed_id: Option<String>,
     pub seek_generation: u64,
     pub nsh_audio_available: bool,
     pub shuffle_deck: ShuffleDeck,
@@ -86,6 +88,13 @@ impl PlaybackSlice {
         };
         let duration_ms = current_track.as_ref().map_or(0, |t| t.duration_ms);
 
+        let related_seed_id = current_track.as_ref().map(|t| t.id.clone());
+        let related_tracks = if fixture {
+            tracks.iter().skip(1).cloned().collect()
+        } else {
+            Vec::new()
+        };
+
         Self {
             player: PlayerSnapshot {
                 state: if current_track.is_some() {
@@ -112,6 +121,8 @@ impl PlaybackSlice {
                 offline_mode: false,
             },
             lyrics,
+            related_tracks,
+            related_seed_id,
             seek_generation: 0,
             nsh_audio_available: false,
             shuffle_deck: ShuffleDeck::default(),
@@ -172,6 +183,23 @@ impl PlaybackSlice {
         } else {
             Some(fixture_lyrics(&track.id))
         };
+    }
+
+    pub fn play_queue(
+        &mut self,
+        tracks: Vec<Track>,
+        start_index: usize,
+        live: bool,
+        proxy_url_for: impl Fn(&str) -> String,
+    ) -> Option<Track> {
+        if tracks.is_empty() {
+            return None;
+        }
+        let clamped = start_index.min(tracks.len().saturating_sub(1));
+        self.player.queue.items = tracks;
+        self.player.queue.shuffle = false;
+        self.shuffle_deck = ShuffleDeck::default();
+        self.activate_queue_index(clamped, live, proxy_url_for)
     }
 
     pub fn play_all_shuffled(
@@ -362,6 +390,18 @@ impl PlaybackSlice {
             }
             None => {}
         }
+    }
+
+    pub fn clear_up_next(&mut self) -> usize {
+        let removed = QueueManager::clear_up_next(&mut self.player.queue);
+        if self.player.queue.shuffle {
+            QueueManager::shuffle_deck_rebuild(
+                &mut self.shuffle_deck,
+                self.player.queue.items.len(),
+                self.player.queue.current_index,
+            );
+        }
+        removed
     }
 
     pub fn clear_queue(&mut self) {

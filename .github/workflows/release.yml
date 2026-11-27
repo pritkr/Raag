@@ -460,9 +460,32 @@ jobs:
           curl -fsSL https://nsh.dev/install.sh | sh -s -- --version "$NSH_VERSION" || true
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+      - name: Determine release tag (beta-latest vs tag)
+        id: reltag
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            PKG_VER=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "([^"]+)"/\1/')
+            TAG="v${PKG_VER:-0.1.0}"
+          fi
+          echo "tag_name=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          if [[ "$TAG" == *"-beta"* || "$TAG" == *"-rc"* || "$TAG" == *"-alpha"* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "beta_sync=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "beta_sync=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Generate signed NSH updater manifest
         env:
           NSH_UPDATER_PRIVATE_KEY: ${{ secrets.NSH_UPDATER_PRIVATE_KEY }}
+          RESONANCE_UPDATER_ED25519_PRIVKEY_HEX: ${{ secrets.RESONANCE_UPDATER_ED25519_PRIVKEY_HEX }}
+          RELEASE_VERSION: ${{ steps.reltag.outputs.version }}
+          RELEASE_TAG: ${{ steps.reltag.outputs.tag_name }}
+          RELEASE_CHANNEL: ${{ steps.reltag.outputs.prerelease == 'true' && 'beta' || 'stable' }}
         run: |
           mkdir -p artifacts/manifest
           if [ -n "$NSH_UPDATER_PRIVATE_KEY" ] && command -v nsh >/dev/null 2>&1; then
@@ -477,31 +500,20 @@ jobs:
               --notes CHANGELOG.md \
               --key "$KEY_FILE" \
               -o artifacts/manifest/ || true
+          elif [ -n "$RESONANCE_UPDATER_ED25519_PRIVKEY_HEX" ]; then
+            python3 -c 'import glob, hashlib, json, os, time; repo = os.environ.get("GITHUB_REPOSITORY", ""); tag = os.environ.get("RELEASE_TAG", "v0.1.0"); ver = os.environ.get("RELEASE_VERSION", "0.1.0"); ch = os.environ.get("RELEASE_CHANNEL", "stable"); mapping = [("macos-aarch64", "artifacts/macos-bundle/*.zip"), ("windows-x86_64", "artifacts/windows-installer/*.exe"), ("linux-x86_64", "artifacts/linux-bundle/*.tar.gz"), ("android-arm64-v8a", "artifacts/android-apk/*.apk")]; entries = [{"target": t, "url": f"https://github.com/{repo}/releases/download/{tag}/{os.path.basename(m[0])}", "sha256": hashlib.sha256(open(m[0], "rb").read()).hexdigest(), "size_bytes": os.path.getsize(m[0])} for t, pat in mapping for m in [sorted(glob.glob(pat))] if m]; print(json.dumps({"schema_version": 1, "version": ver, "channel": ch, "released_at_unix_secs": int(time.time()), "notes_markdown": f"Release {tag}", "artifacts": entries}, indent=2))' > artifacts/manifest/latest.json
+            cargo run --release --bin sign_config -- sign \
+              --key-hex "$RESONANCE_UPDATER_ED25519_PRIVKEY_HEX" \
+              --input artifacts/manifest/latest.json \
+              --output artifacts/manifest/latest.json.sig || true
           else
-            echo "NSH_UPDATER_PRIVATE_KEY or nsh CLI unavailable; skipping manifest signing"
+            echo "Updater signing secret unavailable; skipping manifest signing"
           fi
 
       - name: Cleanup ephemeral updater key
         if: always()
         run: |
           rm -f "$RUNNER_TEMP/update.secret"
-
-      - name: Determine release tag (beta-latest vs tag)
-        id: reltag
-        run: |
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            TAG="${GITHUB_REF_NAME}"
-          else
-            TAG="v0.1.0"
-          fi
-          echo "tag_name=${TAG}" >> "$GITHUB_OUTPUT"
-          if [[ "$TAG" == *"-beta"* || "$TAG" == *"-rc"* ]]; then
-            echo "prerelease=true" >> "$GITHUB_OUTPUT"
-            echo "beta_sync=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "prerelease=false" >> "$GITHUB_OUTPUT"
-            echo "beta_sync=false" >> "$GITHUB_OUTPUT"
-          fi
 
       - uses: softprops/action-gh-release@v2
         with:

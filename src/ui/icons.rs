@@ -1,4 +1,4 @@
-//! Crisp vector SVG icons & official YouTube Music brand mark for Raag.
+//! Crisp vector SVG icons & original Raag brand emblem.
 //!
 //! All icons render via `nsh_core::prelude::image(ImageSrc::svg_markup(...))` so they
 //! render sharply on macOS/Android native backends (`resvg`) and in `nsh_preview` web.
@@ -15,13 +15,19 @@ pub fn adaptive_to_css(c: AdaptiveColor) -> String {
     format!("#{r:02x}{g:02x}{b:02x}")
 }
 
-/// Official YouTube Music circular icon (outer #FF0033 disc, white inner ring, white play triangle).
-pub fn yt_music_icon(size_px: f32) -> impl IntoElement {
-    const MARKUP: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48"><circle cx="24" cy="24" r="22" fill="#FF0033"/><circle cx="24" cy="24" r="13.5" fill="none" stroke="#FFFFFF" stroke-width="2.2"/><polygon points="20,17 32,24 20,31" fill="#FFFFFF"/></svg>"##;
+/// Original Raag brand mark: crimson-to-ember rounded crest with concentric acoustic wave arcs
+/// and a stylized geometric harmonic bar emblem.
+pub fn raag_brand_icon(size_px: f32) -> impl IntoElement {
+    const MARKUP: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48"><defs><linearGradient id="rg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#E12D39"/><stop offset="100%" stop-color="#FF5A36"/></linearGradient></defs><rect x="2" y="2" width="44" height="44" rx="13" fill="url(#rg)"/><path d="M13 30c0-6.1 4.9-11 11-11s11 4.9 11 11" fill="none" stroke="#FFFFFF" stroke-width="2.6" stroke-linecap="round" opacity="0.45"/><path d="M18 30c0-3.3 2.7-6 6-6s6 2.7 6 6" fill="none" stroke="#FFFFFF" stroke-width="2.8" stroke-linecap="round" opacity="0.8"/><rect x="22" y="13" width="4" height="19" rx="2" fill="#FFFFFF"/><rect x="15" y="19" width="3.5" height="13" rx="1.75" fill="#FFFFFF" opacity="0.9"/><rect x="29.5" y="17" width="3.5" height="15" rx="1.75" fill="#FFFFFF" opacity="0.9"/></svg>"##;
     image(ImageSrc::svg_markup(MARKUP))
         .w(px(size_px))
         .h(px(size_px))
         .object_fit(ResizeMode::Contain)
+}
+
+/// Legacy alias delegating to the original [`raag_brand_icon`].
+pub fn yt_music_icon(size_px: f32) -> impl IntoElement {
+    raag_brand_icon(size_px)
 }
 
 /// Liked Music auto-playlist gradient square icon (matches YT Music's purple/pink Liked tile).

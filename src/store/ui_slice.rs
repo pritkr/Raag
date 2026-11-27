@@ -168,6 +168,15 @@ pub enum DesktopSidePanel {
     #[default]
     Queue,
     Lyrics,
+    Related,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NowPlayingTab {
+    #[default]
+    UpNext,
+    Lyrics,
+    Related,
 }
 
 #[derive(Clone)]
@@ -178,6 +187,7 @@ pub struct UiSlice {
     pub sidebar_collapsed: bool,
     pub desktop_side_panel_open: bool,
     pub desktop_side_panel: DesktopSidePanel,
+    pub now_playing_tab: NowPlayingTab,
     pub status_banner: Option<String>,
     pub active_track_sheet: Option<(Track, Option<String>)>,
     pub add_to_playlist_track: Option<Track>,
@@ -196,6 +206,7 @@ impl Default for UiSlice {
             sidebar_collapsed: false,
             desktop_side_panel_open: true,
             desktop_side_panel: DesktopSidePanel::Queue,
+            now_playing_tab: NowPlayingTab::UpNext,
             status_banner: None,
             active_track_sheet: None,
             add_to_playlist_track: None,

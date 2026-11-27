@@ -1,7 +1,7 @@
 {
   "bundle_name": "yt-dlp-ejs",
-  "bundle_version": "0.5.0-resonance",
-  "pinned_version": "0.5.0-resonance",
+  "bundle_version": "0.5.0-raag",
+  "pinned_version": "0.5.0-raag",
   "sha256_hex": "",
   "min_quickjs_ng_version": "0.12.0",
   "ast_parser": "meriyah",

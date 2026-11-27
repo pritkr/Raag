@@ -164,6 +164,10 @@ pub fn dsp_settings_card(props: DspCardProps) -> impl IntoElement {
             let on_crossfade = on_crossfade.clone();
             let eq_label = eq_label.clone();
             let crossfade_label = crossfade_label.clone();
+            let eq_gains = props.dsp_config.eq_gains_db;
+            const BAND_LABELS: [&str; 10] = [
+                "31Hz", "62Hz", "125Hz", "250Hz", "500Hz", "1kHz", "2kHz", "4kHz", "8kHz", "16kHz",
+            ];
 
             container
                 .child(setting_switch(
@@ -183,7 +187,87 @@ pub fn dsp_settings_card(props: DspCardProps) -> impl IntoElement {
                         .flex_wrap()
                         .gap_2()
                         .child(secondary_button(eq_label, move || on_eq()))
+                        .child(secondary_button("Reset EQ Flat", store::reset_eq_flat))
                         .child(secondary_button(crossfade_label, move || on_crossfade())),
+                )
+                .child(
+                    view()
+                        .test_id("audio-dsp-eq-bands")
+                        .flex_row()
+                        .flex_wrap()
+                        .gap_2()
+                        .children((0..10).map(move |idx| {
+                            let gain = eq_gains[idx];
+                            let lbl = BAND_LABELS[idx];
+                            let gain_txt = if gain >= 0.0 {
+                                format!("+{gain:.0}dB")
+                            } else {
+                                format!("{gain:.0}dB")
+                            };
+                            view()
+                                .min_w(px(76.0))
+                                .p_2()
+                                .gap_1()
+                                .items_center()
+                                .rounded(radius_card)
+                                .bg(pill_glass_surface)
+                                .border_1()
+                                .border_color(glass_hairline)
+                                .child(
+                                    text(lbl)
+                                        .text_xs()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(move || theme().muted_foreground),
+                                )
+                                .child(
+                                    text(gain_txt)
+                                        .text_xs()
+                                        .tabular_nums()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(move || theme().foreground),
+                                )
+                                .child(
+                                    view()
+                                        .flex_row()
+                                        .gap_1()
+                                        .child(
+                                            button()
+                                                .min_w(px(MOBILE_MIN_TOUCH_TARGET))
+                                                .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                                                .items_center()
+                                                .justify_center()
+                                                .rounded(move || theme().radius)
+                                                .bg(move || theme().card)
+                                                .on_press(move || {
+                                                    store::set_eq_band_gain(idx, gain - 1.5);
+                                                })
+                                                .child(
+                                                    text("-")
+                                                        .text_sm()
+                                                        .font_weight(FontWeight::BOLD)
+                                                        .text_color(move || theme().foreground),
+                                                ),
+                                        )
+                                        .child(
+                                            button()
+                                                .min_w(px(MOBILE_MIN_TOUCH_TARGET))
+                                                .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                                                .items_center()
+                                                .justify_center()
+                                                .rounded(move || theme().radius)
+                                                .bg(move || theme().card)
+                                                .on_press(move || {
+                                                    store::set_eq_band_gain(idx, gain + 1.5);
+                                                })
+                                                .child(
+                                                    text("+")
+                                                        .text_sm()
+                                                        .font_weight(FontWeight::BOLD)
+                                                        .text_color(move || theme().foreground),
+                                                ),
+                                        ),
+                                )
+                        })),
                 )
         })
 }

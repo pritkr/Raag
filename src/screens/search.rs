@@ -6,7 +6,9 @@ use nsh_core::prelude::*;
 use resonance_contract::{Track, format_duration_ms};
 
 use crate::store::{self, SearchFilter};
-use crate::ui::controls::{artwork_box, primary_button, skeleton_row, status_card};
+use crate::ui::controls::{
+    TrackMenuContext, artwork_box, primary_button, skeleton_row, status_card, track_context_menu,
+};
 use crate::ui::icons::{IconKind, icon, reactive_icon};
 use crate::ui::tokens::{
     MOBILE_MIN_TOUCH_TARGET, color_hero_pill_bg, color_hero_pill_fg, color_liked,
@@ -176,51 +178,54 @@ fn search_track_row(
                         .text_color(move || theme().muted_foreground),
                 ),
         )
-        .child(
-            button()
-                .accessibility_label("Toggle Like Track")
-                .w(px(MOBILE_MIN_TOUCH_TARGET))
-                .h(px(MOBILE_MIN_TOUCH_TARGET))
-                .items_center()
-                .justify_center()
-                .rounded_full()
-                .hover(|s| s.bg(pill_glass_hover))
-                .active(|s| s.opacity(0.75))
-                .on_press(move || store::toggle_like_track(t_like.clone()))
-                .child(reactive_icon(
-                    {
-                        let is_liked = is_liked.clone();
+        .when(desktop, move |row| {
+            row.child(
+                button()
+                    .accessibility_label("Toggle Like Track")
+                    .w(px(MOBILE_MIN_TOUCH_TARGET))
+                    .h(px(MOBILE_MIN_TOUCH_TARGET))
+                    .items_center()
+                    .justify_center()
+                    .rounded_full()
+                    .hover(|s| s.bg(pill_glass_hover))
+                    .active(|s| s.opacity(0.75))
+                    .on_press(move || store::toggle_like_track(t_like.clone()))
+                    .child(reactive_icon(
+                        {
+                            let is_liked = is_liked.clone();
+                            move || {
+                                if is_liked() {
+                                    IconKind::HeartFilled
+                                } else {
+                                    IconKind::Heart
+                                }
+                            }
+                        },
+                        16.0,
                         move || {
                             if is_liked() {
-                                IconKind::HeartFilled
+                                color_liked()
                             } else {
-                                IconKind::Heart
+                                theme().muted_foreground
                             }
-                        }
-                    },
-                    16.0,
-                    move || {
-                        if is_liked() {
-                            color_liked()
-                        } else {
-                            theme().muted_foreground
-                        }
-                    },
-                )),
-        )
-        .child(
-            button()
-                .accessibility_label("Play Next")
-                .w(px(MOBILE_MIN_TOUCH_TARGET))
-                .h(px(MOBILE_MIN_TOUCH_TARGET))
-                .items_center()
-                .justify_center()
-                .rounded_full()
-                .hover(|s| s.bg(pill_glass_hover))
-                .active(|s| s.opacity(0.75))
-                .on_press(move || store::play_next(t_next.clone()))
-                .child(icon(IconKind::Plus, 16.0, move || theme().muted_foreground)),
-        )
+                        },
+                    )),
+            )
+            .child(
+                button()
+                    .accessibility_label("Play Next")
+                    .w(px(MOBILE_MIN_TOUCH_TARGET))
+                    .h(px(MOBILE_MIN_TOUCH_TARGET))
+                    .items_center()
+                    .justify_center()
+                    .rounded_full()
+                    .hover(|s| s.bg(pill_glass_hover))
+                    .active(|s| s.opacity(0.75))
+                    .on_press(move || store::play_next(t_next.clone()))
+                    .child(icon(IconKind::Plus, 16.0, move || theme().muted_foreground)),
+            )
+        })
+        .child(track_context_menu(track, TrackMenuContext::General))
 }
 
 pub fn search_screen() -> impl IntoElement {
@@ -471,12 +476,26 @@ pub fn search_screen() -> impl IntoElement {
                                                     .gap_1p5()
                                                     .active(|s| s.opacity(0.8))
                                                     .on_press(move || {
-                                                        store::open_collection(
-                                                            id_btn.clone(),
-                                                            title_btn.clone(),
-                                                            sub_btn.clone(),
-                                                            art_btn.clone(),
-                                                        );
+                                                        if id_btn.starts_with("UC")
+                                                            || filter == SearchFilter::Artists
+                                                        {
+                                                            store::open_artist_entity(
+                                                                id_btn.clone(),
+                                                            );
+                                                        } else if id_btn.starts_with("MPRE")
+                                                            || filter == SearchFilter::Albums
+                                                        {
+                                                            store::open_album_entity(
+                                                                id_btn.clone(),
+                                                            );
+                                                        } else {
+                                                            store::open_collection(
+                                                                id_btn.clone(),
+                                                                title_btn.clone(),
+                                                                sub_btn.clone(),
+                                                                art_btn.clone(),
+                                                            );
+                                                        }
                                                     })
                                                     .child(artwork_box(
                                                         alb.artwork_url,

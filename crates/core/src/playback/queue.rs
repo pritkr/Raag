@@ -103,6 +103,20 @@ impl QueueManager {
         };
     }
 
+    /// Removes all upcoming tracks after the currently playing item without interrupting playback.
+    /// Returns the number of removed upcoming tracks.
+    pub fn clear_up_next(queue: &mut QueueState) -> usize {
+        let Some(cur) = queue.current_index else {
+            let removed = queue.items.len();
+            Self::clear_preserving_modes(queue);
+            return removed;
+        };
+        let keep_len = (cur + 1).min(queue.items.len());
+        let removed = queue.items.len().saturating_sub(keep_len);
+        queue.items.truncate(keep_len);
+        removed
+    }
+
     /// Toggles shuffle; when turned ON, shuffles only the upcoming tail after `current_index`.
     pub fn toggle_shuffle(queue: &mut QueueState) {
         queue.shuffle = !queue.shuffle;

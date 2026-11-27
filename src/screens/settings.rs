@@ -22,12 +22,13 @@ fn format_mb(bytes: u64) -> String {
 fn backend_badge_label(kind: CredentialBackendKind) -> &'static str {
     match kind {
         CredentialBackendKind::OsKeyring => "OS Keychain",
-        CredentialBackendKind::EncryptedFallbackFile => "Local 0600 File",
-        CredentialBackendKind::MemoryOnly => "Memory Only",
+        CredentialBackendKind::EncryptedFallbackFile => "Encrypted Vault",
+        CredentialBackendKind::MemoryOnly => "Session Only",
     }
 }
 
 fn account_card(cookie_draft: Signal<String>) -> impl IntoElement {
+    let show_cookie_fallback = signal(false);
     view()
         .p_4()
         .gap_3()
@@ -126,7 +127,7 @@ fn account_card(cookie_draft: Signal<String>) -> impl IntoElement {
                     ))
                 } else {
                     SharedString::from(
-                        "Anonymous mode active. On Desktop, open music.youtube.com in your browser, copy the Request Cookie header (including SAPISID / __Secure-3PAPISID) from DevTools Network, and paste it below.",
+                        "Anonymous mode active. Sign in with YouTube TV Device Code (recommended on Desktop) or Android WebView to sync playlists, likes, and Premium audio.",
                     )
                 }
             })
@@ -138,32 +139,11 @@ fn account_card(cookie_draft: Signal<String>) -> impl IntoElement {
                 || !store::auth_info().0,
                 move || {
                     view()
-                        .gap_2()
-                        .child(
-                            input()
-                                .test_id("desktop-cookie-input")
-                                .value(move || cookie_draft.get())
-                                .on_change(move |v: &str| cookie_draft.set(v.to_owned()))
-                                .placeholder("Paste Cookie header (SAPISID=...; __Secure-3PAPISID=...)")
-                                .placeholder_color(|| color(theme().muted_foreground))
-                                .caret_color(|| color(theme().primary))
-                                .min_h(px(MOBILE_MIN_TOUCH_TARGET))
-                                .px_3()
-                                .text_sm()
-                                .text_color(move || theme().foreground)
-                                .bg(move || theme().background)
-                                .rounded(move || theme().radius)
-                                .border_1()
-                                .border_color(move || theme().input),
-                        )
+                        .gap_2p5()
                         .child(
                             button()
-                                .test_id("desktop-signin-btn")
-                                .on_press(move || {
-                                    let raw = cookie_draft.get_untracked();
-                                    cookie_draft.set(String::new());
-                                    store::sign_in_with_cookies(&raw);
-                                })
+                                .test_id("open-auth-sheet-btn")
+                                .on_press(store::open_auth_sheet)
                                 .min_h(px(MOBILE_MIN_TOUCH_TARGET))
                                 .px_5()
                                 .items_center()
@@ -176,12 +156,77 @@ fn account_card(cookie_draft: Signal<String>) -> impl IntoElement {
                                     s.outline(px(2.0)).outline_color(move || theme().ring)
                                 })
                                 .child(
-                                    text("Sign In")
+                                    text("Sign In (TV Code / Browser)")
                                         .text_sm()
                                         .font_weight(FontWeight::SEMIBOLD)
                                         .text_color(move || theme().primary_foreground),
                                 ),
                         )
+                        .child(secondary_button(
+                            move || {
+                                if show_cookie_fallback.get() {
+                                    SharedString::from("Hide Advanced Cookie Paste")
+                                } else {
+                                    SharedString::from("Advanced: Paste Browser Cookie")
+                                }
+                            },
+                            move || show_cookie_fallback.set(!show_cookie_fallback.get_untracked()),
+                        ))
+                        .child(when(
+                            move || show_cookie_fallback.get(),
+                            move || {
+                                view()
+                                    .gap_2()
+                                    .child(
+                                        input()
+                                            .test_id("desktop-cookie-input")
+                                            .value(move || cookie_draft.get())
+                                            .on_change(move |v: &str| {
+                                                cookie_draft.set(v.to_owned())
+                                            })
+                                            .placeholder("Paste Cookie header (SAPISID=...; __Secure-3PAPISID=...)")
+                                            .placeholder_color(|| color(theme().muted_foreground))
+                                            .caret_color(|| color(theme().primary))
+                                            .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                                            .px_3()
+                                            .text_sm()
+                                            .text_color(move || theme().foreground)
+                                            .bg(move || theme().background)
+                                            .rounded(move || theme().radius)
+                                            .border_1()
+                                            .border_color(move || theme().input),
+                                    )
+                                    .child(
+                                        button()
+                                            .test_id("desktop-signin-btn")
+                                            .on_press(move || {
+                                                let raw = cookie_draft.get_untracked();
+                                                cookie_draft.set(String::new());
+                                                store::sign_in_with_cookies(&raw);
+                                            })
+                                            .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                                            .px_5()
+                                            .items_center()
+                                            .justify_center()
+                                            .rounded(move || theme().radius)
+                                            .bg(pill_glass_surface)
+                                            .border_1()
+                                            .border_color(glass_hairline)
+                                            .hover(|s| s.opacity(0.92))
+                                            .active(|s| s.opacity(0.8))
+                                            .focus_visible(|s| {
+                                                s.outline(px(2.0))
+                                                    .outline_color(move || theme().ring)
+                                            })
+                                            .child(
+                                                text("Sign In with Cookies")
+                                                    .text_sm()
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .text_color(move || theme().foreground),
+                                            ),
+                                    )
+                            },
+                        ))
                 },
             )
             .otherwise(move || {
@@ -356,6 +401,8 @@ fn cache_card() -> impl IntoElement {
 }
 
 fn stream_diagnostics_card() -> impl IntoElement {
+    let expanded = signal(false);
+
     view()
         .p_4()
         .gap_2p5()
@@ -370,68 +417,123 @@ fn stream_diagnostics_card() -> impl IntoElement {
                 .justify_between()
                 .gap_2()
                 .child(
-                    text("Stream Acquisition & PO Token")
-                        .text_base()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(move || theme().foreground),
-                )
-                .child(diagnostics_badge(
-                    move || {
-                        let diag = store::po_token_diagnostics();
-                        match diag.status {
-                            PoTokenHealthStatus::Healthy => SharedString::from("PO Token: Healthy"),
-                            PoTokenHealthStatus::DegradedColdStart => {
-                                SharedString::from("Degraded Fallback")
-                            }
-                            PoTokenHealthStatus::Unconfigured => {
-                                SharedString::from("Fallback Matrix")
-                            }
-                        }
-                    },
-                    || store::po_token_diagnostics().status == PoTokenHealthStatus::Healthy,
-                    || {
-                        store::po_token_diagnostics().status
-                            == PoTokenHealthStatus::DegradedColdStart
-                    },
-                )),
-        )
-        .child(
-            text(move || {
-                let diag = store::po_token_diagnostics();
-                SharedString::from(format!("{} • {}", diag.active_provider, diag.detail))
-            })
-            .test_id("po-token-diagnostics-detail")
-            .text_xs()
-            .text_color(move || theme().muted_foreground),
-        )
-        .child(
-            view()
-                .flex_row()
-                .items_center()
-                .justify_between()
-                .gap_2()
-                .child(
-                    text(move || {
-                        let rc = store::remote_config_status();
-                        let sig = if rc.signature_verified {
-                            "Ed25519 verified"
-                        } else {
-                            "Embedded fallback"
-                        };
-                        SharedString::from(format!(
-                            "Remote Config rev {} ({}) • Solver {} • {}",
-                            rc.matrix_revision, rc.matrix_source, rc.solver_bundle_version, sig
-                        ))
-                    })
-                    .test_id("remote-config-status-detail")
-                    .text_xs()
-                    .text_color(move || theme().muted_foreground),
+                    view()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .gap_0p5()
+                        .child(
+                            text("Advanced & Diagnostics")
+                                .text_base()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(move || theme().foreground),
+                        )
+                        .child(
+                            text("Stream resolver status, attestation & signed remote config")
+                                .text_xs()
+                                .text_color(move || theme().muted_foreground),
+                        ),
                 )
                 .child(secondary_button(
-                    "Sync Config",
-                    store::refresh_remote_config,
+                    move || {
+                        if expanded.get() {
+                            SharedString::from("Hide")
+                        } else {
+                            SharedString::from("Show")
+                        }
+                    },
+                    move || expanded.set(!expanded.get_untracked()),
                 )),
         )
+        .child(when(
+            move || expanded.get(),
+            move || {
+                view()
+                    .pt_2()
+                    .gap_2p5()
+                    .border_t_1()
+                    .border_color(glass_hairline)
+                    .child(
+                        view()
+                            .flex_row()
+                            .items_center()
+                            .justify_between()
+                            .gap_2()
+                            .child(
+                                text("Stream Acquisition & PO Token")
+                                    .text_sm()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(move || theme().foreground),
+                            )
+                            .child(diagnostics_badge(
+                                move || {
+                                    let diag = store::po_token_diagnostics();
+                                    match diag.status {
+                                        PoTokenHealthStatus::Healthy => {
+                                            SharedString::from("PO Token: Healthy")
+                                        }
+                                        PoTokenHealthStatus::DegradedColdStart => {
+                                            SharedString::from("Degraded Fallback")
+                                        }
+                                        PoTokenHealthStatus::Unconfigured => {
+                                            SharedString::from("Fallback Matrix")
+                                        }
+                                    }
+                                },
+                                || {
+                                    store::po_token_diagnostics().status
+                                        == PoTokenHealthStatus::Healthy
+                                },
+                                || {
+                                    store::po_token_diagnostics().status
+                                        == PoTokenHealthStatus::DegradedColdStart
+                                },
+                            )),
+                    )
+                    .child(
+                        text(move || {
+                            let diag = store::po_token_diagnostics();
+                            SharedString::from(format!(
+                                "{} • {}",
+                                diag.active_provider, diag.detail
+                            ))
+                        })
+                        .test_id("po-token-diagnostics-detail")
+                        .text_xs()
+                        .text_color(move || theme().muted_foreground),
+                    )
+                    .child(
+                        view()
+                            .flex_row()
+                            .items_center()
+                            .justify_between()
+                            .gap_2()
+                            .child(
+                                text(move || {
+                                    let rc = store::remote_config_status();
+                                    let sig = if rc.signature_verified {
+                                        "Ed25519 verified"
+                                    } else {
+                                        "Embedded fallback"
+                                    };
+                                    SharedString::from(format!(
+                                        "Remote Config rev {} ({}) • Solver {} • {}",
+                                        rc.matrix_revision,
+                                        rc.matrix_source,
+                                        rc.solver_bundle_version,
+                                        sig
+                                    ))
+                                })
+                                .test_id("remote-config-status-detail")
+                                .text_xs()
+                                .text_color(move || theme().muted_foreground),
+                            )
+                            .child(secondary_button(
+                                "Sync Config",
+                                store::refresh_remote_config,
+                            )),
+                    )
+            },
+        ))
 }
 
 fn updater_card() -> impl IntoElement {

@@ -38,8 +38,20 @@ use tokio_tungstenite::tungstenite::{
     Message, handshake::derive_accept_key, protocol::Role as WsRole,
 };
 
+pub const MAX_ROOMS: usize = 10_000;
 pub const MAX_PARTICIPANTS: usize = 32;
 pub const MAX_MSGS_PER_MIN: usize = 60;
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (&x, &y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
 
 #[derive(Debug, Clone)]
 pub struct RelayConfig {
@@ -123,7 +135,9 @@ impl RoomState {
             return false;
         }
         match self.host_secret.as_deref() {
-            Some(expected) => provided_secret == Some(expected),
+            Some(expected) => {
+                provided_secret.is_some_and(|p| constant_time_eq(p.as_bytes(), expected.as_bytes()))
+            }
             None => provided_secret.is_none(),
         }
     }
@@ -327,10 +341,20 @@ async fn handle_http(
 
     // POST /v1/rooms
     if method == Method::POST && path == "/v1/rooms" {
+        if state.rooms.read().await.len() >= MAX_ROOMS {
+            return Ok(text_resp(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "relay capacity reached",
+            ));
+        }
         let Ok(body) = req.into_body().collect().await else {
             return Ok(text_resp(StatusCode::BAD_REQUEST, "invalid body"));
         };
-        let Ok(parsed) = serde_json::from_slice::<CreateRoomRequest>(&body.to_bytes()) else {
+        let bytes = body.to_bytes();
+        if bytes.len() > MAX_FRAME_BYTES {
+            return Ok(text_resp(StatusCode::PAYLOAD_TOO_LARGE, "frame too large"));
+        }
+        let Ok(parsed) = serde_json::from_slice::<CreateRoomRequest>(&bytes) else {
             return Ok(text_resp(StatusCode::BAD_REQUEST, "invalid JSON"));
         };
 

@@ -131,13 +131,17 @@ async function main(): Promise<void> {
   });
 
   // Serve built Android arm64-v8a APK directly from public/
-  app.use('/resonance-arm64-debug.apk', (_req, res, next) => {
-    const apkPath = path.resolve('public/resonance-arm64-debug.apk');
-    if (fs.existsSync(apkPath)) {
+  app.use(['/raag-arm64-debug.apk', '/resonance-arm64-debug.apk'], (_req, res, next) => {
+    const candidates = [
+      path.resolve('public/raag-arm64-debug.apk'),
+      path.resolve('public/resonance-arm64-debug.apk'),
+    ];
+    const apkPath = candidates.find((p) => fs.existsSync(p));
+    if (apkPath) {
       res.setHeader('Content-Type', 'application/vnd.android.package-archive');
       res.setHeader(
         'Content-Disposition',
-        'attachment; filename="resonance-arm64-debug.apk"',
+        'attachment; filename="raag-arm64-debug.apk"',
       );
       return res.sendFile(apkPath);
     }
@@ -158,7 +162,7 @@ async function main(): Promise<void> {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Resonance NSH Host listening on http://0.0.0.0:${PORT}`);
+    console.log(`Raag NSH Host listening on http://0.0.0.0:${PORT}`);
   });
 }
 

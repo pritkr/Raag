@@ -253,14 +253,11 @@ fn queue_header() -> impl IntoElement {
                         .flex_row()
                         .items_center()
                         .gap_2()
-                        .child(secondary_button("Save as Playlist", || {
-                            if let Some(first) = store::queue_track_at(0) {
-                                store::open_add_to_playlist_sheet(first);
-                            } else {
-                                store::set_status_banner("Queue is empty");
-                            }
-                        }))
-                        .child(secondary_button("Clear Up Next", store::clear_queue)),
+                        .child(secondary_button(
+                            "Save Queue",
+                            store::save_queue_as_playlist,
+                        ))
+                        .child(secondary_button("Clear Up Next", store::clear_up_next)),
                 ),
         )
         .child(
@@ -366,73 +363,75 @@ fn now_playing_pinned_card() -> impl IntoElement {
     when(
         || store::player_snapshot().current_track.is_some(),
         || {
-            let snap = store::player_snapshot();
-            let Some(cur) = snap.current_track else {
-                return view().into_element();
-            };
-            let mono = cur.fallback_monogram();
-            let sub = format!(
-                "{} • {}",
-                cur.artist_display(),
-                format_duration_ms(cur.duration_ms)
-            );
-            let pct = if snap.duration_ms > 0 {
-                (snap.position_ms as f32 / snap.duration_ms as f32).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
+            dynamic(|| {
+                let snap = store::player_snapshot();
+                let Some(cur) = snap.current_track else {
+                    return view().into_element();
+                };
+                let mono = cur.fallback_monogram();
+                let sub = format!(
+                    "{} • {}",
+                    cur.artist_display(),
+                    format_duration_ms(cur.duration_ms)
+                );
+                let pct = if snap.duration_ms > 0 {
+                    (snap.position_ms as f32 / snap.duration_ms as f32).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
 
-            view()
-                .test_id("queue-now-playing-card")
-                .p_3()
-                .gap_2()
-                .rounded(radius_card)
-                .bg(move || theme().card)
-                .border_1()
-                .border_color(glass_hairline)
-                .child(
-                    text("NOW PLAYING")
-                        .text_xs()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(color_player_accent),
-                )
-                .child(
-                    view()
-                        .flex_row()
-                        .items_center()
-                        .gap_3()
-                        .child(artwork_box(cur.artwork_url, mono, 48.0, 8.0))
-                        .child(
-                            view()
-                                .flex_1()
-                                .min_w(px(0.0))
-                                .gap_0p5()
-                                .child(
-                                    text(cur.title)
-                                        .number_of_lines(1)
-                                        .text_sm()
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_color(move || theme().foreground),
-                                )
-                                .child(
-                                    text(sub)
-                                        .number_of_lines(1)
-                                        .text_xs()
-                                        .tabular_nums()
-                                        .text_color(move || theme().muted_foreground),
-                                ),
-                        ),
-                )
-                .child(
-                    view()
-                        .w_full()
-                        .h(px(2.0))
-                        .rounded_full()
-                        .bg(move || theme().muted)
-                        .overflow_hidden()
-                        .child(view().h_full().w(percentage(pct)).bg(color_player_accent)),
-                )
-                .into_element()
+                view()
+                    .test_id("queue-now-playing-card")
+                    .p_3()
+                    .gap_2()
+                    .rounded(radius_card)
+                    .bg(move || theme().card)
+                    .border_1()
+                    .border_color(glass_hairline)
+                    .child(
+                        text("NOW PLAYING")
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(color_player_accent),
+                    )
+                    .child(
+                        view()
+                            .flex_row()
+                            .items_center()
+                            .gap_3()
+                            .child(artwork_box(cur.artwork_url, mono, 48.0, 8.0))
+                            .child(
+                                view()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .gap_0p5()
+                                    .child(
+                                        text(cur.title)
+                                            .number_of_lines(1)
+                                            .text_sm()
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(move || theme().foreground),
+                                    )
+                                    .child(
+                                        text(sub)
+                                            .number_of_lines(1)
+                                            .text_xs()
+                                            .tabular_nums()
+                                            .text_color(move || theme().muted_foreground),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        view()
+                            .w_full()
+                            .h(px(2.0))
+                            .rounded_full()
+                            .bg(move || theme().muted)
+                            .overflow_hidden()
+                            .child(view().h_full().w(percentage(pct)).bg(color_player_accent)),
+                    )
+                    .into_element()
+            })
         },
     )
 }

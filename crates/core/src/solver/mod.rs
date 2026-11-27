@@ -301,6 +301,35 @@ impl QuickJsSolver {
         Ok(solved)
     }
 
+    /// Loads the active hot-updated `yt-dlp-ejs` bundle source from `<data_dir>/ejs/` if installed.
+    pub fn active_ejs_bundle_source(&self) -> Option<String> {
+        if let Ok(manifest) = self.active_ejs_manifest() {
+            let exact = self
+                .ejs_dir
+                .join(format!("yt.solver.{}.js", manifest.bundle_version));
+            if let Ok(src) = fs::read_to_string(&exact)
+                && !src.trim().is_empty()
+            {
+                return Some(src);
+            }
+        }
+        let entries = fs::read_dir(&self.ejs_dir).ok()?;
+        let mut candidates: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|name| name.starts_with("yt.solver.") && name.ends_with(".js"))
+            })
+            .collect();
+        candidates.sort();
+        candidates
+            .pop()
+            .and_then(|p| fs::read_to_string(p).ok())
+            .filter(|src| !src.trim().is_empty())
+    }
+
     /// Extracts a `signatureCipher` query string and applies solved `sig` + `n` parameters.
     pub async fn solve_cipher_url(
         &self,
@@ -308,28 +337,7 @@ impl QuickJsSolver {
         solver_js: &str,
         signature_cipher: &str,
     ) -> CoreResult<String> {
-        let mut url_raw = None;
-        let mut s_val = None;
-        let mut sp_key = "sig".to_owned();
-
-        for (k, v) in url::form_urlencoded::parse(signature_cipher.as_bytes()) {
-            match k.as_ref() {
-                "url" => url_raw = Some(v.into_owned()),
-                "s" => s_val = Some(v.into_owned()),
-                "sp" => sp_key = v.into_owned(),
-                _ => {}
-            }
-        }
-        let base_url = url_raw
-            .ok_or_else(|| CoreError::Solver("signatureCipher missing url param".to_owned()))?;
-        let mut parsed = url::Url::parse(&base_url)
-            .map_err(|e| CoreError::Solver(format!("invalid url: {e}")))?;
-
-        let n_orig = parsed
-            .query_pairs()
-            .find(|(k, _)| k == "n")
-            .map(|(_, v)| v.into_owned());
-
+        let (parsed, n_orig, s_val, sp_key) = parse_cipher_url_parts(signature_cipher)?;
         let solved = self
             .solve(ChallengeInput {
                 player_hash: player_hash.to_owned(),
@@ -338,27 +346,76 @@ impl QuickJsSolver {
                 sig_param: s_val,
             })
             .await?;
-
-        let mut pairs: Vec<(String, String)> = parsed
-            .query_pairs()
-            .map(|(k, v)| (k.into_owned(), v.into_owned()))
-            .collect();
-
-        if let Some(new_n) = solved.n_param {
-            if let Some(entry) = pairs.iter_mut().find(|(k, _)| k == "n") {
-                entry.1 = new_n;
-            } else {
-                pairs.push(("n".to_owned(), new_n));
-            }
-        }
-        if let Some(new_sig) = solved.sig_param {
-            pairs.retain(|(k, _)| k != &sp_key);
-            pairs.push((sp_key, new_sig));
-        }
-
-        parsed.query_pairs_mut().clear().extend_pairs(pairs);
-        Ok(parsed.to_string())
+        Ok(apply_solved_url_params(parsed, solved, &sp_key))
     }
+
+    /// Two-stage `yt-dlp/ejs` cipher + `n`-param URL solver using a fetched YouTube `base.js`
+    /// and a hot-updated `yt-dlp-ejs` bundle (`pre_<hash>.js` cached automatically).
+    pub async fn solve_cipher_url_with_player(
+        &self,
+        player_hash: &str,
+        base_js: &str,
+        ejs_bundle_js: &str,
+        signature_cipher: &str,
+    ) -> CoreResult<String> {
+        let (parsed, n_orig, s_val, sp_key) = parse_cipher_url_parts(signature_cipher)?;
+        let solved = self
+            .solve_with_player(player_hash, base_js, ejs_bundle_js, n_orig, s_val)
+            .await?;
+        Ok(apply_solved_url_params(parsed, solved, &sp_key))
+    }
+}
+
+fn parse_cipher_url_parts(
+    signature_cipher: &str,
+) -> CoreResult<(url::Url, Option<String>, Option<String>, String)> {
+    let mut url_raw = None;
+    let mut s_val = None;
+    let mut sp_key = "sig".to_owned();
+
+    for (k, v) in url::form_urlencoded::parse(signature_cipher.as_bytes()) {
+        match k.as_ref() {
+            "url" => url_raw = Some(v.into_owned()),
+            "s" => s_val = Some(v.into_owned()),
+            "sp" => sp_key = v.into_owned(),
+            _ => {}
+        }
+    }
+    let base_url =
+        url_raw.ok_or_else(|| CoreError::Solver("signatureCipher missing url param".to_owned()))?;
+    let parsed = url::Url::parse(&base_url)
+        .map_err(|e| CoreError::Solver(format!("invalid url: {e}")))?;
+    let n_orig = parsed
+        .query_pairs()
+        .find(|(k, _)| k == "n")
+        .map(|(_, v)| v.into_owned());
+    Ok((parsed, n_orig, s_val, sp_key))
+}
+
+fn apply_solved_url_params(
+    mut parsed: url::Url,
+    solved: SolvedChallenge,
+    sp_key: &str,
+) -> String {
+    let mut pairs: Vec<(String, String)> = parsed
+        .query_pairs()
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect();
+
+    if let Some(new_n) = solved.n_param {
+        if let Some(entry) = pairs.iter_mut().find(|(k, _)| k == "n") {
+            entry.1 = new_n;
+        } else {
+            pairs.push(("n".to_owned(), new_n));
+        }
+    }
+    if let Some(new_sig) = solved.sig_param {
+        pairs.retain(|(k, _)| k != sp_key);
+        pairs.push((sp_key.to_owned(), new_sig));
+    }
+
+    parsed.query_pairs_mut().clear().extend_pairs(pairs);
+    parsed.to_string()
 }
 
 /// Helper wrapper to share a single `QuickJsSolver` across providers.

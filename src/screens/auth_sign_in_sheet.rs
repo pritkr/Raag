@@ -52,7 +52,12 @@ pub fn auth_sign_in_sheet(
     tv_countdown_secs: Signal<u64>,
     cb: AuthSignInCallbacks,
 ) -> impl IntoElement {
-    let active_tab = signal(AuthSheetTab::WebView);
+    #[cfg(target_os = "android")]
+    let initial_tab = AuthSheetTab::WebView;
+    #[cfg(not(target_os = "android"))]
+    let initial_tab = AuthSheetTab::TvOAuth;
+
+    let active_tab = signal(initial_tab);
     let show_advanced_cookies = signal(false);
     let cookie_draft = signal(String::new());
 
@@ -88,9 +93,9 @@ pub fn auth_sign_in_sheet(
                                         .min_h(px(MOBILE_MIN_TOUCH_TARGET))
                                         .justify_center()
                                         .child(glass_pill_button(
-                                            "Browser Sign-In",
-                                            Some(IconKind::Home),
-                                            move || active_tab.set(AuthSheetTab::WebView),
+                                            "TV Code (Recommended)",
+                                            Some(IconKind::Radio),
+                                            move || active_tab.set(AuthSheetTab::TvOAuth),
                                         )),
                                 )
                                 .child(
@@ -98,9 +103,9 @@ pub fn auth_sign_in_sheet(
                                         .min_h(px(MOBILE_MIN_TOUCH_TARGET))
                                         .justify_center()
                                         .child(glass_pill_button(
-                                            "TV Code (Universal)",
-                                            Some(IconKind::Radio),
-                                            move || active_tab.set(AuthSheetTab::TvOAuth),
+                                            "Android WebView",
+                                            Some(IconKind::Home),
+                                            move || active_tab.set(AuthSheetTab::WebView),
                                         )),
                                 ),
                         )
@@ -108,28 +113,69 @@ pub fn auth_sign_in_sheet(
                             move || active_tab.get() == AuthSheetTab::WebView,
                             move || {
                                 let cb_tv_switch = Arc::clone(&cb_start_tv);
-                                view()
-                                    .p_4()
-                                    .gap_3()
-                                    .rounded(radius_card)
-                                    .bg(move || theme().card)
-                                    .border_1()
-                                    .border_color(glass_hairline)
-                                    .child(
-                                        text("Embedded Google Sign-In")
-                                            .text_sm()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(move || theme().foreground),
-                                    )
-                                    .child(
-                                        text("Sign in via accounts.google.com. If your platform lacks HttpOnly cookie access, switch to TV Code with one tap.")
-                                            .text_xs()
-                                            .text_color(move || theme().muted_foreground),
-                                    )
-                                    .child(secondary_button("Use TV OAuth Device Code", move || {
-                                        active_tab.set(AuthSheetTab::TvOAuth);
-                                        cb_tv_switch();
-                                    }))
+                                #[cfg(target_os = "android")]
+                                {
+                                    view()
+                                        .p_4()
+                                        .gap_3()
+                                        .rounded(radius_card)
+                                        .bg(move || theme().card)
+                                        .border_1()
+                                        .border_color(glass_hairline)
+                                        .child(
+                                            text("Android YouTube Music WebView")
+                                                .text_sm()
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_color(move || theme().foreground),
+                                        )
+                                        .child(
+                                            text("Opens the native Android WebView to sign in on music.youtube.com and securely capture HttpOnly session cookies into Android Keystore.")
+                                                .text_xs()
+                                                .text_color(move || theme().muted_foreground),
+                                        )
+                                        .child(
+                                            view()
+                                                .flex_row()
+                                                .flex_wrap()
+                                                .gap_2()
+                                                .child(primary_button(
+                                                    "Launch YouTube Music Sign-In",
+                                                    crate::store::launch_android_webview_sign_in,
+                                                ))
+                                                .child(secondary_button(
+                                                    "Use TV OAuth Code Instead",
+                                                    move || {
+                                                        active_tab.set(AuthSheetTab::TvOAuth);
+                                                        cb_tv_switch();
+                                                    },
+                                                )),
+                                        )
+                                }
+                                #[cfg(not(target_os = "android"))]
+                                {
+                                    view()
+                                        .p_4()
+                                        .gap_3()
+                                        .rounded(radius_card)
+                                        .bg(move || theme().card)
+                                        .border_1()
+                                        .border_color(glass_hairline)
+                                        .child(
+                                            text("Native WebView Cookie Capture (Android Only)")
+                                                .text_sm()
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_color(move || theme().foreground),
+                                        )
+                                        .child(
+                                            text("Desktop builds cannot read HttpOnly cookies from embedded WebViews. Use YouTube's official TV OAuth Device Code below, or paste a browser Cookie header under Advanced.")
+                                                .text_xs()
+                                                .text_color(move || theme().muted_foreground),
+                                        )
+                                        .child(primary_button("Continue with TV Code", move || {
+                                            active_tab.set(AuthSheetTab::TvOAuth);
+                                            cb_tv_switch();
+                                        }))
+                                }
                             },
                         ))
                         .child(when(
@@ -140,6 +186,8 @@ pub fn auth_sign_in_sheet(
                                 dynamic(move || {
                                     let cb_gen_inner = Arc::clone(&cb_gen);
                                     let cb_can_inner = Arc::clone(&cb_can);
+                                    let status_msg =
+                                        crate::store::settings_snapshot().tv_oauth_status;
                                     if let Some(code) = tv_user_code.get() {
                                         let url = tv_verification_url
                                             .get()
@@ -169,6 +217,15 @@ pub fn auth_sign_in_sheet(
                                                     .tabular_nums()
                                                     .text_color(move || theme().muted_foreground),
                                             )
+                                            .when_some(status_msg, |v, msg| {
+                                                v.child(
+                                                    text(msg)
+                                                        .text_xs()
+                                                        .text_color(move || {
+                                                            theme().muted_foreground
+                                                        }),
+                                                )
+                                            })
                                             .child(
                                                 view()
                                                     .flex_row()
@@ -196,6 +253,19 @@ pub fn auth_sign_in_sheet(
                                             .bg(move || theme().card)
                                             .border_1()
                                             .border_color(glass_hairline)
+                                            .child(
+                                                text("Sign in using YouTube's official RFC 8628 TV device code flow — no DevTools cookies required.")
+                                                    .text_xs()
+                                                    .text_color(move || theme().muted_foreground),
+                                            )
+                                            .when_some(status_msg, |v, msg| {
+                                                v.child(
+                                                    text(msg)
+                                                        .text_xs()
+                                                        .font_weight(FontWeight::MEDIUM)
+                                                        .text_color(move || theme().primary),
+                                                )
+                                            })
                                             .child(primary_button("Generate TV Sign-In Code", move || {
                                                 cb_gen_inner()
                                             }))

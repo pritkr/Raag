@@ -26,11 +26,14 @@ use crate::solver::{EjsBundleManifest, QuickJsSolver};
 use crate::unix_secs;
 
 pub const DEFAULT_REMOTE_CONFIG_BASE_URL: &str =
-    "https://raw.githubusercontent.com/resonance-audio/resonance-config/main";
+    "https://raw.githubusercontent.com/pritkr/Raag/main/config";
 pub const DEFAULT_CONFIG_ED25519_PUBKEY_HEX: &str =
-    match option_env!("RESONANCE_CONFIG_ED25519_PUBKEY_HEX") {
+    match option_env!("RAAG_CONFIG_ED25519_PUBKEY_HEX") {
         Some(v) => v,
-        None => "0000000000000000000000000000000000000000000000000000000000000000",
+        None => match option_env!("RESONANCE_CONFIG_ED25519_PUBKEY_HEX") {
+            Some(v) => v,
+            None => "5c20058cbec80206445ff3e43e341a97e6ebfffc1fb4c27197e1acb63f7ed335",
+        },
     };
 
 const MAX_MATRIX_BYTES: usize = 128 * 1024;
@@ -83,6 +86,7 @@ impl RemoteConfigSyncService {
             .map_err(|e| CoreError::Provider(ProviderError::Network(e.to_string())))?;
 
         let resolved_base = base_url
+            .or_else(|| std::env::var("RAAG_CONFIG_BASE_URL").ok())
             .or_else(|| std::env::var("RESONANCE_CONFIG_BASE_URL").ok())
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_REMOTE_CONFIG_BASE_URL.to_owned());

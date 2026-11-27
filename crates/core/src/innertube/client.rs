@@ -13,8 +13,9 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use resonance_contract::{
-    AuthError, AuthSession, AuthStore, CacheStore, CoreError, CoreResult, HomeSection,
-    LyricsDocument, MusicProvider, Playlist, PoTokenDiagnostics, PoTokenError, PoTokenHealthStatus,
+    AlbumDetail, ArtistDetail, AuthError, AuthSession, AuthStore, CacheStore, CoreError,
+    CoreResult, ExplorePage, HomeSection, LibraryCollectionRef, LyricsDocument, MoodCategory,
+    MusicProvider, Playlist, PoTokenDiagnostics, PoTokenError, PoTokenHealthStatus,
     PoTokenProvider, PoTokenRequest, PoTokenScope, ProviderError, SearchResults, StreamInfo, Track,
 };
 use serde_json::{Value, json};
@@ -27,14 +28,15 @@ use crate::innertube::matrix::{
     AccountTier, CircuitBreakerConfig, ClientCircuitBreaker, ClientHealthSnapshot, ClientMatrix,
 };
 use crate::innertube::parser::{
-    extract_home_continuation, extract_lyrics_browse_id, extract_search_plays,
-    extract_visitor_data, finalize_stream_info, parse_collection_response, parse_home_response,
-    parse_next_queue_response, parse_player_response_for_platform, parse_search_response,
-    parse_ytm_lyrics_response,
+    extract_home_continuation, extract_home_mood_chips, extract_lyrics_browse_id,
+    extract_search_plays, extract_visitor_data, finalize_stream_info, parse_album_response,
+    parse_artist_response, parse_collection_response, parse_explore_response, parse_home_response,
+    parse_mood_playlists_response, parse_next_queue_response, parse_player_response_for_platform,
+    parse_search_response, parse_ytm_lyrics_response,
 };
 use crate::innertube::provider_adapter::PlaybackResolver;
 use crate::potoken::attach_pot_param;
-use crate::solver::SharedSolver;
+use crate::solver::{PlayerScriptFetcher, SharedSolver};
 use crate::unix_secs;
 
 const TTL_STREAM_SECS: u64 = 4 * 3600;
@@ -52,8 +54,10 @@ pub struct InnerTubeClient {
     visitor_data: RwLock<Option<String>>,
     hl: String,
     gl: String,
-    /// Optional fallback JS solver script (e.g. `yt-dlp-ejs` bundle or test harness script).
+    /// Optional fallback JS solver script (e.g. direct `solveN`/`solveSig` or test harness script).
     player_solver_js: RwLock<Option<(String, String)>>,
+    /// Live YouTube `base.js` discovery & caching fetcher wired for two-stage `yt-dlp-ejs` solving.
+    player_fetcher: RwLock<Option<Arc<PlayerScriptFetcher>>>,
     /// Optional base URL override for local HTTP fault-injection tests.
     api_base_override: RwLock<Option<String>>,
     /// Remote-updatable data-driven client viability matrix (`client_matrix.json`).
@@ -95,6 +99,7 @@ impl InnerTubeClient {
             hl: "en".to_owned(),
             gl: "US".to_owned(),
             player_solver_js: RwLock::new(None),
+            player_fetcher: RwLock::new(None),
             api_base_override: RwLock::new(None),
             client_matrix: RwLock::new(matrix),
             circuit_breaker: Arc::new(ClientCircuitBreaker::new(CircuitBreakerConfig::default())),
@@ -220,6 +225,28 @@ impl InnerTubeClient {
 
     pub fn set_player_solver(&self, player_hash: String, solver_js: String) {
         *self.player_solver_js.write().unwrap() = Some((player_hash, solver_js));
+    }
+
+    /// Attaches a live [`PlayerScriptFetcher`] so `WEB_REMIX` ciphered and `n`-throttled streams
+    /// automatically discover, cache, and evaluate `base.js` via `QuickJsSolver`.
+    pub fn set_player_fetcher(&self, fetcher: Arc<PlayerScriptFetcher>) {
+        *self.player_fetcher.write().unwrap() = Some(fetcher);
+    }
+
+    pub fn with_player_fetcher(self, fetcher: Arc<PlayerScriptFetcher>) -> Self {
+        self.set_player_fetcher(fetcher);
+        self
+    }
+
+    /// Pre-warms the active YouTube `base.js` script on disk in the background so first ciphered
+    /// playback avoids discovery latency.
+    pub async fn warm_player_solver(&self) -> CoreResult<()> {
+        let fetcher = self.player_fetcher.read().unwrap().clone();
+        let Some(fetcher) = fetcher else {
+            return Ok(());
+        };
+        let _ = fetcher.fetch_active_player().await?;
+        Ok(())
     }
 
     pub fn set_api_base_override(&self, base: Option<String>) {
@@ -447,29 +474,25 @@ impl InnerTubeClient {
         )?;
 
         let url = if let Some(cipher) = raw.signature_cipher.clone() {
-            let solver_bundle = self.player_solver_js.read().unwrap().clone();
-            let Some((hash, js)) = solver_bundle else {
-                return Err(CoreError::Solver(format!(
-                    "ciphered stream from {} requires updatable yt-dlp-ejs solver bundle",
-                    client.client_name
-                )));
-            };
-            self.solver.solve_cipher_url(&hash, &js, &cipher).await?
+            self.solve_stream_cipher(client, &cipher, true).await?
         } else if let Some(plain) = raw.url.clone() {
             // Proactively solve `n`-parameter via EJS when client requires JS solver (e.g. signed-in WEB_REMIX).
-            let solver_bundle = if client.needs_js_solver && plain.contains("n=") {
-                self.player_solver_js.read().unwrap().clone()
-            } else {
-                None
-            };
-            if let Some((hash, js)) = solver_bundle {
+            if client.needs_js_solver && plain.contains("n=") {
                 let cipher_like = format!(
                     "url={}",
                     url::form_urlencoded::byte_serialize(plain.as_bytes()).collect::<String>()
                 );
-                self.solver
-                    .solve_cipher_url(&hash, &js, &cipher_like)
-                    .await?
+                match self.solve_stream_cipher(client, &cipher_like, false).await {
+                    Ok(solved) => solved,
+                    Err(err) => {
+                        log::warn!(
+                            "n-param EJS solve skipped for {}: {}",
+                            client.client_name,
+                            crate::innertube::auth::redact_secrets(&err.to_string())
+                        );
+                        plain
+                    }
+                }
             } else {
                 plain
             }
@@ -551,23 +574,107 @@ impl InnerTubeClient {
         Ok((parsed, plays))
     }
 
+    /// Solves a `signatureCipher` or `n=` URL via either an explicit `player_solver_js`
+    /// or the live `PlayerScriptFetcher` + hot-updated `yt-dlp-ejs` two-stage pipeline.
+    async fn solve_stream_cipher(
+        &self,
+        client: &ClientConfig,
+        signature_cipher: &str,
+        required: bool,
+    ) -> CoreResult<String> {
+        if let Some((hash, js)) = self.player_solver_js.read().unwrap().clone() {
+            return self
+                .solver
+                .solve_cipher_url(&hash, &js, signature_cipher)
+                .await;
+        }
+        let fetcher = self.player_fetcher.read().unwrap().clone();
+        if let Some(fetcher) = fetcher
+            && let Some(ejs_bundle) = self.solver.active_ejs_bundle_source()
+        {
+            let fetched = fetcher.fetch_active_player().await?;
+            return self
+                .solver
+                .solve_cipher_url_with_player(
+                    &fetched.player_hash,
+                    &fetched.source,
+                    &ejs_bundle,
+                    signature_cipher,
+                )
+                .await;
+        }
+        if required {
+            Err(CoreError::Solver(format!(
+                "ciphered stream from {} requires updatable yt-dlp-ejs solver bundle",
+                client.client_name
+            )))
+        } else {
+            Err(CoreError::Solver(
+                "no active yt-dlp-ejs solver bundle installed yet".to_owned(),
+            ))
+        }
+    }
+
     /// Fetches `FEmusic_explore` (New albums & singles, Trending, Moods & genres, New music videos).
     pub async fn explore(&self) -> CoreResult<Vec<HomeSection>> {
         let payload = json!({ "browseId": "FEmusic_explore" });
         let resp = self.post_innertube(&WEB_REMIX, "browse", payload).await?;
         parse_home_response(&resp)
     }
-}
 
-#[async_trait]
-impl MusicProvider for InnerTubeClient {
-    async fn search(&self, query: &str) -> CoreResult<SearchResults> {
-        self.search_with_params(query, None).await
+    /// Fetches structured YouTube Music Explore (`FEmusic_explore` + `FEmusic_moods_and_genres` fallback).
+    pub async fn explore_page(&self) -> CoreResult<ExplorePage> {
+        let resp = self
+            .post_innertube(&WEB_REMIX, "browse", json!({ "browseId": "FEmusic_explore" }))
+            .await?;
+        let mut page = parse_explore_response(&resp)?;
+        if page.moods_and_genres.is_empty()
+            && let Ok(moods_resp) = self
+                .post_innertube(
+                    &WEB_REMIX,
+                    "browse",
+                    json!({ "browseId": "FEmusic_moods_and_genres" }),
+                )
+                .await
+            && let Ok(moods_page) = parse_explore_response(&moods_resp)
+        {
+            page.moods_and_genres = moods_page.moods_and_genres;
+        }
+        Ok(page)
     }
 
-    async fn home(&self) -> CoreResult<Vec<HomeSection>> {
-        let payload = json!({ "browseId": "FEmusic_home" });
+    /// Fetches playlists for a YouTube Music mood/genre category (`FEmusic_moods_and_genres_category`).
+    pub async fn mood_playlists_by_params(
+        &self,
+        params: &str,
+    ) -> CoreResult<Vec<LibraryCollectionRef>> {
+        let resp = self
+            .post_innertube(
+                &WEB_REMIX,
+                "browse",
+                json!({
+                    "browseId": "FEmusic_moods_and_genres_category",
+                    "params": params,
+                }),
+            )
+            .await?;
+        parse_mood_playlists_response(&resp)
+    }
+
+    /// Fetches `FEmusic_home` with optional mood filter `params` and extracts dynamic Home mood chips.
+    pub async fn home_with_params(
+        &self,
+        params: Option<&str>,
+    ) -> CoreResult<(Vec<HomeSection>, Vec<MoodCategory>)> {
+        let mut payload = json!({ "browseId": "FEmusic_home" });
+        if let Some(p) = params
+            && !p.trim().is_empty()
+            && let Some(obj) = payload.as_object_mut()
+        {
+            obj.insert("params".into(), json!(p));
+        }
         let resp = self.post_innertube(&WEB_REMIX, "browse", payload).await?;
+        let chips = extract_home_mood_chips(&resp);
         let mut sections = parse_home_response(&resp)?;
         let mut cont = extract_home_continuation(&resp);
         let mut page = 0usize;
@@ -590,6 +697,34 @@ impl MusicProvider for InnerTubeClient {
             }
             cont = extract_home_continuation(&next_resp);
         }
+        Ok((sections, chips))
+    }
+
+    /// Fetches a structured Album detail view natively via `/browse`.
+    pub async fn fetch_album_detail(&self, browse_id: &str) -> CoreResult<AlbumDetail> {
+        let resp = self
+            .post_innertube(&WEB_REMIX, "browse", json!({ "browseId": browse_id }))
+            .await?;
+        parse_album_response(browse_id, &resp)
+    }
+
+    /// Fetches a structured Artist detail view natively via `/browse`.
+    pub async fn fetch_artist_detail(&self, channel_id: &str) -> CoreResult<ArtistDetail> {
+        let resp = self
+            .post_innertube(&WEB_REMIX, "browse", json!({ "browseId": channel_id }))
+            .await?;
+        parse_artist_response(channel_id, &resp)
+    }
+}
+
+#[async_trait]
+impl MusicProvider for InnerTubeClient {
+    async fn search(&self, query: &str) -> CoreResult<SearchResults> {
+        self.search_with_params(query, None).await
+    }
+
+    async fn home(&self) -> CoreResult<Vec<HomeSection>> {
+        let (sections, _) = self.home_with_params(None).await?;
         Ok(sections)
     }
 

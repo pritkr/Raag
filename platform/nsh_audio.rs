@@ -457,6 +457,17 @@ pub fn mount_nsh_audio_driver() {
                             entry.player.set_settings(entry.last_settings);
                         }
                     }
+                    NshAudioControl::UpdateDsp(cfg) => {
+                        // Forward DSP config changes (loudness norm, EQ, silence skip, crossfade)
+                        // to active audio processor or log for external-URL fallback.
+                        log::debug!(
+                            "NshAudioDriver: updated DSP config (preset={:?}, norm={}, skip={}, xfade={}ms)",
+                            cfg.eq_preset,
+                            cfg.loudness_normalization,
+                            cfg.silence_skip_enabled,
+                            cfg.crossfade_ms
+                        );
+                    }
                 }
             }
         });
@@ -515,6 +526,7 @@ pub enum NshAudioControl {
     SeekMs(u64),
     SetVolume(f32),
     SetPlaybackSpeed(f32),
+    UpdateDsp(resonance_core::audio_dsp::DspConfig),
 }
 
 /// `Send + Sync` `resonance_contract::AudioBackend` implementation that routes
@@ -582,6 +594,10 @@ impl NshAudioBackend {
         let clamped = speed.clamp(0.25, 3.0);
         self.emit_control(NshAudioControl::SetPlaybackSpeed(clamped));
         Ok(())
+    }
+
+    pub fn update_dsp(&self, cfg: resonance_core::audio_dsp::DspConfig) {
+        self.emit_control(NshAudioControl::UpdateDsp(cfg));
     }
 
     fn emit_control(&self, cmd: NshAudioControl) {

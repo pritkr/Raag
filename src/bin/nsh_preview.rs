@@ -862,7 +862,7 @@ mod host {
             .unwrap_or(3001);
         let addr = SocketAddr::from(([127, 0, 0, 1], port));
         let listener = TcpListener::bind(addr).await?;
-        println!("Resonance Pure Rust NSH Preview Engine listening on http://{addr}");
+        println!("Raag Pure Rust NSH Preview Engine listening on http://{addr}");
 
         loop {
             let (stream, _) = listener.accept().await?;

@@ -193,17 +193,31 @@ pub fn track_context_menu(track: Track, context: TrackMenuContext) -> impl IntoE
 
     if let Some(art) = artist_ref {
         let art_name = art.name.clone();
+        let art_id = art.id.clone();
         m = m.child(desktop_menu_row("Go to Artist", false, move || {
-            store::run_search(&art_name);
-            store::set_tab(AppTab::Search);
+            if let Some(id) = art_id.clone() {
+                store::open_artist_entity(id);
+            } else {
+                store::run_search(&art_name);
+                store::set_tab(AppTab::Search);
+            }
         }));
     }
 
     if let Some(alb) = album_ref {
         let alb_title = alb.title.clone();
-        let alb_id = alb.id.unwrap_or_else(|| alb_title.clone());
+        let alb_id = alb.id.clone();
         m = m.child(desktop_menu_row("Go to Album", false, move || {
-            store::open_collection(alb_id.clone(), alb_title.clone(), "Album".to_owned(), None);
+            if let Some(id) = alb_id.clone() {
+                store::open_album_entity(id);
+            } else {
+                store::open_collection(
+                    alb_title.clone(),
+                    alb_title.clone(),
+                    "Album".to_owned(),
+                    None,
+                );
+            }
         }));
     }
 
@@ -212,9 +226,9 @@ pub fn track_context_menu(track: Track, context: TrackMenuContext) -> impl IntoE
             store::set_tab(AppTab::Lyrics);
         }))
         .child(sep())
-        .child(desktop_menu_row("Copy Track Link", false, move || {
-            let _url = track_youtube_music_url(&vid_link);
-            store::set_status_banner("Link copied");
+        .child(desktop_menu_row("Share Track Link", false, move || {
+            let url = track_youtube_music_url(&vid_link);
+            store::copy_text_to_clipboard("track link", &url);
         }));
 
     m.into_element()

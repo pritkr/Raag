@@ -65,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let snap = controller.snapshot().await;
     let elapsed_ms = launch_start.elapsed().as_secs_f64() * 1000.0;
     println!(
-        "Resonance ready in {:.2} ms | proxy=http://{} | fixture={} | state={}",
+        "Raag ready in {:.2} ms | proxy=http://{} | fixture={} | state={}",
         elapsed_ms,
         proxy.addr(),
         fixture_mode,
@@ -76,7 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    println!("Press Ctrl+C to stop Resonance engine.");
+    println!("Press Ctrl+C to stop Raag engine.");
     tokio::signal::ctrl_c().await?;
     Ok(())
 }

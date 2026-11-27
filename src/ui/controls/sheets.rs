@@ -173,29 +173,38 @@ pub fn track_action_sheet() -> impl IntoElement {
                         }))
                         .when_some(album_ref, |v, alb| {
                             let alb_title = alb.title.clone();
-                            let alb_id = alb.id.unwrap_or_else(|| alb_title.clone());
+                            let alb_id = alb.id.clone();
                             v.child(action_sheet_row(
                                 IconKind::Library,
                                 "Go to Album",
                                 move || {
-                                    store::open_collection(
-                                        alb_id.clone(),
-                                        alb_title.clone(),
-                                        "Album".to_owned(),
-                                        None,
-                                    );
+                                    if let Some(id) = alb_id.clone() {
+                                        store::open_album_entity(id);
+                                    } else {
+                                        store::open_collection(
+                                            alb_title.clone(),
+                                            alb_title.clone(),
+                                            "Album".to_owned(),
+                                            None,
+                                        );
+                                    }
                                     store::close_track_sheet();
                                 },
                             ))
                         })
                         .when_some(artist_ref, |v, art| {
                             let art_name = art.name.clone();
+                            let art_id = art.id.clone();
                             v.child(action_sheet_row(
                                 IconKind::Headphones,
                                 "Go to Artist",
                                 move || {
-                                    store::run_search(&art_name);
-                                    store::set_tab(AppTab::Search);
+                                    if let Some(id) = art_id.clone() {
+                                        store::open_artist_entity(id);
+                                    } else {
+                                        store::run_search(&art_name);
+                                        store::set_tab(AppTab::Search);
+                                    }
                                     store::close_track_sheet();
                                 },
                             ))
@@ -206,10 +215,10 @@ pub fn track_action_sheet() -> impl IntoElement {
                         }))
                         .child(action_sheet_row(
                             IconKind::Link,
-                            "Copy Track Link",
+                            "Share Track Link",
                             move || {
-                                let _url = track_youtube_music_url(&vid_link);
-                                store::set_status_banner("Link copied");
+                                let url = track_youtube_music_url(&vid_link);
+                                store::copy_text_to_clipboard("track link", &url);
                                 store::close_track_sheet();
                             },
                         ))

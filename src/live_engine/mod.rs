@@ -16,39 +16,72 @@ mod boot;
 mod commands;
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crossbeam_channel::{Receiver, Sender};
 use resonance_contract::{
-    AccountProfile, AuthBackendStatus, CacheStats, DownloadRecord, EventBus, ExplorePage,
-    HomeSection, LibraryCollectionRef, LibrarySnapshot, LikeAction, LyricsDocument,
-    MutationCommand, MutationReceipt, PlayerSnapshot, Playlist, PlaylistEditOp, PoTokenDiagnostics,
-    RemoteConfigStatus, RepeatMode, SearchCategory, SearchResults, SettingsV1, SleepTimerState,
-    Track, TrackId, WatchtimeReport,
+    AccountProfile, AlbumDetail, ArtistDetail, AudioDspCapability, AuthBackendStatus, CacheStats,
+    CastDevice, CastSessionState, DownloadRecord, EventBus, ExplorePage, HomeSection,
+    LibraryCollectionRef, LibrarySnapshot, LikeAction, LocalFolderRoot, LocalScanProgress,
+    LocalTrackRecord, LyricsDocument, MoodCategory, MutationCommand, MutationReceipt,
+    PlayerSnapshot, Playlist, PlaylistEditOp, PlaylistPrivacy, PoTokenDiagnostics,
+    QueuePermission, RemoteConfigStatus, RepeatMode, SearchCategory, SearchResults, SettingsV1,
+    SleepTimerState, Track, TrackId, UpdateChannel, UpdateInfo, UpdatePhase, WatchtimeReport,
 };
+use resonance_core::audio_dsp::DspConfig;
 pub use resonance_core::cache::{
     load_cached_library_snapshot, load_persisted_settings, save_persisted_settings,
 };
-use resonance_core::cache::{ChunkCache, SqliteCacheStore};
+use resonance_core::cache::{ArtworkCache, ChunkCache, SqliteCacheStore};
+use resonance_core::casting::{CastDiscoveryService, CastManager};
 use resonance_core::innertube::{MutationWorker, RemoteConfigSyncService};
+use resonance_core::local_media::LocalMediaStore;
 use resonance_core::offline::{OfflineVault, PinnedCollection, PinnedCollectionKind};
 use resonance_core::playback::PlaybackController;
 pub use resonance_core::providers::refresh_library_snapshot;
 use resonance_core::providers::HybridMusicProvider;
+use resonance_core::rooms::RoomStateSnapshot;
 use resonance_core::solver::PlayerScriptFetcher;
+use resonance_core::updater::UpdaterService;
 use tokio::runtime::Runtime;
+
+/// Internal command channel sent to the active Listen Together room task.
+#[derive(Debug, Clone)]
+pub(super) enum RoomTaskCmd {
+    Leave,
+    VoteSkip,
+    SendReaction(String),
+    KickParticipant(String),
+    TransferHost(String),
+}
 
 /// Typed commands dispatched from the NSH UI store to [`AppEngine`].
 #[derive(Debug, Clone)]
 pub enum EngineCommand {
     // Catalog & Search
     LoadHome,
+    LoadHomeWithMood {
+        mood: Option<String>,
+        params: Option<String>,
+    },
     LoadExplore,
     LoadMoodPlaylists {
         generation: u64,
         mood: String,
         params: String,
+    },
+    LoadAlbumEntity {
+        generation: u64,
+        browse_id: String,
+    },
+    LoadArtistEntity {
+        generation: u64,
+        channel_id: String,
+    },
+    LoadRelatedTracks {
+        video_id: String,
     },
     Search {
         generation: u64,
@@ -69,7 +102,7 @@ pub enum EngineCommand {
         browse_id: String,
     },
 
-    // Playback & Queue
+    // Playback, Queue & Audio DSP
     PlayTrack(Track),
     PlayQueue {
         tracks: Vec<Track>,
@@ -86,6 +119,7 @@ pub enum EngineCommand {
         to: usize,
     },
     RemoveQueueItem(usize),
+    ClearUpNext,
     ClearQueue,
     TogglePlayPause,
     SeekMs(u64),
@@ -99,10 +133,14 @@ pub enum EngineCommand {
         speed: f32,
         preserve_pitch: bool,
     },
+    UpdateDsp(DspConfig),
 
     // Auth, Config, Cache & Settings
     SignIn(String),
     SignOut,
+    StartTvOAuth,
+    CancelTvOAuth,
+    LaunchAndroidWebViewSignIn,
     RefreshRemoteConfig,
     ClearCaches,
     PersistSettings {
@@ -111,7 +149,7 @@ pub enum EngineCommand {
     },
     SetAtrSync(bool),
 
-    // Optimistic Mutations
+    // Optimistic Mutations & Playlist CRUD
     SetLike {
         video_id: TrackId,
         action: LikeAction,
@@ -119,6 +157,20 @@ pub enum EngineCommand {
     EditPlaylist {
         playlist_id: String,
         op: PlaylistEditOp,
+    },
+    CreatePlaylist {
+        local_temp_id: String,
+        title: String,
+        description: String,
+        privacy: PlaylistPrivacy,
+        initial_video_ids: Vec<TrackId>,
+    },
+    RenamePlaylist {
+        playlist_id: String,
+        new_title: String,
+    },
+    DeletePlaylist {
+        playlist_id: String,
     },
     ReportAtr(WatchtimeReport),
 
@@ -137,6 +189,46 @@ pub enum EngineCommand {
         tracks: Vec<Track>,
     },
     UnpinCollection(String),
+
+    // Local Media Library
+    LoadLocalMedia,
+    AddLocalFolder(PathBuf),
+    RemoveLocalFolder(String),
+    RescanLocalMedia,
+
+    // Listen Together Rooms
+    CreateRoom {
+        relay_url: String,
+        display_name: String,
+        queue_permission: QueuePermission,
+    },
+    JoinRoom {
+        relay_url: String,
+        room_code: String,
+        display_name: String,
+    },
+    LeaveRoom,
+    VoteSkipRoom,
+    SendRoomReaction(String),
+    KickRoomParticipant(String),
+    TransferRoomHost(String),
+
+    // LAN Casting
+    StartCastDiscovery,
+    StopCastDiscovery,
+    ConnectCastDevice(CastDevice),
+    DisconnectCast,
+    SetCastVolume(f32),
+
+    // Signed Native Auto-Updater
+    CheckForUpdates {
+        channel: UpdateChannel,
+        skipped_version: Option<String>,
+    },
+    DownloadUpdate(UpdateInfo),
+    CancelUpdateDownload,
+    InstallUpdateOnQuit,
+    RestartToInstallUpdate,
 }
 
 /// Typed updates pushed from [`AppEngine`] to the NSH UI thread.
@@ -147,13 +239,31 @@ pub enum LiveUpdate {
         snapshot: PlayerSnapshot,
         cache_stats: CacheStats,
         signed_in: bool,
+        dsp_capability: AudioDspCapability,
     },
     HomeLoaded(Result<Vec<HomeSection>, String>),
+    HomeMoodLoaded {
+        mood: Option<String>,
+        chips: Vec<MoodCategory>,
+        result: Result<Vec<HomeSection>, String>,
+    },
     ExplorePageLoaded(Result<ExplorePage, String>),
     MoodPlaylistsLoaded {
         generation: u64,
         mood: String,
         result: Result<Vec<LibraryCollectionRef>, String>,
+    },
+    AlbumEntityLoaded {
+        generation: u64,
+        result: Result<AlbumDetail, String>,
+    },
+    ArtistEntityLoaded {
+        generation: u64,
+        result: Result<ArtistDetail, String>,
+    },
+    RelatedTracksLoaded {
+        video_id: String,
+        tracks: Vec<Track>,
     },
     SearchLoaded {
         generation: u64,
@@ -186,6 +296,16 @@ pub enum LiveUpdate {
     },
     AuthStatus(AuthBackendStatus),
     AccountProfileUpdated(Option<AccountProfile>),
+    TvOAuthDeviceCode {
+        user_code: String,
+        verification_url: String,
+        expires_in_secs: u64,
+    },
+    TvOAuthStatus(String),
+    TvOAuthCompleted {
+        ok: bool,
+        message: String,
+    },
     RemoteConfigUpdated(RemoteConfigStatus),
     PoTokenDiagnostics(PoTokenDiagnostics),
     MutationCompleted(MutationReceipt),
@@ -199,6 +319,21 @@ pub enum LiveUpdate {
     PinnedCollectionsLoaded(Vec<PinnedCollection>),
     LibraryLoaded(LibrarySnapshot),
     SettingsLoaded(SettingsV1),
+    LocalMediaLoaded {
+        roots: Vec<LocalFolderRoot>,
+        tracks: Vec<LocalTrackRecord>,
+    },
+    LocalScanProgressUpdated(LocalScanProgress),
+    RoomSnapshotUpdated(Option<RoomStateSnapshot>),
+    RoomVoteSkipUpdated {
+        votes: usize,
+        threshold: usize,
+        skipped: bool,
+    },
+    RoomReactionReceived(String),
+    CastDevicesUpdated(Vec<CastDevice>),
+    CastSessionUpdated(CastSessionState),
+    UpdaterPhaseUpdated(UpdatePhase),
     StatusBanner(String),
 }
 
@@ -206,18 +341,26 @@ pub enum LiveUpdate {
 pub struct AppEngine {
     pub(super) rt: Runtime,
     pub(super) provider: Arc<HybridMusicProvider>,
-    pub(super) _player_fetcher: Arc<PlayerScriptFetcher>,
+    pub(super) player_fetcher: Arc<PlayerScriptFetcher>,
     pub(super) remote_config: Arc<RemoteConfigSyncService>,
     pub(super) cache: Arc<SqliteCacheStore>,
     pub(super) chunks: Arc<ChunkCache>,
+    pub(super) artwork: Arc<ArtworkCache>,
+    pub(super) local_media: Option<Arc<LocalMediaStore>>,
+    pub(super) proxy_base_url: String,
     pub(super) vault: Arc<OfflineVault>,
     pub(super) controller: Arc<PlaybackController>,
+    pub(super) updater: Arc<UpdaterService>,
+    pub(super) cast_manager: Arc<CastManager>,
+    pub(super) cast_discovery: Arc<Mutex<Option<CastDiscoveryService>>>,
+    pub(super) room_tx: Arc<Mutex<Option<tokio::sync::mpsc::UnboundedSender<RoomTaskCmd>>>>,
     #[cfg(target_os = "android")]
     pub(super) android_bridge: Arc<crate::platform::android::AndroidMediaBridge>,
     pub(super) mutations: MutationWorker,
     pub(super) bus: EventBus,
     pub(super) auth_generation: Arc<AtomicU64>,
     pub(super) explicit_sign_out_pending: Arc<AtomicU64>,
+    pub(super) tv_oauth_cancel: Arc<Mutex<Option<tokio::sync::watch::Sender<bool>>>>,
     pub(super) atr_enabled: Arc<AtomicBool>,
     pub(super) settings_tx: tokio::sync::mpsc::UnboundedSender<(SettingsV1, bool)>,
     pub(super) tx: Sender<LiveUpdate>,
@@ -257,7 +400,9 @@ pub fn dispatch(cmd: EngineCommand) {
     match engine() {
         Ok(eng) => eng.dispatch(cmd),
         Err(err) => match cmd {
-            EngineCommand::LoadHome => crate::store::set_home_init_error(err.to_owned()),
+            EngineCommand::LoadHome | EngineCommand::LoadHomeWithMood { .. } => {
+                crate::store::set_home_init_error(err.to_owned())
+            }
             EngineCommand::Search { query, .. } => {
                 crate::store::set_search_init_error(query, err.to_owned())
             }

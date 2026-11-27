@@ -343,22 +343,40 @@ pub fn local_files_screen(props: LocalFilesProps) -> impl IntoElement {
                 match active_tab.get() {
                     LocalLibrarySubTab::Tracks => {
                         let on_play = props.on_play_track.clone();
-                        view()
-                            .flex_1()
-                            .flex_col()
-                            .gap_2()
-                            .children(all_tracks.iter().map(|track| {
-                                let t = track.clone();
-                                let queue = all_tracks.clone();
+                        let tracks_rc = Rc::new(all_tracks);
+                        let tracks_len = Rc::clone(&tracks_rc);
+                        let tracks_keys = Rc::clone(&tracks_rc);
+                        let tracks_row = Rc::clone(&tracks_rc);
+                        virtual_list(
+                            move || tracks_len.len(),
+                            move |at| {
+                                let Some(track) = tracks_row.get(at.index()).cloned() else {
+                                    return view().into_element();
+                                };
+                                let t_play = track.clone();
+                                let t_next = track.clone();
+                                let queue = (*tracks_row).clone();
                                 let play_cb = on_play.clone();
+                                // Zero backdrop blur inside virtual_list cells.
                                 track_row_view(
-                                    t.clone(),
+                                    track,
                                     false,
-                                    move || play_cb(t.clone(), queue.clone()),
-                                    || {},
+                                    move || play_cb(t_play.clone(), queue.clone()),
+                                    move || crate::store::play_next(t_next.clone()),
                                 )
-                            }))
-                            .into_element()
+                                .into_element()
+                            },
+                        )
+                        .keys(move || {
+                            tracks_keys
+                                .iter()
+                                .enumerate()
+                                .map(|(i, t)| SharedString::from(format!("{}-{i}", t.id)))
+                                .collect::<Vec<SharedString>>()
+                        })
+                        .estimated_item_size(px(62.0))
+                        .flex_1()
+                        .into_element()
                     }
                     LocalLibrarySubTab::Albums => {
                         let mut albums: BTreeMap<String, Vec<Track>> = BTreeMap::new();

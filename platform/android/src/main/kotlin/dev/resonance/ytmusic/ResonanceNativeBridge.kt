@@ -1,5 +1,7 @@
 package dev.resonance.ytmusic
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -186,6 +188,40 @@ object ResonanceNativeBridge {
     }
 
     @JvmStatic
+    fun audioUpdateDsp(
+        loudnessEnabled: Boolean,
+        silenceSkipEnabled: Boolean,
+        eqGainsDb: FloatArray,
+        trackLoudnessDb: Float,
+    ) {
+        mainHandler.post {
+            serviceRef?.get()?.updateDspConfig(
+                loudnessEnabled,
+                silenceSkipEnabled,
+                eqGainsDb,
+                trackLoudnessDb,
+            )
+        }
+    }
+
+    @JvmStatic
+    fun copyToClipboard(text: String): Boolean {
+        val ctx = appContext ?: return false
+        return runCatching {
+            val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                ?: return false
+            cm.setPrimaryClip(ClipData.newPlainText("Raag", text))
+            true
+        }.getOrDefault(false)
+    }
+
+    @JvmStatic
+    fun mintBotGuardPoToken(identifier: String): String? {
+        val ctx = appContext ?: return null
+        return BotGuardAttestationBridge.mintPoTokenBlocking(ctx, identifier)
+    }
+
+    @JvmStatic
     fun audioUpdateMetadata(
         title: String,
         artist: String,
@@ -268,6 +304,15 @@ object ResonanceNativeBridge {
 
     @JvmStatic
     external fun nativeOnWebViewCancelled()
+
+    @JvmStatic
+    external fun nativeGetAutoBrowseChildren(parentId: String): String
+
+    @JvmStatic
+    external fun nativeOnAutoPlayTrack(videoId: String)
+
+    @JvmStatic
+    external fun nativeOnLocalFolderPicked(treeUri: String)
 
     init {
         runCatching { System.loadLibrary("resonance") }

@@ -24,7 +24,10 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
@@ -32,6 +35,7 @@ import androidx.media3.session.SessionError
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import org.json.JSONArray
 
 /**
  * Android Media3 Lifecycle & Android Auto Browse Service (`MediaLibraryService`).
@@ -46,6 +50,7 @@ class PlaybackForegroundService : MediaLibraryService() {
 
     private var player: ExoPlayer? = null
     private var mediaLibrarySession: MediaLibrarySession? = null
+    private val dspProcessor = ResonanceDspAudioProcessor()
     private val cachedSearchResults = mutableMapOf<String, List<MediaItem>>()
 
     @Volatile
@@ -120,7 +125,21 @@ class PlaybackForegroundService : MediaLibraryService() {
             .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
             .build()
 
-        val exo = ExoPlayer.Builder(this)
+        val renderersFactory = object : DefaultRenderersFactory(this) {
+            override fun buildAudioSink(
+                context: Context,
+                enableFloatOutput: Boolean,
+                enableAudioTrackPlaybackParams: Boolean,
+            ): AudioSink {
+                return DefaultAudioSink.Builder(context)
+                    .setEnableFloatOutput(enableFloatOutput)
+                    .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                    .setAudioProcessors(arrayOf(dspProcessor))
+                    .build()
+            }
+        }
+
+        val exo = ExoPlayer.Builder(this, renderersFactory)
             .setAudioAttributes(attrs, /* handleAudioFocus = */ true)
             .setHandleAudioBecomingNoisy(true)
             .build()
@@ -194,7 +213,7 @@ class PlaybackForegroundService : MediaLibraryService() {
             ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
                 val items = when (parentId) {
                     AndroidAutoBrowseTree.ROOT_ID -> AndroidAutoBrowseTree.topLevelTabs()
-                    else -> emptyList()
+                    else -> loadNativeAutoBrowseChildren(parentId)
                 }
                 val paged = AndroidAutoBrowseTree.paginate(items, page, pageSize)
                 return Futures.immediateFuture(
@@ -268,7 +287,7 @@ class PlaybackForegroundService : MediaLibraryService() {
                 val resolved = mediaItems.map { item ->
                     val id = item.mediaId.removePrefix("track:")
                     if (id.isNotBlank()) {
-                        ResonanceNativeBridge.nativeOnMediaCommand(1, 0L)
+                        ResonanceNativeBridge.nativeOnAutoPlayTrack(id)
                     }
                     item
                 }.toMutableList()
@@ -357,6 +376,55 @@ class PlaybackForegroundService : MediaLibraryService() {
         val clamped = speed.coerceIn(0.25f, 4.0f)
         val pitch = if (preservePitch) 1.0f else clamped
         player?.playbackParameters = PlaybackParameters(clamped, pitch)
+    }
+
+    fun updateDspConfig(
+        loudnessEnabled: Boolean,
+        silenceSkipEnabled: Boolean,
+        eqGainsDb: FloatArray,
+        trackLoudnessDb: Float,
+    ) {
+        val loudnessOpt = if (trackLoudnessDb.isNaN()) null else trackLoudnessDb
+        dspProcessor.updateDspConfig(
+            loudnessEnabled,
+            silenceSkipEnabled,
+            eqGainsDb,
+            loudnessOpt,
+        )
+    }
+
+    private fun loadNativeAutoBrowseChildren(parentId: String): List<MediaItem> {
+        val rawJson = runCatching {
+            ResonanceNativeBridge.nativeGetAutoBrowseChildren(parentId)
+        }.getOrNull() ?: return emptyList()
+        if (rawJson.isBlank()) return emptyList()
+        return runCatching {
+            val arr = JSONArray(rawJson)
+            val list = ArrayList<MediaItem>(arr.length())
+            for (i in 0 until arr.length()) {
+                val obj = arr.optJSONObject(i) ?: continue
+                val id = obj.optString("id").takeIf { it.isNotBlank() } ?: continue
+                val title = obj.optString("title", "Unknown Track")
+                val artist = obj.optString("artist", "Unknown Artist")
+                val album = obj.optString("album").takeIf { it.isNotBlank() }
+                val art = obj.optString("artwork_url").takeIf { it.isNotBlank() }?.let {
+                    runCatching { Uri.parse(it) }.getOrNull()
+                }
+                list.add(
+                    AndroidAutoBrowseTree.playableTrack(
+                        videoId = id,
+                        title = title,
+                        artist = artist,
+                        album = album,
+                        artworkUri = art,
+                    ),
+                )
+            }
+            if (list.isNotEmpty()) {
+                cachedSearchResults[parentId] = list
+            }
+            list
+        }.getOrDefault(emptyList())
     }
 
     fun updateNowPlayingMetadata(

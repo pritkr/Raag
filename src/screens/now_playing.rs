@@ -5,15 +5,16 @@
 //! - Mobile (< 820px): Single-column focal stack with >= 48dp interactive touch targets
 //! - 100% semantic design tokens from `theme.json` and `crate::ui::tokens`.
 
-use nsh_base::{button, theme};
+use nsh_base::{button, tab, tabs, theme};
 use nsh_core::element::ImageSrc;
 use nsh_core::prelude::*;
 use resonance_contract::{DownloadStatus, LyricSyncKind, RepeatMode, format_duration_ms};
 
-use crate::store::{self, AppTab};
+use crate::store::{self, AppTab, NowPlayingTab};
 use crate::ui::controls::{
-    open_sleep_timer_sheet, open_speed_sheet, secondary_button, seek_slider,
-    sleep_timer_badge_label, speed_badge_label, status_card, svg_icon_button, volume_slider,
+    artwork_box, open_sleep_timer_sheet, open_speed_sheet, secondary_button, seek_slider,
+    setting_switch, sleep_timer_badge_label, speed_badge_label, status_card, svg_icon_button,
+    volume_slider,
 };
 use crate::ui::icons::{IconKind, icon, reactive_icon};
 use crate::ui::tokens::{
@@ -21,7 +22,7 @@ use crate::ui::tokens::{
     color_control_fg, color_liked, color_lyric_active, color_lyric_inactive, color_player_accent,
     color_sponsor_badge, cover_gradient_pair, frosted_card_surface, glass_hairline,
     is_desktop_layout, pill_glass_hover, pill_glass_surface, radius_card, radius_panel,
-    radius_pill,
+    radius_pill, sidebar_active_surface,
 };
 
 pub fn now_playing_screen() -> impl IntoElement {
@@ -884,21 +885,193 @@ fn sponsorblock_badge() -> impl IntoElement {
     )
 }
 
-fn desktop_lyrics_panel() -> impl IntoElement {
+fn now_playing_tab_bar() -> impl IntoElement {
+    let is_up_next = move || store::now_playing_tab() == NowPlayingTab::UpNext;
+    let is_lyrics = move || store::now_playing_tab() == NowPlayingTab::Lyrics;
+    let is_related = move || store::now_playing_tab() == NowPlayingTab::Related;
+
+    tabs()
+        .w_full()
+        .flex_row()
+        .gap_1()
+        .p_1()
+        .rounded(radius_card)
+        .bg(pill_glass_surface)
+        .indicator_class("inset-y-1 rounded-lg bg-primary")
+        .accessibility_label("Now Playing panels")
+        .child(
+            tab()
+                .test_id("now-playing-tab-up-next")
+                .selected(is_up_next)
+                .on_press(|| store::set_now_playing_tab(NowPlayingTab::UpNext))
+                .flex_1()
+                .min_h(px(40.0))
+                .items_center()
+                .justify_center()
+                .rounded(move || theme().radius)
+                .child(
+                    text("UP NEXT")
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(move || {
+                            if is_up_next() {
+                                theme().primary_foreground
+                            } else {
+                                theme().muted_foreground
+                            }
+                        }),
+                ),
+        )
+        .child(
+            tab()
+                .test_id("now-playing-tab-lyrics")
+                .selected(is_lyrics)
+                .on_press(|| store::set_now_playing_tab(NowPlayingTab::Lyrics))
+                .flex_1()
+                .min_h(px(40.0))
+                .items_center()
+                .justify_center()
+                .rounded(move || theme().radius)
+                .child(
+                    text("LYRICS")
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(move || {
+                            if is_lyrics() {
+                                theme().primary_foreground
+                            } else {
+                                theme().muted_foreground
+                            }
+                        }),
+                ),
+        )
+        .child(
+            tab()
+                .test_id("now-playing-tab-related")
+                .selected(is_related)
+                .on_press(|| store::set_now_playing_tab(NowPlayingTab::Related))
+                .flex_1()
+                .min_h(px(40.0))
+                .items_center()
+                .justify_center()
+                .rounded(move || theme().radius)
+                .child(
+                    text("RELATED")
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(move || {
+                            if is_related() {
+                                theme().primary_foreground
+                            } else {
+                                theme().muted_foreground
+                            }
+                        }),
+                ),
+        )
+}
+
+fn now_playing_up_next_body() -> impl IntoElement {
+    view()
+        .flex_1()
+        .min_h(px(0.0))
+        .gap_2p5()
+        .child(setting_switch(
+            "Autoplay Radio",
+            || store::player_snapshot().queue.autoplay_radio,
+            store::set_autoplay_radio,
+        ))
+        .child(
+            virtual_list(store::queue_len, move |at| {
+                let track = computed(move || store::queue_track_at(at.index()));
+                let active =
+                    move || store::player_snapshot().queue.current_index == Some(at.index());
+                button()
+                    .w_full()
+                    .min_h(px(52.0))
+                    .px_2p5()
+                    .py_1p5()
+                    .rounded(radius_card)
+                    .style_when(active, |s| s.bg(sidebar_active_surface))
+                    .hover(|s| s.bg(pill_glass_hover))
+                    .on_press(move || store::jump_queue(at.index()))
+                    .child(
+                        view()
+                            .flex_row()
+                            .items_center()
+                            .justify_between()
+                            .gap_2p5()
+                            .w_full()
+                            .min_w(px(0.0))
+                            .child(
+                                view()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .gap_0p5()
+                                    .child(
+                                        text(move || {
+                                            track.with(|t| {
+                                                SharedString::from(
+                                                    t.as_ref()
+                                                        .map(|x| x.title.clone())
+                                                        .unwrap_or_default(),
+                                                )
+                                            })
+                                        })
+                                        .number_of_lines(1)
+                                        .text_sm()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(move || {
+                                            if active() {
+                                                color_player_accent()
+                                            } else {
+                                                theme().foreground
+                                            }
+                                        }),
+                                    )
+                                    .child(
+                                        text(move || {
+                                            track.with(|t| {
+                                                SharedString::from(
+                                                    t.as_ref()
+                                                        .map(|x| x.artist_display())
+                                                        .unwrap_or_default(),
+                                                )
+                                            })
+                                        })
+                                        .number_of_lines(1)
+                                        .text_xs()
+                                        .text_color(move || theme().muted_foreground),
+                                    ),
+                            )
+                            .child(
+                                text(move || {
+                                    track.with(|t| {
+                                        SharedString::from(
+                                            t.as_ref()
+                                                .map(|x| format_duration_ms(x.duration_ms))
+                                                .unwrap_or_default(),
+                                        )
+                                    })
+                                })
+                                .text_xs()
+                                .tabular_nums()
+                                .text_color(move || theme().muted_foreground),
+                            ),
+                    )
+            })
+            .keys(store::queue_ids)
+            .estimated_item_size(px(54.0))
+            .flex_1(),
+        )
+}
+
+fn now_playing_lyrics_body() -> impl IntoElement {
     let has_lyrics = move || store::current_lyrics().is_some_and(|d| !d.lines.is_empty());
 
     view()
         .flex_1()
-        .min_w(px(0.0))
         .min_h(px(0.0))
-        .h_full()
-        .gap_4()
-        .px_4()
-        .py_3()
-        .rounded(radius_panel)
-        .bg(pill_glass_surface)
-        .border_1()
-        .border_color(glass_hairline)
+        .gap_3()
         .child(
             view()
                 .w_full()
@@ -916,9 +1089,9 @@ fn desktop_lyrics_panel() -> impl IntoElement {
                                 format!("Synced • {}", doc.provider)
                             }
                             Some(doc) if !doc.lines.is_empty() => {
-                                format!("These lyrics aren't synced • {}", doc.provider)
+                                format!("Lyrics • {}", doc.provider)
                             }
-                            _ => "These lyrics aren't synced".into(),
+                            _ => "Lyrics unavailable".into(),
                         };
                         SharedString::from(label)
                     })
@@ -995,11 +1168,129 @@ fn desktop_lyrics_panel() -> impl IntoElement {
             .otherwise(|| {
                 view().flex_1().items_center().justify_center().p_6().child(
                     text("Lyrics will appear here when available for the active track.")
-                        .text_lg()
+                        .text_base()
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(move || theme().muted_foreground),
                 )
             }),
+        )
+}
+
+fn now_playing_related_body() -> impl IntoElement {
+    scroll().flex_1().min_h(px(0.0)).child(dynamic(|| {
+        let items = store::related_tracks();
+        if items.is_empty() {
+            return view()
+                .p_6()
+                .gap_2()
+                .items_center()
+                .justify_center()
+                .child(
+                    text("You might also like")
+                        .text_base()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(move || theme().foreground),
+                )
+                .child(
+                    text("Similar songs and recommendations appear here as tracks play.")
+                        .text_xs()
+                        .text_color(move || theme().muted_foreground),
+                )
+                .into_element();
+        }
+        view()
+            .gap_1p5()
+            .child(
+                text("You might also like")
+                    .px_2()
+                    .pb_1()
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(move || theme().muted_foreground),
+            )
+            .children(items.into_iter().map(|t| {
+                let t_play = t.clone();
+                let t_next = t.clone();
+                let mono = t.fallback_monogram();
+                let art_url = t.artwork_url.clone();
+                let title = t.title.clone();
+                let artist = t.artist_display();
+                let dur = format_duration_ms(t.duration_ms);
+                view()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .py_1p5()
+                    .rounded(radius_card)
+                    .hover(|s| s.bg(pill_glass_hover))
+                    .child(
+                        button()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                            .flex_row()
+                            .items_center()
+                            .gap_2p5()
+                            .on_press(move || store::play_track(t_play.clone()))
+                            .child(artwork_box(art_url, mono, 42.0, 6.0))
+                            .child(
+                                view()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .gap_0p5()
+                                    .child(
+                                        text(title)
+                                            .number_of_lines(1)
+                                            .text_sm()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(move || theme().foreground),
+                                    )
+                                    .child(
+                                        text(format!("{artist} • {dur}"))
+                                            .number_of_lines(1)
+                                            .text_xs()
+                                            .tabular_nums()
+                                            .text_color(move || theme().muted_foreground),
+                                    ),
+                            ),
+                    )
+                    .child(svg_icon_button(
+                        IconKind::Plus,
+                        15.0,
+                        MOBILE_MIN_TOUCH_TARGET,
+                        "Play Next",
+                        true,
+                        move || theme().muted_foreground,
+                        move || store::play_next(t_next.clone()),
+                    ))
+            }))
+            .into_element()
+    }))
+}
+
+fn desktop_now_playing_right_panel() -> impl IntoElement {
+    let is_up_next = move || store::now_playing_tab() == NowPlayingTab::UpNext;
+    let is_lyrics = move || store::now_playing_tab() == NowPlayingTab::Lyrics;
+
+    view()
+        .flex_1()
+        .min_w(px(0.0))
+        .min_h(px(0.0))
+        .h_full()
+        .gap_4()
+        .px_4()
+        .py_3()
+        .rounded(radius_panel)
+        .bg(pill_glass_surface)
+        .border_1()
+        .border_color(glass_hairline)
+        .child(now_playing_tab_bar())
+        .child(
+            when(is_up_next, now_playing_up_next_body)
+                .otherwise(move || {
+                    when(is_lyrics, now_playing_lyrics_body).otherwise(now_playing_related_body)
+                }),
         )
 }
 
@@ -1039,8 +1330,165 @@ fn desktop_now_playing() -> impl IntoElement {
                             .child(volume_strip(true)),
                     ),
                 )
-                .child(desktop_lyrics_panel()),
+                .child(desktop_now_playing_right_panel()),
         )
+}
+
+fn mobile_now_playing_tabs_card() -> impl IntoElement {
+    view()
+        .w_full()
+        .p_3()
+        .gap_3()
+        .rounded(radius_panel)
+        .bg(frosted_card_surface)
+        .border_1()
+        .border_color(glass_hairline)
+        .child(now_playing_tab_bar())
+        .child(dynamic(|| match store::now_playing_tab() {
+            NowPlayingTab::UpNext => {
+                let snap = store::player_snapshot();
+                let cur_idx = snap.queue.current_index;
+                let items = snap.queue.items;
+                view()
+                    .gap_2()
+                    .child(setting_switch(
+                        "Autoplay Radio",
+                        || store::player_snapshot().queue.autoplay_radio,
+                        store::set_autoplay_radio,
+                    ))
+                    .children(items.into_iter().enumerate().take(6).map(|(idx, t)| {
+                        let active = cur_idx == Some(idx);
+                        let title = t.title.clone();
+                        let artist = t.artist_display();
+                        let dur = format_duration_ms(t.duration_ms);
+                        button()
+                            .w_full()
+                            .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                            .px_2p5()
+                            .py_1p5()
+                            .rounded(radius_card)
+                            .when(active, |b| b.bg(sidebar_active_surface))
+                            .hover(|s| s.bg(pill_glass_hover))
+                            .on_press(move || store::jump_queue(idx))
+                            .child(
+                                view()
+                                    .flex_row()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap_2()
+                                    .child(
+                                        view()
+                                            .flex_1()
+                                            .min_w(px(0.0))
+                                            .child(
+                                                text(title)
+                                                    .number_of_lines(1)
+                                                    .text_sm()
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .text_color(move || {
+                                                        if active {
+                                                            color_player_accent()
+                                                        } else {
+                                                            theme().foreground
+                                                        }
+                                                    }),
+                                            )
+                                            .child(
+                                                text(artist)
+                                                    .number_of_lines(1)
+                                                    .text_xs()
+                                                    .text_color(move || theme().muted_foreground),
+                                            ),
+                                    )
+                                    .child(
+                                        text(dur)
+                                            .text_xs()
+                                            .tabular_nums()
+                                            .text_color(move || theme().muted_foreground),
+                                    ),
+                            )
+                    }))
+                    .child(secondary_button("Up Next Queue", || {
+                        store::set_tab(AppTab::Queue)
+                    }))
+                    .into_element()
+            }
+            NowPlayingTab::Lyrics => {
+                let preview_lines: Vec<String> = store::current_lyrics()
+                    .map(|d| d.lines.into_iter().take(6).map(|l| l.text).collect())
+                    .unwrap_or_default();
+                let mut col = view().gap_2();
+                if preview_lines.is_empty() {
+                    col = col.child(
+                        text("Lyrics will appear here when available for the active track.")
+                            .text_sm()
+                            .text_color(move || theme().muted_foreground),
+                    );
+                } else {
+                    for line in preview_lines {
+                        col = col.child(
+                            text(line)
+                                .text_base()
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(move || theme().foreground),
+                        );
+                    }
+                }
+                col.into_element()
+            }
+            NowPlayingTab::Related => {
+                let items = store::related_tracks();
+                if items.is_empty() {
+                    return text("Similar songs appear here once loaded for the active track.")
+                        .text_sm()
+                        .text_color(move || theme().muted_foreground)
+                        .into_element();
+                }
+                view()
+                    .gap_1p5()
+                    .children(items.into_iter().take(6).map(|t| {
+                        let t_play = t.clone();
+                        let mono = t.fallback_monogram();
+                        let art_url = t.artwork_url.clone();
+                        let title = t.title.clone();
+                        let artist = t.artist_display();
+                        button()
+                            .w_full()
+                            .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                            .px_2()
+                            .py_1p5()
+                            .rounded(radius_card)
+                            .hover(|s| s.bg(pill_glass_hover))
+                            .on_press(move || store::play_track(t_play.clone()))
+                            .child(
+                                view()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap_2p5()
+                                    .child(artwork_box(art_url, mono, 40.0, 6.0))
+                                    .child(
+                                        view()
+                                            .flex_1()
+                                            .min_w(px(0.0))
+                                            .child(
+                                                text(title)
+                                                    .number_of_lines(1)
+                                                    .text_sm()
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .text_color(move || theme().foreground),
+                                            )
+                                            .child(
+                                                text(artist)
+                                                    .number_of_lines(1)
+                                                    .text_xs()
+                                                    .text_color(move || theme().muted_foreground),
+                                            ),
+                                    ),
+                            )
+                    }))
+                    .into_element()
+            }
+        }))
 }
 
 fn mobile_now_playing() -> impl IntoElement {
@@ -1058,6 +1506,7 @@ fn mobile_now_playing() -> impl IntoElement {
             .child(transport_bar())
             .child(volume_strip(false))
             .child(sponsorblock_badge())
+            .child(mobile_now_playing_tabs_card())
             .child(
                 view()
                     .w_full()

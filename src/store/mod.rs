@@ -47,7 +47,7 @@ pub use playback_actions::*;
 pub use playback_slice::{AudioDriverSnapshot, PlaybackSlice, ShortcutAction, map_shortcut_key};
 pub use rooms_slice::{ListenTogetherSubMode, RoomsSlice};
 pub use settings_slice::{AudioDspCapability, SettingsSlice, ThemeChoice};
-pub use ui_slice::{AppTab, DesktopSidePanel, UiSlice};
+pub use ui_slice::{AppTab, DesktopSidePanel, NowPlayingTab, UiSlice};
 pub use updater_slice::UpdaterSlice;
 
 /// Isolated Cast discovery and active-session state slice.
@@ -88,16 +88,19 @@ pub fn proxy_stream_url(video_id: &str) -> String {
         .read()
         .map(|g| g.clone())
         .unwrap_or_else(|_| "http://127.0.0.1:0".to_owned());
+    if video_id.starts_with("local:") {
+        return format!("{base}/local/{video_id}");
+    }
     let itag = if is_fixture_mode() {
         251
     } else {
-        #[cfg(target_os = "android")]
-        {
-            251
-        }
-        #[cfg(not(target_os = "android"))]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
             140
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        {
+            251
         }
     };
     format!("{base}/stream/{video_id}?itag={itag}")
@@ -231,6 +234,7 @@ pub fn mount_live_engine_bridge() {
     }
     live_engine::dispatch(EngineCommand::LoadHome);
     live_engine::dispatch(EngineCommand::LoadExplore);
+    live_engine::dispatch(EngineCommand::LoadLocalMedia);
     spawn(async {
         let mut sleep_tick_accum: u8 = 0;
         loop {
@@ -259,6 +263,7 @@ fn apply_live_update(update: LiveUpdate) {
             snapshot,
             cache_stats,
             signed_in,
+            dsp_capability,
         } => {
             set_proxy_base_url(proxy_base_url);
             playback_signal().update(|p| {
@@ -269,13 +274,47 @@ fn apply_live_update(update: LiveUpdate) {
             library_signal().update(|l| l.cache_stats = cache_stats);
             settings_signal().update(|s| {
                 s.signed_in = signed_in;
+                s.set_dsp_capability(dsp_capability);
                 if signed_in && s.account_name.is_none() {
                     s.account_name = Some("Google Account (SAPISIDHASH)".into());
                 }
             });
         }
         LiveUpdate::HomeLoaded(res) => {
+            if let Ok(ref sections) = res {
+                let home_tracks: Vec<_> = sections
+                    .iter()
+                    .flat_map(|s| s.items.iter())
+                    .filter_map(|i| match i {
+                        resonance_contract::HomeItem::Track(t) => Some(t.clone()),
+                        _ => None,
+                    })
+                    .take(50)
+                    .collect();
+                crate::platform::android::update_android_auto_tab("tab_home", home_tracks);
+            }
             catalog_signal().update(|c| c.apply_home_loaded(res));
+        }
+        LiveUpdate::HomeMoodLoaded {
+            mood,
+            chips,
+            result,
+        } => {
+            if mood.is_none()
+                && let Ok(ref sections) = result
+            {
+                let home_tracks: Vec<_> = sections
+                    .iter()
+                    .flat_map(|s| s.items.iter())
+                    .filter_map(|i| match i {
+                        resonance_contract::HomeItem::Track(t) => Some(t.clone()),
+                        _ => None,
+                    })
+                    .take(50)
+                    .collect();
+                crate::platform::android::update_android_auto_tab("tab_home", home_tracks);
+            }
+            catalog_signal().update(|c| c.apply_home_mood_loaded(mood, chips, result));
         }
         LiveUpdate::ExplorePageLoaded(res) => {
             catalog_signal().update(|c| c.apply_explore_page(res));
@@ -286,6 +325,15 @@ fn apply_live_update(update: LiveUpdate) {
             result,
         } => {
             catalog_signal().update(|c| c.apply_mood_playlists_gen(generation, Some(mood), result));
+        }
+        LiveUpdate::AlbumEntityLoaded { generation, result } => {
+            catalog_signal().update(|c| c.apply_album_loaded_gen(generation, result));
+        }
+        LiveUpdate::ArtistEntityLoaded { generation, result } => {
+            catalog_signal().update(|c| c.apply_artist_loaded_gen(generation, result));
+        }
+        LiveUpdate::RelatedTracksLoaded { video_id, tracks } => {
+            set_related_tracks(video_id, tracks);
         }
         LiveUpdate::SearchLoaded {
             generation,
@@ -325,6 +373,10 @@ fn apply_live_update(update: LiveUpdate) {
             }
         },
         LiveUpdate::PlaybackUpdated(mut snapshot) => {
+            crate::platform::android::update_android_auto_tab(
+                "tab_queue",
+                snapshot.queue.tracks.clone(),
+            );
             // `PlaybackController` is authoritative in live mode; only preserve UI-owned offline_mode.
             playback_signal().update(|p| {
                 snapshot.offline_mode = p.player.offline_mode;
@@ -355,6 +407,22 @@ fn apply_live_update(update: LiveUpdate) {
         LiveUpdate::AccountProfileUpdated(profile) => {
             settings_signal().update(|s| s.apply_account_profile(profile));
         }
+        LiveUpdate::TvOAuthDeviceCode {
+            user_code,
+            verification_url,
+            expires_in_secs,
+        } => {
+            settings_signal().update(|s| {
+                s.apply_tv_oauth_device_code(user_code, verification_url, expires_in_secs);
+            });
+        }
+        LiveUpdate::TvOAuthStatus(status) => {
+            settings_signal().update(|s| s.apply_tv_oauth_status(status));
+        }
+        LiveUpdate::TvOAuthCompleted { ok, message } => {
+            settings_signal().update(|s| s.apply_tv_oauth_completed(ok, message.clone()));
+            ui_signal().update(|u| u.set_status_banner(message));
+        }
         LiveUpdate::RemoteConfigUpdated(status) => {
             settings_signal().update(|s| s.apply_remote_config_status(status));
         }
@@ -377,22 +445,50 @@ fn apply_live_update(update: LiveUpdate) {
             ui_signal().update(|u| u.set_status_banner(format!("Action failed: {reason}")));
         }
         LiveUpdate::DownloadsLoaded(records) => {
+            crate::platform::android::update_android_auto_tab(
+                "tab_downloads",
+                records
+                    .iter()
+                    .filter(|r| r.status == resonance_contract::DownloadStatus::Completed)
+                    .map(|r| r.track.clone())
+                    .collect(),
+            );
             library_signal().update(|l| l.set_downloads(records));
         }
         LiveUpdate::DownloadUpdated(record) => {
             library_signal().update(|l| {
                 l.downloads.insert(record.video_id.clone(), record);
             });
+            let completed: Vec<_> = library_signal().with(|l| {
+                l.downloads
+                    .values()
+                    .filter(|r| r.status == resonance_contract::DownloadStatus::Completed)
+                    .map(|r| r.track.clone())
+                    .collect()
+            });
+            crate::platform::android::update_android_auto_tab("tab_downloads", completed);
         }
         LiveUpdate::DownloadRemoved(video_id) => {
             library_signal().update(|l| {
                 l.downloads.remove(&video_id);
             });
+            let completed: Vec<_> = library_signal().with(|l| {
+                l.downloads
+                    .values()
+                    .filter(|r| r.status == resonance_contract::DownloadStatus::Completed)
+                    .map(|r| r.track.clone())
+                    .collect()
+            });
+            crate::platform::android::update_android_auto_tab("tab_downloads", completed);
         }
         LiveUpdate::PinnedCollectionsLoaded(list) => {
             library_signal().update(|l| l.pinned_collections = list);
         }
         LiveUpdate::LibraryLoaded(snapshot) => {
+            crate::platform::android::update_android_auto_tab(
+                "tab_library",
+                snapshot.liked_tracks.clone(),
+            );
             playback_signal().update(|p| {
                 library_signal().update(|l| {
                     l.apply_snapshot(snapshot, p.player.current_track.as_mut());
@@ -402,12 +498,14 @@ fn apply_live_update(update: LiveUpdate) {
         LiveUpdate::SettingsLoaded(settings) => {
             let mut loaded_theme = ThemeChoice::System;
             let mut loaded_volume = 1.0_f32;
+            let mut loaded_dsp = resonance_core::audio_dsp::DspConfig::default();
             settings_signal().update(|s| {
                 playback_signal().update(|p| {
                     s.apply_persisted_settings(&settings, p);
                     loaded_volume = p.player.volume;
                 });
                 loaded_theme = s.theme_choice;
+                loaded_dsp = s.dsp_config.clone();
             });
             let channel = if settings.update_channel.eq_ignore_ascii_case("beta") {
                 UpdateChannel::Beta
@@ -437,7 +535,61 @@ fn apply_live_update(update: LiveUpdate) {
                     preserve_pitch: settings.preserve_pitch,
                 });
                 live_engine::dispatch(EngineCommand::SetAtrSync(settings.atr_watchtime_sync));
+                live_engine::dispatch(EngineCommand::UpdateDsp(loaded_dsp));
             }
+        }
+        LiveUpdate::LocalMediaLoaded { roots, tracks } => {
+            local_media_signal().update(|m| {
+                m.roots = roots;
+                m.tracks = tracks;
+                m.scan_progress.scanning = false;
+            });
+        }
+        LiveUpdate::LocalScanProgressUpdated(progress) => {
+            local_media_signal().update(|m| {
+                m.scan_progress = progress;
+            });
+        }
+        LiveUpdate::RoomSnapshotUpdated(snapshot) => {
+            rooms_signal().update(|r| match snapshot {
+                Some(snap) => r.set_room_snapshot(snap),
+                None => r.leave_room(),
+            });
+        }
+        LiveUpdate::RoomVoteSkipUpdated {
+            votes,
+            threshold,
+            skipped,
+        } => {
+            rooms_signal().update(|r| r.set_vote_skip_status(votes, threshold, true));
+            if skipped {
+                ui_signal().update(|u| u.set_status_banner("Vote skip passed — skipping track"));
+            }
+        }
+        LiveUpdate::RoomReactionReceived(emoji) => {
+            rooms_signal().update(|r| r.add_reaction(emoji));
+        }
+        LiveUpdate::CastDevicesUpdated(devices) => {
+            cast_signal().update(|c| c.devices = devices);
+        }
+        LiveUpdate::CastSessionUpdated(session) => {
+            cast_signal().update(|c| c.session = session);
+        }
+        LiveUpdate::UpdaterPhaseUpdated(phase) => {
+            let now = resonance_core::unix_secs();
+            updater_signal().update(|u| match phase {
+                resonance_contract::UpdatePhase::Available(info) => {
+                    u.mark_available(info, now);
+                }
+                resonance_contract::UpdatePhase::UpToDate {
+                    checked_at_unix_secs,
+                } => {
+                    u.mark_up_to_date(checked_at_unix_secs);
+                }
+                other => {
+                    u.phase = other;
+                }
+            });
         }
         LiveUpdate::StatusBanner(msg) => {
             ui_signal().update(|u| u.set_status_banner(msg));

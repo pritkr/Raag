@@ -413,7 +413,13 @@ fn lyrics_header(has_lyrics: impl Fn() -> bool + Copy + 'static) -> impl IntoEle
                             text(move || {
                                 SharedString::from(
                                     store::current_lyrics()
-                                        .map(|d| format!("Synced • {}", d.provider))
+                                        .map(|d| {
+                                            if d.sync_kind == LyricSyncKind::Plain {
+                                                format!("Lyrics • {}", d.provider)
+                                            } else {
+                                                format!("Synced • {}", d.provider)
+                                            }
+                                        })
                                         .unwrap_or_else(|| "No lyrics loaded".into()),
                                 )
                             })
@@ -438,6 +444,9 @@ fn lyrics_header(has_lyrics: impl Fn() -> bool + Copy + 'static) -> impl IntoEle
                                 let total = d.lines.len();
                                 match d.active_line_index(pos) {
                                     Some(i) => format!("Line {} / {}", i + 1, total),
+                                    None if d.sync_kind == LyricSyncKind::Plain => {
+                                        format!("{total} lines")
+                                    }
                                     None => format!("{total} timed lines"),
                                 }
                             })
@@ -453,7 +462,14 @@ fn lyrics_header(has_lyrics: impl Fn() -> bool + Copy + 'static) -> impl IntoEle
                 .child(
                     view()
                         .flex_row()
+                        .items_center()
                         .gap_2()
+                        .child(
+                            text("Seek")
+                                .text_xs()
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(move || theme().muted_foreground),
+                        )
                         .child(secondary_button("-5s", || {
                             let pos = store::player_snapshot().position_ms;
                             store::seek_ms(pos.saturating_sub(5_000));

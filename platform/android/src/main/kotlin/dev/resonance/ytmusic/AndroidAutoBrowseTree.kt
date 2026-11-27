@@ -26,7 +26,7 @@ object AndroidAutoBrowseTree {
 
     fun rootItem(): MediaItem {
         val meta = MediaMetadata.Builder()
-            .setTitle("Resonance")
+            .setTitle("Raag")
             .setIsBrowsable(true)
             .setIsPlayable(false)
             .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)

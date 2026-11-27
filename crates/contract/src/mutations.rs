@@ -11,6 +11,33 @@ pub enum LikeAction {
     RemoveLike,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum PlaylistPrivacy {
+    #[default]
+    Private,
+    Unlisted,
+    Public,
+}
+
+impl PlaylistPrivacy {
+    pub fn as_innertube_str(self) -> &'static str {
+        match self {
+            Self::Private => "PRIVATE",
+            Self::Unlisted => "UNLISTED",
+            Self::Public => "PUBLIC",
+        }
+    }
+
+    pub fn from_label(label: &str) -> Self {
+        match label.trim().to_ascii_lowercase().as_str() {
+            "public" => Self::Public,
+            "unlisted" => Self::Unlisted,
+            _ => Self::Private,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PlaylistEditOp {
     AddVideo {
@@ -23,6 +50,11 @@ pub enum PlaylistEditOp {
     MoveVideoBefore {
         set_video_id: String,
         predecessor_set_video_id: Option<String>,
+    },
+    Rename {
+        title: String,
+        #[serde(default)]
+        description: Option<String>,
     },
 }
 
@@ -47,6 +79,16 @@ pub enum MutationCommand {
     EditPlaylist {
         playlist_id: String,
         op: PlaylistEditOp,
+    },
+    CreatePlaylist {
+        local_temp_id: String,
+        title: String,
+        description: String,
+        privacy: PlaylistPrivacy,
+        initial_video_ids: Vec<TrackId>,
+    },
+    DeletePlaylist {
+        playlist_id: String,
     },
 }
 
@@ -87,4 +129,22 @@ pub trait InnerTubeMutations: Send + Sync {
         playlist_id: &str,
         op: &PlaylistEditOp,
     ) -> Result<MutationReceipt, MutationError>;
+
+    async fn create_playlist(
+        &self,
+        _title: &str,
+        _description: &str,
+        _privacy: PlaylistPrivacy,
+        _initial_video_ids: &[TrackId],
+    ) -> Result<MutationReceipt, MutationError> {
+        Err(MutationError::InvalidInput(
+            "create_playlist not implemented by provider".to_owned(),
+        ))
+    }
+
+    async fn delete_playlist(&self, _playlist_id: &str) -> Result<MutationReceipt, MutationError> {
+        Err(MutationError::InvalidInput(
+            "delete_playlist not implemented by provider".to_owned(),
+        ))
+    }
 }

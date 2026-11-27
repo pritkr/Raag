@@ -15,13 +15,15 @@ pub mod lan_relay;
 pub mod local_route;
 
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use bytes::Bytes;
 use http_body_util::Full;
-use hyper::body::Incoming;
+use hyper::body::{Body, Frame, Incoming, SizeHint};
 use hyper::header::{ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, RANGE};
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
@@ -31,7 +33,7 @@ use resonance_contract::{
 };
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::net::TcpListener;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::cache::artwork::ArtworkCache;
 use crate::cache::chunks::{CHUNK_SIZE, ChunkCache};
@@ -44,6 +46,61 @@ pub use coalesce::{AlignedWindow, ChunkCoalescer, ChunkKey, coalesce_byte_range}
 
 /// Maximum contiguous aligned chunks fetched in a single coalesced upstream range request.
 const MAX_COALESCED_WINDOW_CHUNKS: u64 = 4;
+/// Bounded in-flight chunk frames per active streaming response (~1 MB max RAM per stream).
+const STREAM_CHANNEL_CAPACITY: usize = 4;
+
+/// Streaming-capable HTTP body for [`LoopbackProxy`] responses:
+/// - `Full` for small metadata, artwork, HEAD, errors, and single-chunk ranges.
+/// - `Stream` for multi-chunk audio and offline files so byte 0 flushes immediately.
+enum ProxyBody {
+    Full(Full<Bytes>),
+    Stream {
+        rx: mpsc::Receiver<Result<Bytes, std::io::Error>>,
+        remaining: u64,
+    },
+}
+
+impl Body for ProxyBody {
+    type Data = Bytes;
+    type Error = std::io::Error;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+        match self.get_mut() {
+            ProxyBody::Full(full) => match Pin::new(full).poll_frame(cx) {
+                Poll::Ready(Some(Ok(frame))) => Poll::Ready(Some(Ok(frame))),
+                Poll::Ready(Some(Err(infallible))) => match infallible {},
+                Poll::Ready(None) => Poll::Ready(None),
+                Poll::Pending => Poll::Pending,
+            },
+            ProxyBody::Stream { rx, remaining } => match rx.poll_recv(cx) {
+                Poll::Ready(Some(Ok(bytes))) => {
+                    *remaining = remaining.saturating_sub(bytes.len() as u64);
+                    Poll::Ready(Some(Ok(Frame::data(bytes))))
+                }
+                Poll::Ready(Some(Err(err))) => Poll::Ready(Some(Err(err))),
+                Poll::Ready(None) => Poll::Ready(None),
+                Poll::Pending => Poll::Pending,
+            },
+        }
+    }
+
+    fn is_end_stream(&self) -> bool {
+        match self {
+            ProxyBody::Full(full) => full.is_end_stream(),
+            ProxyBody::Stream { remaining, .. } => *remaining == 0,
+        }
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        match self {
+            ProxyBody::Full(full) => full.size_hint(),
+            ProxyBody::Stream { remaining, .. } => SizeHint::with_exact(*remaining),
+        }
+    }
+}
 
 pub struct LoopbackProxy {
     addr: SocketAddr,
@@ -412,10 +469,10 @@ async fn handle_artwork_request(
 async fn handle_request(
     req: Request<Incoming>,
     state: Arc<ProxyState>,
-) -> Result<Response<Full<Bytes>>, hyper::Error> {
+) -> Result<Response<ProxyBody>, hyper::Error> {
     let path = req.uri().path();
     if path == "/artwork" {
-        return Ok(handle_artwork_request(req, state).await);
+        return Ok(handle_artwork_request(req, state).await.map(ProxyBody::Full));
     }
     if path.starts_with("/local/") || path.starts_with("/local-art/") {
         let local_store = state.local_store.read().unwrap().clone();
@@ -423,15 +480,18 @@ async fn handle_request(
             local_route::handle_local_request(&req, local_store.as_ref(), state.artwork.as_ref())
                 .await
         {
-            return Ok(resp);
+            return Ok(resp.map(ProxyBody::Full));
         }
     }
     let Some(video_id_raw) = path.strip_prefix("/stream/") else {
-        return Ok(simple_response(StatusCode::NOT_FOUND, "not found"));
+        return Ok(simple_proxy_response(StatusCode::NOT_FOUND, "not found"));
     };
     let video_id = video_id_raw.strip_suffix(".m4a").unwrap_or(video_id_raw);
     if validate_video_id(video_id).is_err() {
-        return Ok(simple_response(StatusCode::BAD_REQUEST, "invalid video_id"));
+        return Ok(simple_proxy_response(
+            StatusCode::BAD_REQUEST,
+            "invalid video_id",
+        ));
     }
 
     let mut requested_itag: u32 = 251;
@@ -452,7 +512,7 @@ async fn handle_request(
     if let Some(g) = request_gen
         && g < state.active_generation.load(Ordering::SeqCst)
     {
-        return Ok(simple_response(
+        return Ok(simple_proxy_response(
             StatusCode::CONFLICT,
             "cancelled: superseded track generation",
         ));
@@ -502,7 +562,7 @@ async fn handle_request(
                     stream_info = Some(info);
                 }
                 Err(e) => {
-                    return Ok(simple_response(
+                    return Ok(simple_proxy_response(
                         StatusCode::BAD_GATEWAY,
                         &format!("resolve failed: {e}"),
                     ));
@@ -510,7 +570,7 @@ async fn handle_request(
             }
         }
         let Some(info) = stream_info.as_ref() else {
-            return Ok(simple_response(
+            return Ok(simple_proxy_response(
                 StatusCode::BAD_GATEWAY,
                 "missing stream info",
             ));
@@ -522,7 +582,7 @@ async fn handle_request(
                 Ok((_, detected_total)) if detected_total > 0 => detected_total,
                 Ok((bytes, _)) => bytes.len() as u64,
                 Err(e) => {
-                    return Ok(simple_response(
+                    return Ok(simple_proxy_response(
                         StatusCode::BAD_GATEWAY,
                         &format!("upstream error: {e}"),
                     ));
@@ -533,7 +593,10 @@ async fn handle_request(
     };
 
     if total_len == 0 {
-        return Ok(simple_response(StatusCode::BAD_GATEWAY, "empty stream"));
+        return Ok(simple_proxy_response(
+            StatusCode::BAD_GATEWAY,
+            "empty stream",
+        ));
     }
 
     let clean_mime = mime_type
@@ -550,12 +613,14 @@ async fn handle_request(
                 return Ok(Response::builder()
                     .status(StatusCode::RANGE_NOT_SATISFIABLE)
                     .header(CONTENT_RANGE, format!("bytes */{total_len}"))
-                    .body(Full::new(Bytes::new()))
+                    .body(ProxyBody::Full(Full::new(Bytes::new())))
                     .unwrap());
             }
         },
         None => (0, total_len.saturating_sub(1), false),
     };
+
+    let content_len = req_end - req_start + 1;
 
     if is_head {
         let mut builder = Response::builder()
@@ -566,80 +631,158 @@ async fn handle_request(
             })
             .header(ACCEPT_RANGES, "bytes")
             .header(CONTENT_TYPE, &clean_mime)
-            .header(CONTENT_LENGTH, req_end - req_start + 1);
+            .header(CONTENT_LENGTH, content_len);
         if is_partial {
             builder = builder.header(
                 CONTENT_RANGE,
                 format!("bytes {req_start}-{req_end}/{total_len}"),
             );
         }
-        return Ok(builder.body(Full::new(Bytes::new())).unwrap());
+        return Ok(builder
+            .body(ProxyBody::Full(Full::new(Bytes::new())))
+            .unwrap());
     }
 
-    let effective_end = req_end;
     let windows = coalesce_byte_range(
         req_start,
-        effective_end,
+        req_end,
         total_len,
         MAX_COALESCED_WINDOW_CHUNKS,
     );
-    let mut out = Vec::with_capacity((effective_end - req_start + 1) as usize);
+    let chunk_indices: Vec<u64> = windows
+        .into_iter()
+        .flat_map(|w| w.first_chunk..=w.last_chunk)
+        .collect();
+    let Some(&first_chunk_idx) = chunk_indices.first() else {
+        return Ok(simple_proxy_response(
+            StatusCode::BAD_GATEWAY,
+            "empty chunk range",
+        ));
+    };
 
-    for win in windows {
-        for chunk_idx in win.first_chunk..=win.last_chunk {
-            if let Some(g) = request_gen
-                && g < state.active_generation.load(Ordering::SeqCst)
-            {
-                return Ok(simple_response(
-                    StatusCode::CONFLICT,
-                    "cancelled: superseded track generation",
-                ));
-            }
-            let chunk_bytes =
-                match fetch_chunk_with_403_recovery(&state, video_id, itag, chunk_idx).await {
-                    Ok((bytes, _)) => bytes,
-                    Err(e) => {
-                        return Ok(simple_response(
-                            StatusCode::BAD_GATEWAY,
-                            &format!("chunk fetch failed: {e}"),
-                        ));
-                    }
-                };
-
-            let chunk_global_start = chunk_idx * CHUNK_SIZE;
-            let slice_start = req_start.saturating_sub(chunk_global_start) as usize;
-            let slice_end = ((effective_end + 1).saturating_sub(chunk_global_start) as usize)
-                .min(chunk_bytes.len());
-
-            if slice_start < slice_end {
-                out.extend_from_slice(&chunk_bytes[slice_start..slice_end]);
-            }
-        }
+    if let Some(g) = request_gen
+        && g < state.active_generation.load(Ordering::SeqCst)
+    {
+        return Ok(simple_proxy_response(
+            StatusCode::CONFLICT,
+            "cancelled: superseded track generation",
+        ));
     }
 
-    let actual_end = req_start + (out.len() as u64).saturating_sub(1);
+    // Eagerly fetch the first chunk before writing HTTP headers so 403/502/409 errors return
+    // clean HTTP status codes while still flushing byte 0 immediately without buffering the song.
+    let first_bytes = match fetch_chunk_with_403_recovery(&state, video_id, itag, first_chunk_idx).await {
+        Ok((bytes, _)) => bytes,
+        Err(e) => {
+            return Ok(simple_proxy_response(
+                StatusCode::BAD_GATEWAY,
+                &format!("chunk fetch failed: {e}"),
+            ));
+        }
+    };
+    let first_slice = slice_chunk_bytes(&first_bytes, first_chunk_idx, req_start, req_end);
+
     let mut builder = Response::builder()
         .header(CONTENT_TYPE, &clean_mime)
-        .header(ACCEPT_RANGES, "bytes")
-        .header(CONTENT_LENGTH, out.len().to_string());
+        .header(ACCEPT_RANGES, "bytes");
 
-    if is_partial || actual_end < total_len - 1 {
+    if chunk_indices.len() == 1 {
+        let actual_len = first_slice.len() as u64;
+        let actual_end = req_start + actual_len.saturating_sub(1);
+        builder = builder.header(CONTENT_LENGTH, actual_len.to_string());
+        if is_partial || actual_end < total_len - 1 {
+            builder = builder.status(StatusCode::PARTIAL_CONTENT).header(
+                CONTENT_RANGE,
+                format!("bytes {req_start}-{actual_end}/{total_len}"),
+            );
+        } else {
+            builder = builder.status(StatusCode::OK);
+        }
+        return Ok(builder
+            .body(ProxyBody::Full(Full::new(first_slice)))
+            .unwrap_or_else(|_| {
+                simple_proxy_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "invalid proxy response headers",
+                )
+            }));
+    }
+
+    builder = builder.header(CONTENT_LENGTH, content_len.to_string());
+    if is_partial || req_end < total_len - 1 {
         builder = builder.status(StatusCode::PARTIAL_CONTENT).header(
             CONTENT_RANGE,
-            format!("bytes {req_start}-{actual_end}/{total_len}"),
+            format!("bytes {req_start}-{req_end}/{total_len}"),
         );
     } else {
         builder = builder.status(StatusCode::OK);
     }
 
+    let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(STREAM_CHANNEL_CAPACITY);
+    if !first_slice.is_empty() {
+        let _ = tx.try_send(Ok(first_slice));
+    }
+    let rest_chunks = chunk_indices[1..].to_vec();
+    let stream_state = state.clone();
+    let video_id_owned = video_id.to_owned();
+    tokio::spawn(async move {
+        for chunk_idx in rest_chunks {
+            if let Some(g) = request_gen
+                && g < stream_state.active_generation.load(Ordering::SeqCst)
+            {
+                let _ = tx
+                    .send(Err(std::io::Error::new(
+                        std::io::ErrorKind::Interrupted,
+                        "cancelled: superseded track generation",
+                    )))
+                    .await;
+                break;
+            }
+            match fetch_chunk_with_403_recovery(&stream_state, &video_id_owned, itag, chunk_idx)
+                .await
+            {
+                Ok((bytes, _)) => {
+                    let slice = slice_chunk_bytes(&bytes, chunk_idx, req_start, req_end);
+                    if !slice.is_empty() && tx.send(Ok(slice)).await.is_err() {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    let _ = tx
+                        .send(Err(std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            format!("chunk fetch failed: {e}"),
+                        )))
+                        .await;
+                    break;
+                }
+            }
+        }
+    });
+
     Ok(builder
-        .body(Full::new(Bytes::from(out)))
+        .body(ProxyBody::Stream {
+            rx,
+            remaining: content_len,
+        })
         .unwrap_or_else(|_| {
-            simple_response(
+            simple_proxy_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "invalid proxy response headers",
             )
         }))
+}
+
+fn slice_chunk_bytes(chunk_bytes: &[u8], chunk_idx: u64, req_start: u64, req_end: u64) -> Bytes {
+    let chunk_global_start = chunk_idx * CHUNK_SIZE;
+    let slice_start = req_start.saturating_sub(chunk_global_start) as usize;
+    let slice_end =
+        ((req_end + 1).saturating_sub(chunk_global_start) as usize).min(chunk_bytes.len());
+    if slice_start < slice_end {
+        Bytes::copy_from_slice(&chunk_bytes[slice_start..slice_end])
+    } else {
+        Bytes::new()
+    }
 }
 
 /// Fetches a 256 KB chunk from `ChunkCache` first; on cache miss collapses concurrent
@@ -760,12 +903,12 @@ async fn fetch_chunk_with_403_recovery(
 }
 
 async fn try_serve_offline_file(
-    state: &ProxyState,
+    state: &Arc<ProxyState>,
     video_id: &str,
     range_header: Option<&str>,
     request_gen: Option<u64>,
     is_head: bool,
-) -> Option<Response<Full<Bytes>>> {
+) -> Option<Response<ProxyBody>> {
     let offline = state.offline.as_ref()?;
     let rec = offline.get_completed_download(video_id).ok().flatten()?;
     let rel_path = rec.relative_path.as_deref()?;
@@ -815,13 +958,15 @@ async fn try_serve_offline_file(
                     Response::builder()
                         .status(StatusCode::RANGE_NOT_SATISFIABLE)
                         .header(CONTENT_RANGE, format!("bytes */{file_len}"))
-                        .body(Full::new(Bytes::new()))
+                        .body(ProxyBody::Full(Full::new(Bytes::new())))
                         .unwrap(),
                 );
             }
         },
         None => (0, file_len.saturating_sub(1), false),
     };
+
+    let total_to_read = req_end - req_start + 1;
 
     if is_head {
         let mut builder = Response::builder()
@@ -832,7 +977,7 @@ async fn try_serve_offline_file(
             })
             .header(CONTENT_TYPE, rec.mime_type)
             .header(ACCEPT_RANGES, "bytes")
-            .header(CONTENT_LENGTH, (req_end - req_start + 1).to_string())
+            .header(CONTENT_LENGTH, total_to_read.to_string())
             .header("X-Resonance-Source", "offline-disk");
         if is_partial {
             builder = builder.header(
@@ -840,7 +985,11 @@ async fn try_serve_offline_file(
                 format!("bytes {req_start}-{req_end}/{file_len}"),
             );
         }
-        return Some(builder.body(Full::new(Bytes::new())).unwrap());
+        return Some(
+            builder
+                .body(ProxyBody::Full(Full::new(Bytes::new())))
+                .unwrap(),
+        );
     }
 
     if file
@@ -851,52 +1000,108 @@ async fn try_serve_offline_file(
         return None;
     }
 
-    let total_to_read = (req_end - req_start + 1) as usize;
-    let mut out = Vec::with_capacity(total_to_read);
-    let mut buf = vec![0u8; CHUNK_SIZE as usize];
-    let mut remaining = total_to_read;
-
-    while remaining > 0 {
-        if let Some(g) = request_gen
-            && g < state.active_generation.load(Ordering::SeqCst)
-        {
-            return Some(simple_response(
-                StatusCode::CONFLICT,
-                "cancelled: superseded track generation",
-            ));
-        }
-        let to_read = remaining.min(buf.len());
-        match file.read(&mut buf[..to_read]).await {
-            Ok(0) => break,
-            Ok(n) => {
-                out.extend_from_slice(&buf[..n]);
-                remaining -= n;
-            }
-            Err(_) => return None,
-        }
+    if let Some(g) = request_gen
+        && g < state.active_generation.load(Ordering::SeqCst)
+    {
+        return Some(simple_proxy_response(
+            StatusCode::CONFLICT,
+            "cancelled: superseded track generation",
+        ));
     }
 
-    let actual_end = req_start + (out.len() as u64).saturating_sub(1);
     let mut builder = Response::builder()
         .header(CONTENT_TYPE, rec.mime_type)
         .header(ACCEPT_RANGES, "bytes")
-        .header(CONTENT_LENGTH, out.len().to_string())
         .header("X-Resonance-Source", "offline-disk");
 
-    if is_partial || actual_end < file_len - 1 {
+    let first_chunk_len = (total_to_read as usize).min(CHUNK_SIZE as usize);
+    let mut first_buf = vec![0u8; first_chunk_len];
+    let n = match file.read(&mut first_buf).await {
+        Ok(n) => n,
+        Err(_) => return None,
+    };
+    first_buf.truncate(n);
+
+    if n as u64 >= total_to_read || n == 0 {
+        let actual_end = req_start + (first_buf.len() as u64).saturating_sub(1);
+        builder = builder.header(CONTENT_LENGTH, first_buf.len().to_string());
+        if is_partial || actual_end < file_len - 1 {
+            builder = builder.status(StatusCode::PARTIAL_CONTENT).header(
+                CONTENT_RANGE,
+                format!("bytes {req_start}-{actual_end}/{file_len}"),
+            );
+        } else {
+            builder = builder.status(StatusCode::OK);
+        }
+        return Some(
+            builder
+                .body(ProxyBody::Full(Full::new(Bytes::from(first_buf))))
+                .unwrap_or_else(|_| {
+                    simple_proxy_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "invalid proxy response headers",
+                    )
+                }),
+        );
+    }
+
+    builder = builder.header(CONTENT_LENGTH, total_to_read.to_string());
+    if is_partial || req_end < file_len - 1 {
         builder = builder.status(StatusCode::PARTIAL_CONTENT).header(
             CONTENT_RANGE,
-            format!("bytes {req_start}-{actual_end}/{file_len}"),
+            format!("bytes {req_start}-{req_end}/{file_len}"),
         );
     } else {
         builder = builder.status(StatusCode::OK);
     }
 
+    let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(STREAM_CHANNEL_CAPACITY);
+    let _ = tx.try_send(Ok(Bytes::from(first_buf)));
+    let mut remaining = total_to_read.saturating_sub(n as u64);
+    let stream_state = state.clone();
+    tokio::spawn(async move {
+        let mut buf = vec![0u8; CHUNK_SIZE as usize];
+        while remaining > 0 {
+            if let Some(g) = request_gen
+                && g < stream_state.active_generation.load(Ordering::SeqCst)
+            {
+                let _ = tx
+                    .send(Err(std::io::Error::new(
+                        std::io::ErrorKind::Interrupted,
+                        "cancelled: superseded track generation",
+                    )))
+                    .await;
+                break;
+            }
+            let to_read = (remaining as usize).min(buf.len());
+            match file.read(&mut buf[..to_read]).await {
+                Ok(0) => break,
+                Ok(read_n) => {
+                    remaining = remaining.saturating_sub(read_n as u64);
+                    if tx
+                        .send(Ok(Bytes::copy_from_slice(&buf[..read_n])))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(Err(e)).await;
+                    break;
+                }
+            }
+        }
+    });
+
     Some(
         builder
-            .body(Full::new(Bytes::from(out)))
+            .body(ProxyBody::Stream {
+                rx,
+                remaining: total_to_read,
+            })
             .unwrap_or_else(|_| {
-                simple_response(
+                simple_proxy_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "invalid proxy response headers",
                 )
@@ -910,4 +1115,8 @@ fn simple_response(status: StatusCode, msg: &str) -> Response<Full<Bytes>> {
         .header(CONTENT_TYPE, "text/plain; charset=utf-8")
         .body(Full::new(Bytes::from(msg.to_owned())))
         .unwrap()
+}
+
+fn simple_proxy_response(status: StatusCode, msg: &str) -> Response<ProxyBody> {
+    simple_response(status, msg).map(ProxyBody::Full)
 }

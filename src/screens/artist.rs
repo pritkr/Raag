@@ -35,27 +35,20 @@ pub struct ArtistScreenCallbacks {
 impl Default for ArtistScreenCallbacks {
     fn default() -> Self {
         Self {
-            on_back: Arc::new(|| crate::store::go_back()),
+            on_back: Arc::new(crate::store::go_back),
             on_play_top_songs: Arc::new(|tracks| {
-                if let Some(first) = tracks.first().cloned() {
-                    crate::store::play_track(first);
-                }
+                crate::store::play_queue(tracks, 0);
             }),
             on_start_radio: Arc::new(|artist| {
-                if let Some(first) = artist.top_songs.first().cloned() {
-                    crate::store::play_track(first);
-                }
+                crate::store::set_autoplay_radio(true);
+                crate::store::play_queue(artist.top_songs, 0);
             }),
-            on_shuffle: Arc::new(|tracks| {
-                if let Some(first) = tracks.first().cloned() {
-                    crate::store::play_track(first);
-                }
-            }),
-            on_toggle_subscribe: Arc::new(|_, _| {}),
-            on_play_track: Arc::new(|t| crate::store::play_track(t)),
-            on_play_next: Arc::new(|t| crate::store::play_next(t)),
-            on_open_album: Arc::new(|_| {}),
-            on_open_artist: Arc::new(|_| {}),
+            on_shuffle: Arc::new(crate::store::play_all_shuffled),
+            on_toggle_subscribe: Arc::new(crate::store::toggle_subscribe_artist),
+            on_play_track: Arc::new(crate::store::play_track),
+            on_play_next: Arc::new(crate::store::play_next),
+            on_open_album: Arc::new(crate::store::open_album_entity),
+            on_open_artist: Arc::new(crate::store::open_artist_entity),
         }
     }
 }

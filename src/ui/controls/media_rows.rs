@@ -212,8 +212,8 @@ pub fn compact_mix_row(
         .child(
             button()
                 .accessibility_label("Toggle Like Track")
-                .min_w(px(40.0))
-                .min_h(px(40.0))
+                .min_w(px(MOBILE_MIN_TOUCH_TARGET))
+                .min_h(px(MOBILE_MIN_TOUCH_TARGET))
                 .items_center()
                 .justify_center()
                 .rounded_full()
@@ -264,6 +264,8 @@ pub fn track_row_view(
     let track_for_like = track.clone();
     let track_for_badge = track.clone();
     let track_for_menu = track.clone();
+
+    let track_id_offline = track.id.clone();
 
     view()
         .flex_row()
@@ -331,10 +333,28 @@ pub fn track_row_view(
                                 }),
                         )
                         .child(
-                            text(artist)
-                                .number_of_lines(1)
-                                .text_xs()
-                                .text_color(move || theme().muted_foreground),
+                            view()
+                                .flex_row()
+                                .items_center()
+                                .gap_1()
+                                .min_w(px(0.0))
+                                .child(when(
+                                    move || {
+                                        !is_desktop_layout()
+                                            && store::download_record(&track_id_offline)
+                                                .is_some_and(|r| {
+                                                    r.status == DownloadStatus::Completed
+                                                })
+                                    },
+                                    || icon(IconKind::CheckCircle, 12.0, move || theme().primary),
+                                ))
+                                .child(
+                                    text(artist)
+                                        .flex_1()
+                                        .number_of_lines(1)
+                                        .text_xs()
+                                        .text_color(move || theme().muted_foreground),
+                                ),
                         ),
                 )
                 .when_some(album_title, |b, alb| {
@@ -355,35 +375,45 @@ pub fn track_row_view(
                         .text_color(move || theme().muted_foreground),
                 ),
         )
-        .child(
-            button()
-                .accessibility_label("Toggle Like Track")
-                .min_w(px(MOBILE_MIN_TOUCH_TARGET))
-                .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+        .child(when(is_desktop_layout, move || {
+            let like_track = track_for_like.clone();
+            let badge_track = track_for_badge.clone();
+            let id_icon = track_id.clone();
+            let id_color = track_id_color.clone();
+            view()
+                .flex_row()
                 .items_center()
-                .justify_center()
-                .rounded_full()
-                .hover(|s| s.bg(pill_glass_hover))
-                .on_press(move || store::toggle_like_track(track_for_like.clone()))
-                .child(reactive_icon(
-                    move || {
-                        if store::is_track_liked(&track_id) {
-                            IconKind::HeartFilled
-                        } else {
-                            IconKind::Heart
-                        }
-                    },
-                    15.0,
-                    move || {
-                        if store::is_track_liked(&track_id_color) {
-                            color_liked()
-                        } else {
-                            theme().muted_foreground
-                        }
-                    },
-                )),
-        )
-        .child(download_state_badge(track_for_badge))
+                .gap_1()
+                .child(
+                    button()
+                        .accessibility_label("Toggle Like Track")
+                        .min_w(px(MOBILE_MIN_TOUCH_TARGET))
+                        .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                        .items_center()
+                        .justify_center()
+                        .rounded_full()
+                        .hover(|s| s.bg(pill_glass_hover))
+                        .on_press(move || store::toggle_like_track(like_track.clone()))
+                        .child(reactive_icon(
+                            move || {
+                                if store::is_track_liked(&id_icon) {
+                                    IconKind::HeartFilled
+                                } else {
+                                    IconKind::Heart
+                                }
+                            },
+                            15.0,
+                            move || {
+                                if store::is_track_liked(&id_color) {
+                                    color_liked()
+                                } else {
+                                    theme().muted_foreground
+                                }
+                            },
+                        )),
+                )
+                .child(download_state_badge(badge_track))
+        }))
         .child(track_context_menu(
             track_for_menu,
             TrackMenuContext::General,
@@ -417,14 +447,14 @@ pub fn skeleton_row() -> impl IntoElement {
                 .gap_2()
                 .child(
                     view()
-                        .w(percentage(68.0))
+                        .w(percentage(0.68))
                         .h(px(12.0))
                         .rounded_full()
                         .bg(move || theme().muted),
                 )
                 .child(
                     view()
-                        .w(percentage(42.0))
+                        .w(percentage(0.42))
                         .h(px(10.0))
                         .rounded_full()
                         .bg(move || theme().muted),

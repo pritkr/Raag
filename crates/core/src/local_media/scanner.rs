@@ -19,7 +19,9 @@ use resonance_contract::{
 use sha2::{Digest, Sha256};
 
 use crate::cache::artwork::ArtworkCache;
-use crate::local_media::artwork::{extract_and_cache_artwork, local_artwork_url};
+use crate::local_media::artwork::{
+    extract_and_cache_artwork, extract_sibling_cover_artwork, local_artwork_url,
+};
 use crate::local_media::store::LocalMediaStore;
 use crate::unix_secs;
 
@@ -309,7 +311,8 @@ fn index_single_file(
         .filter(|s| !s.is_empty())
         .or_else(|| read_sidecar_lrc(path));
 
-    let art_hash = extract_and_cache_artwork(&tagged, artwork);
+    let art_hash = extract_and_cache_artwork(&tagged, artwork)
+        .or_else(|| extract_sibling_cover_artwork(path, artwork));
     let artwork_url = art_hash
         .as_deref()
         .map(|h| local_artwork_url(proxy_base_url, h));

@@ -181,7 +181,7 @@ pub fn migrate_legacy_temp_dir_from(legacy_dir: &Path, paths: &AppPaths) -> Core
     if migrated_any {
         fs::write(&marker, b"migrated_from_temp_v1\n").map_err(cache_err)?;
         log::info!(
-            "Migrated legacy Resonance data from {} to {}",
+            "Migrated legacy Raag data from {} to {}",
             legacy_dir.display(),
             paths.data_dir.display()
         );

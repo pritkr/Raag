@@ -6,6 +6,7 @@ use nsh_core::prelude::*;
 use resonance_contract::format_duration_ms;
 
 use crate::store::{self, AppTab, DesktopSidePanel};
+use crate::ui::controls::context_menu::{TrackMenuContext, track_context_menu};
 use crate::ui::controls::primitives::svg_icon_button;
 use crate::ui::controls::sleep_timer_sheet::{open_sleep_timer_sheet, sleep_timer_badge_label};
 use crate::ui::controls::speed_sheet::{open_speed_sheet, speed_badge_label};
@@ -75,7 +76,7 @@ pub fn volume_slider(
         })
 }
 
-/// Sleek full-width Desktop Bottom Player Bar.
+/// Sleek full-width Desktop Bottom Player Bar with interactive YouTube Music top-edge seek slider.
 pub fn desktop_player_bar() -> impl IntoElement {
     let is_now_playing = move || store::active_tab() == AppTab::NowPlaying;
     let is_playing = move || store::player_snapshot().state.is_playing();
@@ -94,24 +95,37 @@ pub fn desktop_player_bar() -> impl IntoElement {
         .border_color(glass_hairline)
         .child(
             view()
+                .test_id("mini-player-progress")
                 .w_full()
-                .h(px(3.0))
-                .bg(move || theme().muted)
-                .overflow_hidden()
                 .child(
-                    view()
-                        .test_id("mini-player-progress")
-                        .h_full()
-                        .w(move || {
+                    slider()
+                        .value(move || {
                             let snap = store::player_snapshot();
-                            let frac = if snap.duration_ms > 0 {
-                                snap.position_ms as f32 / snap.duration_ms as f32
+                            let d = snap.duration_ms as f64;
+                            if d <= 0.0 {
+                                Some(SliderValue::Single(0.0))
                             } else {
-                                0.0
-                            };
-                            percentage(frac.clamp(0.0, 1.0))
+                                Some(SliderValue::Single((snap.position_ms as f64).clamp(0.0, d)))
+                            }
                         })
-                        .bg(color_player_accent),
+                        .min(0.0)
+                        .max(move || {
+                            let d = store::player_snapshot().duration_ms as f64;
+                            if d <= 0.0 { 1000.0 } else { d }
+                        })
+                        .step(500.0)
+                        .accessibility_label("Desktop Playback Seek Bar")
+                        .track_class("w-full h-3 justify-center")
+                        .indicator_class("w-full h-1 bg-muted")
+                        .range_class("h-1")
+                        .range_style(|s| s.bg(color_player_accent))
+                        .thumb_class(
+                            "size-3 rounded-full opacity-0 group-hover:opacity-100 group-active:opacity-100",
+                        )
+                        .thumb_style(|s| s.bg(color_player_accent))
+                        .on_change(|v: &SliderValue| {
+                            store::seek_ms(v.start().max(0.0).round() as u64);
+                        }),
                 ),
         )
         .child(
@@ -121,7 +135,7 @@ pub fn desktop_player_bar() -> impl IntoElement {
                 .justify_between()
                 .px_4()
                 .py_2()
-                .min_h(px(72.0))
+                .min_h(px(68.0))
                 .gap_4()
                 .child(
                     view()
@@ -279,15 +293,22 @@ pub fn desktop_player_bar() -> impl IntoElement {
                                     }
                                 })),
                         )
-                        .child(svg_icon_button(
-                            IconKind::MoreVertical,
-                            15.0,
-                            34.0,
-                            "Open Queue",
-                            true,
-                            move || theme().muted_foreground,
-                            || store::set_tab(AppTab::Queue),
-                        )),
+                        .child(dynamic(|| {
+                            if let Some(track) = store::player_snapshot().current_track {
+                                track_context_menu(track, TrackMenuContext::General).into_element()
+                            } else {
+                                svg_icon_button(
+                                    IconKind::MoreVertical,
+                                    15.0,
+                                    34.0,
+                                    "Track Actions",
+                                    true,
+                                    move || theme().muted_foreground,
+                                    || {},
+                                )
+                                .into_element()
+                            }
+                        })),
                 )
                 .child(
                     view()
@@ -483,7 +504,15 @@ pub fn desktop_player_bar() -> impl IntoElement {
                             34.0,
                             "Toggle Lyrics",
                             true,
-                            move || theme().muted_foreground,
+                            move || {
+                                if store::desktop_side_panel_open()
+                                    && store::desktop_side_panel() == DesktopSidePanel::Lyrics
+                                {
+                                    color_player_accent()
+                                } else {
+                                    theme().muted_foreground
+                                }
+                            },
                             || {
                                 if is_desktop_panel_visible() {
                                     store::toggle_desktop_side_panel(DesktopSidePanel::Lyrics);
@@ -498,7 +527,15 @@ pub fn desktop_player_bar() -> impl IntoElement {
                             34.0,
                             "Toggle Queue",
                             true,
-                            move || theme().muted_foreground,
+                            move || {
+                                if store::desktop_side_panel_open()
+                                    && store::desktop_side_panel() == DesktopSidePanel::Queue
+                                {
+                                    color_player_accent()
+                                } else {
+                                    theme().muted_foreground
+                                }
+                            },
                             || {
                                 if is_desktop_panel_visible() {
                                     store::toggle_desktop_side_panel(DesktopSidePanel::Queue);

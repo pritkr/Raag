@@ -36,7 +36,12 @@ pub fn extract_and_cache_artwork(
         .find(|p| p.pic_type() == PictureType::CoverFront)
         .or_else(|| tag.pictures().first())?;
 
-    let data = pic.data();
+    cache_artwork_bytes(pic.data(), cache)
+}
+
+/// Hashes raw image bytes (capped at [`MAX_EMBEDDED_ARTWORK_BYTES`]) and deduplicates them
+/// into [`ArtworkCache`].
+pub fn cache_artwork_bytes(data: &[u8], cache: Option<&ArtworkCache>) -> Option<String> {
     if data.is_empty() || data.len() > MAX_EMBEDDED_ARTWORK_BYTES {
         return None;
     }
@@ -53,4 +58,45 @@ pub fn extract_and_cache_artwork(
     }
 
     Some(art_hash)
+}
+
+/// Looks for a sibling album cover image (`cover.jpg`, `cover.png`, `folder.jpg`, `folder.png`,
+/// `front.jpg`, `front.png`) next to `audio_path` without following symlinks and honoring
+/// [`MAX_EMBEDDED_ARTWORK_BYTES`].
+pub fn extract_sibling_cover_artwork(
+    audio_path: &std::path::Path,
+    cache: Option<&ArtworkCache>,
+) -> Option<String> {
+    let dir = audio_path.parent()?;
+    const CANDIDATES: &[&str] = &[
+        "cover.jpg",
+        "cover.jpeg",
+        "cover.png",
+        "folder.jpg",
+        "folder.jpeg",
+        "folder.png",
+        "front.jpg",
+        "front.png",
+        "Cover.jpg",
+        "Folder.jpg",
+    ];
+    for name in CANDIDATES {
+        let candidate = dir.join(name);
+        let Ok(meta) = std::fs::symlink_metadata(&candidate) else {
+            continue;
+        };
+        if meta.file_type().is_symlink()
+            || !meta.is_file()
+            || meta.len() == 0
+            || meta.len() > MAX_EMBEDDED_ARTWORK_BYTES as u64
+        {
+            continue;
+        }
+        if let Ok(bytes) = std::fs::read(&candidate)
+            && let Some(hash) = cache_artwork_bytes(&bytes, cache)
+        {
+            return Some(hash);
+        }
+    }
+    None
 }

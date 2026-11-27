@@ -1,14 +1,15 @@
 //! Authenticated InnerTube write mutations (`/like/*`, `/browse/edit_playlist`, `/atr`)
 //! and the non-blocking background [`MutationWorker`] queue.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use resonance_contract::{
     AppEvent, AuthError, CoreError, EventBus, InnerTubeMutations, LikeAction, MutationCommand,
-    MutationError, MutationReceipt, PlaylistEditOp, ProviderError, WatchtimeReport,
+    MutationError, MutationReceipt, PlaylistEditOp, PlaylistPrivacy, ProviderError, TrackId,
+    WatchtimeReport,
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -270,6 +271,35 @@ impl InnerTubeMutations for InnerTubeClient {
                 }
                 Value::Object(obj)
             }
+            PlaylistEditOp::Rename { title, description } => {
+                let clean_title = title.trim();
+                if clean_title.is_empty() || clean_title.len() > 150 {
+                    return Err(MutationError::InvalidInput(
+                        "playlist title must be 1..=150 characters".to_owned(),
+                    ));
+                }
+                let mut actions = vec![json!({
+                    "action": "ACTION_SET_PLAYLIST_NAME",
+                    "playlistName": clean_title,
+                })];
+                if let Some(desc) = description {
+                    actions.push(json!({
+                        "action": "ACTION_SET_PLAYLIST_DESCRIPTION",
+                        "playlistDescription": desc.trim(),
+                    }));
+                }
+                let payload = json!({
+                    "playlistId": playlist_id,
+                    "actions": actions,
+                });
+                let resp = self
+                    .post_authenticated_web_remix("browse/edit_playlist", payload)
+                    .await
+                    .map_err(map_core_error)?;
+                self.evict_swr_cache(&format!("collection:{playlist_id}"));
+                self.evict_swr_cache("collection:FEmusic_liked_playlists");
+                return Ok(make_receipt("browse/edit_playlist", Some(&resp)));
+            }
         };
 
         let payload = json!({
@@ -282,6 +312,66 @@ impl InnerTubeMutations for InnerTubeClient {
             .map_err(map_core_error)?;
         self.evict_swr_cache(&format!("collection:{playlist_id}"));
         Ok(make_receipt("browse/edit_playlist", Some(&resp)))
+    }
+
+    async fn create_playlist(
+        &self,
+        title: &str,
+        description: &str,
+        privacy: PlaylistPrivacy,
+        initial_video_ids: &[TrackId],
+    ) -> Result<MutationReceipt, MutationError> {
+        if self.current_session().is_none() {
+            return Err(MutationError::NotAuthenticated);
+        }
+        let clean_title = title.trim();
+        if clean_title.is_empty() || clean_title.len() > 150 {
+            return Err(MutationError::InvalidInput(
+                "playlist title must be 1..=150 characters".to_owned(),
+            ));
+        }
+        for vid in initial_video_ids {
+            validate_innertube_id(vid, "video_id")?;
+        }
+        let mut payload = json!({
+            "title": clean_title,
+            "description": description.trim(),
+            "privacyStatus": privacy.as_innertube_str(),
+        });
+        if !initial_video_ids.is_empty()
+            && let Some(obj) = payload.as_object_mut()
+        {
+            obj.insert("videoIds".into(), json!(initial_video_ids));
+        }
+        let resp = self
+            .post_authenticated_web_remix("playlist/create", payload)
+            .await
+            .map_err(map_core_error)?;
+        self.evict_swr_cache("collection:FEmusic_liked_playlists");
+        let mut receipt = make_receipt("playlist/create", Some(&resp));
+        if let Some(pid) = resp.get("playlistId").and_then(Value::as_str) {
+            receipt.server_status = Some(pid.to_owned());
+        }
+        Ok(receipt)
+    }
+
+    async fn delete_playlist(&self, playlist_id: &str) -> Result<MutationReceipt, MutationError> {
+        if self.current_session().is_none() {
+            return Err(MutationError::NotAuthenticated);
+        }
+        let clean_pid = playlist_id.strip_prefix("VL").unwrap_or(playlist_id);
+        validate_innertube_id(clean_pid, "playlist_id")?;
+        let payload = json!({
+            "playlistId": clean_pid,
+        });
+        let resp = self
+            .post_authenticated_web_remix("playlist/delete", payload)
+            .await
+            .map_err(map_core_error)?;
+        self.evict_swr_cache(&format!("collection:{playlist_id}"));
+        self.evict_swr_cache(&format!("collection:{clean_pid}"));
+        self.evict_swr_cache("collection:FEmusic_liked_playlists");
+        Ok(make_receipt("playlist/delete", Some(&resp)))
     }
 }
 
@@ -338,6 +428,32 @@ async fn execute_once(
         MutationCommand::EditPlaylist { playlist_id, op } => {
             client.edit_playlist(playlist_id, op).await
         }
+        MutationCommand::CreatePlaylist {
+            title,
+            description,
+            privacy,
+            initial_video_ids,
+            ..
+        } => {
+            client
+                .create_playlist(title, description, *privacy, initial_video_ids)
+                .await
+        }
+        MutationCommand::DeletePlaylist { playlist_id } => {
+            client.delete_playlist(playlist_id).await
+        }
+    }
+}
+
+fn remap_temp_playlist_id(cmd: &mut MutationCommand, temp_id_map: &HashMap<String, String>) {
+    match cmd {
+        MutationCommand::EditPlaylist { playlist_id, .. }
+        | MutationCommand::DeletePlaylist { playlist_id } => {
+            if let Some(real_id) = temp_id_map.get(playlist_id) {
+                *playlist_id = real_id.clone();
+            }
+        }
+        _ => {}
     }
 }
 
@@ -379,21 +495,32 @@ async fn run_worker(
     mut rx: mpsc::Receiver<MutationCommand>,
 ) {
     let mut pending: VecDeque<MutationCommand> = VecDeque::new();
+    let mut temp_id_map: HashMap<String, String> = HashMap::new();
     while let Some(first) = rx.recv().await {
         push_with_atr_coalescing(&mut pending, first);
         while let Ok(more) = rx.try_recv() {
             push_with_atr_coalescing(&mut pending, more);
         }
 
-        while let Some(cmd) = pending.pop_front() {
+        while let Some(mut cmd) = pending.pop_front() {
             // Drain any newly arrived commands so ATR pings that arrived during
             // an in-flight request can also coalesce cleanly.
             while let Ok(more) = rx.try_recv() {
                 push_with_atr_coalescing(&mut pending, more);
             }
 
+            remap_temp_playlist_id(&mut cmd, &temp_id_map);
+
             match execute_with_retries(&client, &cmd).await {
                 Ok(receipt) => {
+                    if let MutationCommand::CreatePlaylist {
+                        ref local_temp_id, ..
+                    } = cmd
+                        && let Some(ref server_pid) = receipt.server_status
+                        && !server_pid.is_empty()
+                    {
+                        temp_id_map.insert(local_temp_id.clone(), server_pid.clone());
+                    }
                     bus.publish(AppEvent::MutationCompleted(receipt));
                 }
                 Err(

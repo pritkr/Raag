@@ -132,6 +132,9 @@ pub struct CatalogSlice {
     pub collection_sort_asc: bool,
     pub entity_history: Vec<EntityRoute>,
     pub entity_pos: usize,
+    pub entity_generation: u64,
+    pub entity_loading: bool,
+    pub entity_error: Option<String>,
     pub active_artist: Option<ArtistDetail>,
     pub active_album: Option<AlbumDetail>,
     pub album_offline_progress: CollectionOfflineProgress,
@@ -187,6 +190,9 @@ impl CatalogSlice {
             collection_sort_asc: false,
             entity_history: Vec::new(),
             entity_pos: 0,
+            entity_generation: 0,
+            entity_loading: false,
+            entity_error: None,
             active_artist: None,
             active_album: None,
             album_offline_progress: CollectionOfflineProgress::Unpinned,
@@ -206,6 +212,28 @@ impl CatalogSlice {
         }
     }
 
+    pub fn apply_home_mood_loaded(
+        &mut self,
+        mood: Option<String>,
+        chips: Vec<MoodCategory>,
+        res: Result<Vec<HomeSection>, String>,
+    ) {
+        self.home_loading = false;
+        if !chips.is_empty() {
+            self.home_mood_chips = chips;
+        }
+        match res {
+            Ok(sections) => {
+                self.selected_mood = mood;
+                self.home_sections = sections;
+                self.home_error = None;
+            }
+            Err(err) => {
+                self.home_error = Some(err);
+            }
+        }
+    }
+
     pub fn apply_explore_loaded(&mut self, res: Result<Vec<HomeSection>, String>) {
         if let Ok(sections) = res {
             self.explore_sections = sections;
@@ -213,14 +241,61 @@ impl CatalogSlice {
     }
 
     pub fn apply_explore_page(&mut self, res: Result<ExplorePage, String>) {
-        if let Ok(page) = res {
-            if !page.charts.is_empty() {
-                self.explore_sections = page.charts.clone();
+        self.explore_loading = false;
+        match res {
+            Ok(page) => {
+                self.explore_error = None;
+                if !page.charts.is_empty() {
+                    self.explore_sections = page.charts.clone();
+                }
+                if !page.moods_and_genres.is_empty() && self.home_mood_chips.is_empty() {
+                    self.home_mood_chips = page.moods_and_genres.clone();
+                }
+                self.explore_page = Some(page);
             }
-            if !page.moods_and_genres.is_empty() {
-                self.home_mood_chips = page.moods_and_genres.clone();
+            Err(err) => {
+                self.explore_error = Some(err);
             }
-            self.explore_page = Some(page);
+        }
+    }
+
+    pub fn apply_album_loaded_gen(
+        &mut self,
+        generation: u64,
+        res: Result<AlbumDetail, String>,
+    ) {
+        if self.entity_generation != generation {
+            return;
+        }
+        self.entity_loading = false;
+        match res {
+            Ok(album) => {
+                self.active_album = Some(album);
+                self.entity_error = None;
+            }
+            Err(err) => {
+                self.entity_error = Some(err);
+            }
+        }
+    }
+
+    pub fn apply_artist_loaded_gen(
+        &mut self,
+        generation: u64,
+        res: Result<ArtistDetail, String>,
+    ) {
+        if self.entity_generation != generation {
+            return;
+        }
+        self.entity_loading = false;
+        match res {
+            Ok(artist) => {
+                self.active_artist = Some(artist);
+                self.entity_error = None;
+            }
+            Err(err) => {
+                self.entity_error = Some(err);
+            }
         }
     }
 

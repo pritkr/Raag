@@ -29,7 +29,7 @@ jobs:
           cargo run --release --bin client_probe -- \
             --verify-canary \
             --output target/dist/client_matrix.json
-          cp config/solver_manifest.json target/dist/solver_manifest.json
+          cp assets/ejs/solver_manifest.json target/dist/solver_manifest.json
 
       - name: Fallback offline matrix sanity probe if runner egress is restricted
         if: steps.live_probe.outcome != 'success'
@@ -40,7 +40,7 @@ jobs:
             --offline-sim \
             --verify-canary \
             --output target/dist/client_matrix.json
-          cp config/solver_manifest.json target/dist/solver_manifest.json
+          cp assets/ejs/solver_manifest.json target/dist/solver_manifest.json
 
       - name: Sign config artifacts with Ed25519
         if: env.HAS_SIGNING_KEY == 'true'

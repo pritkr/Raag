@@ -16,11 +16,11 @@ use crate::live_engine::{self, EngineCommand};
 
 use super::rooms_slice::RoomsSlice;
 use super::settings_slice::{AudioDspCapability, SettingsSlice, ThemeChoice};
-use super::ui_slice::{AppTab, DesktopSidePanel};
+use super::ui_slice::{AppTab, DesktopSidePanel, NowPlayingTab};
 use super::updater_slice::UpdaterSlice;
 use super::{
     all_library_songs, apply_nsh_appearance, cast_signal, catalog_signal, is_fixture_mode,
-    local_media_signal, persist_settings_now, play_all_shuffled, play_last, play_track,
+    local_media_signal, persist_settings_now, play_all_shuffled, play_queue, play_track,
     playback_signal, player_snapshot, rooms_signal, set_autoplay_radio, settings_signal,
     toggle_play_pause, ui_signal, updater_signal,
 };
@@ -90,6 +90,14 @@ pub fn desktop_side_panel() -> DesktopSidePanel {
 
 pub fn set_desktop_side_panel(panel: DesktopSidePanel) {
     ui_signal().update(|u| u.set_desktop_side_panel(panel));
+}
+
+pub fn now_playing_tab() -> NowPlayingTab {
+    ui_signal().with(|u| u.now_playing_tab)
+}
+
+pub fn set_now_playing_tab(tab: NowPlayingTab) {
+    ui_signal().update(|u| u.now_playing_tab = tab);
 }
 
 pub fn status_banner() -> Option<String> {
@@ -300,11 +308,22 @@ pub fn auth_sheet_open() -> bool {
 
 pub fn start_tv_oauth() {
     settings_signal().update(|s| {
+        s.tv_oauth_user_code = None;
         s.tv_oauth_verification_url = Some("https://www.google.com/device".to_owned());
-        s.tv_oauth_expires_in_secs = 300;
-        s.tv_oauth_status = Some("Requesting TV device code…".to_owned());
+        s.tv_oauth_expires_in_secs = 0;
+        s.tv_oauth_status = Some("Requesting TV device code from Google…".to_owned());
     });
-    set_status_banner("TV OAuth device sign-in requested");
+    if is_fixture_mode() {
+        settings_signal().update(|s| {
+            s.tv_oauth_user_code = Some("RAAG-DEMO".to_owned());
+            s.tv_oauth_expires_in_secs = 300;
+            s.tv_oauth_status =
+                Some("Fixture preview — live device-code polling runs outside --fixture mode".to_owned());
+        });
+        set_status_banner("Fixture preview: TV OAuth device-code UI ready");
+    } else {
+        live_engine::dispatch(EngineCommand::StartTvOAuth);
+    }
 }
 
 pub fn cancel_tv_oauth() {
@@ -314,7 +333,20 @@ pub fn cancel_tv_oauth() {
         s.tv_oauth_expires_in_secs = 0;
         s.tv_oauth_status = None;
     });
+    if !is_fixture_mode() {
+        live_engine::dispatch(EngineCommand::CancelTvOAuth);
+    }
     set_status_banner("TV OAuth sign-in cancelled");
+}
+
+pub fn launch_android_webview_sign_in() {
+    if is_fixture_mode() {
+        set_status_banner(
+            "Fixture preview — Android WebView sign-in launches on Android devices",
+        );
+    } else {
+        live_engine::dispatch(EngineCommand::LaunchAndroidWebViewSignIn);
+    }
 }
 
 pub fn theme_choice() -> ThemeChoice {
@@ -392,6 +424,13 @@ pub fn refresh_remote_config() {
     }
 }
 
+fn dispatch_current_dsp() {
+    if !is_fixture_mode() {
+        let cfg = settings_signal().with(|s| s.dsp_config.clone());
+        live_engine::dispatch(EngineCommand::UpdateDsp(cfg));
+    }
+}
+
 pub fn set_loudness_normalization(enabled: bool) {
     settings_signal().update(|s| s.set_loudness_normalization(enabled));
     ui_signal().update(|u| {
@@ -401,6 +440,7 @@ pub fn set_loudness_normalization(enabled: bool) {
             "ReplayGain / EBU R128 loudness normalization disabled"
         });
     });
+    dispatch_current_dsp();
     persist_settings_now(true);
 }
 
@@ -413,6 +453,7 @@ pub fn set_silence_skip(enabled: bool) {
             "Silence skipping disabled"
         });
     });
+    dispatch_current_dsp();
     persist_settings_now(true);
 }
 
@@ -422,6 +463,20 @@ pub fn cycle_eq_preset() {
         label = s.cycle_eq_preset();
     });
     ui_signal().update(|u| u.set_status_banner(format!("10-band EQ preset: {label}")));
+    dispatch_current_dsp();
+    persist_settings_now(true);
+}
+
+pub fn set_eq_band_gain(band_idx: usize, gain_db: f32) {
+    settings_signal().update(|s| s.set_eq_band_gain(band_idx, gain_db));
+    dispatch_current_dsp();
+    persist_settings_now(false);
+}
+
+pub fn reset_eq_flat() {
+    settings_signal().update(|s| s.reset_eq_flat());
+    ui_signal().update(|u| u.set_status_banner("10-band EQ reset to Flat (0 dB)"));
+    dispatch_current_dsp();
     persist_settings_now(true);
 }
 
@@ -436,7 +491,16 @@ pub fn cycle_crossfade_ms() {
         format!("Crossfade set to {}s", ms / 1000)
     };
     ui_signal().update(|u| u.set_status_banner(label));
+    dispatch_current_dsp();
     persist_settings_now(true);
+}
+
+/// Copies `text` to the native OS clipboard and shows a truthful status toast.
+pub fn copy_text_to_clipboard(label: &str, text: &str) {
+    match crate::platform::copy_to_clipboard(text) {
+        Ok(()) => set_status_banner(format!("Copied {label} to clipboard")),
+        Err(_) => set_status_banner(format!("{label}: {text}")),
+    }
 }
 
 pub fn po_token_diagnostics() -> PoTokenDiagnostics {
@@ -473,10 +537,7 @@ pub fn start_local_radio_mix() {
     }
     let tracks = all_library_songs();
     if let Some(first) = tracks.first().cloned() {
-        play_track(first.clone());
-        for extra in tracks.into_iter().skip(1) {
-            play_last(extra);
-        }
+        play_queue(tracks, 0);
         set_status_banner(format!("Started Radio Mix with \"{}\"", first.title));
     } else {
         set_tab(AppTab::Home);
@@ -489,6 +550,22 @@ pub fn create_listen_room(relay_url: String, display_name: String) {
     } else {
         display_name.trim().to_owned()
     };
+    let queue_permission = rooms_signal().with(|r| r.queue_permission);
+    if !is_fixture_mode() {
+        rooms_signal().update(|r| {
+            r.relay_url = relay_url.clone();
+            r.joining = true;
+            r.error = None;
+        });
+        set_status_banner("Creating Listen Together room…");
+        live_engine::dispatch(EngineCommand::CreateRoom {
+            relay_url,
+            display_name: name,
+            queue_permission,
+        });
+        return;
+    }
+
     let code = generate_room_code();
     let peer_id = "host-local".to_owned();
     let snap = player_snapshot();
@@ -511,7 +588,7 @@ pub fn create_listen_room(relay_url: String, display_name: String) {
         role: RoomRole::Host,
         peer_id: peer_id.clone(),
         host_peer_id: peer_id.clone(),
-        queue_permission: rooms_signal().with(|r| r.queue_permission),
+        queue_permission,
         participants: vec![RoomParticipant {
             peer_id,
             display_name: name,
@@ -534,7 +611,7 @@ pub fn create_listen_room(relay_url: String, display_name: String) {
         r.relay_url = relay_url;
         r.set_room_snapshot(room);
     });
-    set_status_banner(format!("Created Listen Together room {code}"));
+    set_status_banner(format!("Created preview room {code}"));
 }
 
 pub fn join_listen_room(relay_url: String, room_code: String, display_name: String) {
@@ -548,6 +625,22 @@ pub fn join_listen_room(relay_url: String, room_code: String, display_name: Stri
     } else {
         display_name.trim().to_owned()
     };
+    if !is_fixture_mode() {
+        rooms_signal().update(|r| {
+            r.relay_url = relay_url.clone();
+            r.room_code_draft = code.clone();
+            r.joining = true;
+            r.error = None;
+        });
+        set_status_banner(format!("Joining room {code}…"));
+        live_engine::dispatch(EngineCommand::JoinRoom {
+            relay_url,
+            room_code: code,
+            display_name: name,
+        });
+        return;
+    }
+
     let peer_id = "guest-local".to_owned();
     let room = RoomStateSnapshot {
         room_code: code.clone(),
@@ -578,11 +671,14 @@ pub fn join_listen_room(relay_url: String, room_code: String, display_name: Stri
         r.room_code_draft = code.clone();
         r.set_room_snapshot(room);
     });
-    set_status_banner(format!("Joined Listen Together room {code}"));
+    set_status_banner(format!("Joined preview room {code}"));
 }
 
 pub fn leave_listen_room() {
     rooms_signal().update(|r| r.leave_room());
+    if !is_fixture_mode() {
+        live_engine::dispatch(EngineCommand::LeaveRoom);
+    }
     set_status_banner("Left Listen Together room");
 }
 
@@ -591,11 +687,17 @@ pub fn vote_skip_room() {
         let next = r.vote_skip_count.saturating_add(1);
         r.set_vote_skip_status(next, r.vote_skip_threshold, true);
     });
+    if !is_fixture_mode() {
+        live_engine::dispatch(EngineCommand::VoteSkipRoom);
+    }
     set_status_banner("Voted to skip track");
 }
 
 pub fn send_room_reaction(emoji: String) {
     rooms_signal().update(|r| r.add_reaction(emoji.clone()));
+    if !is_fixture_mode() {
+        live_engine::dispatch(EngineCommand::SendRoomReaction(emoji.clone()));
+    }
     set_status_banner(format!("Sent reaction {emoji}"));
 }
 
@@ -605,6 +707,9 @@ pub fn kick_room_participant(peer_id: String) {
             room.participants.retain(|p| p.peer_id != peer_id);
         }
     });
+    if !is_fixture_mode() {
+        live_engine::dispatch(EngineCommand::KickRoomParticipant(peer_id));
+    }
     set_status_banner("Removed participant from room");
 }
 
@@ -624,6 +729,9 @@ pub fn transfer_room_host(peer_id: String) {
             }
         }
     });
+    if !is_fixture_mode() {
+        live_engine::dispatch(EngineCommand::TransferRoomHost(peer_id));
+    }
     set_status_banner("Transferred room host role");
 }
 
@@ -661,7 +769,12 @@ pub fn add_local_media_folder(path: PathBuf) {
         }
     });
     persist_settings_now(true);
-    set_status_banner(format!("Added local music folder: {path_str}"));
+    if !is_fixture_mode() {
+        live_engine::dispatch(EngineCommand::AddLocalFolder(path));
+        set_status_banner(format!("Scanning local music folder: {path_str}"));
+    } else {
+        set_status_banner(format!("Added local music folder: {path_str}"));
+    }
 }
 
 pub fn remove_local_media_folder(root_path: String) {
@@ -673,11 +786,24 @@ pub fn remove_local_media_folder(root_path: String) {
         s.local_music_dirs.retain(|d| d != &root_path);
     });
     persist_settings_now(true);
+    if !is_fixture_mode() {
+        live_engine::dispatch(EngineCommand::RemoveLocalFolder(root_path.clone()));
+    }
     set_status_banner(format!("Removed local music folder: {root_path}"));
 }
 
 pub fn rescan_local_media() {
     let root_count = local_media_signal().with(|m| m.roots.len());
+    if root_count == 0 {
+        set_status_banner("Add a local music folder before rescanning");
+        return;
+    }
+    if !is_fixture_mode() {
+        local_media_signal().update(|m| m.scan_progress.scanning = true);
+        live_engine::dispatch(EngineCommand::RescanLocalMedia);
+        set_status_banner(format!("Rescanning {root_count} local music folder(s)…"));
+        return;
+    }
     let now = resonance_core::unix_secs();
     local_media_signal().update(|m| {
         for root in &mut m.roots {
@@ -685,19 +811,13 @@ pub fn rescan_local_media() {
         }
         m.scan_progress.scanning = false;
     });
-    set_status_banner(if root_count == 0 {
-        "Add a local music folder before rescanning".to_owned()
-    } else {
-        format!("Rescanned {root_count} local music folder(s)")
-    });
+    set_status_banner(format!("Rescanned {root_count} local music folder(s)"));
 }
 
 pub fn play_local_track_queue(track: Track, queue: Vec<Track>) {
     if queue.len() > 1 {
-        play_track(track.clone());
-        for extra in queue.into_iter().filter(|t| t.id != track.id) {
-            play_last(extra);
-        }
+        let start_index = queue.iter().position(|t| t.id == track.id).unwrap_or(0);
+        play_queue(queue, start_index);
     } else {
         play_track(track);
     }
@@ -751,45 +871,77 @@ pub fn skip_updater_version(version: String) {
 }
 
 pub fn check_for_updates_now() {
-    let started = updater_signal().with(|u| {
-        !matches!(
-            u.phase,
-            UpdatePhase::Checking | UpdatePhase::Downloading { .. }
-        )
+    let mut started = false;
+    let mut channel = UpdateChannel::Stable;
+    let mut skipped_version = None;
+    updater_signal().update(|u| {
+        if u.begin_check() {
+            started = true;
+            channel = u.channel;
+            skipped_version = u.skipped_version.clone();
+        }
     });
     if !started {
         return;
     }
-    let now = resonance_core::unix_secs();
-    updater_signal().update(|u| {
-        if u.begin_check() {
-            u.mark_up_to_date(now);
-        }
+    if is_fixture_mode() {
+        let now = resonance_core::unix_secs();
+        updater_signal().update(|u| u.mark_up_to_date(now));
+        set_status_banner("You are on the latest version (fixture preview)");
+        return;
+    }
+    live_engine::dispatch(EngineCommand::CheckForUpdates {
+        channel,
+        skipped_version,
     });
-    set_status_banner("Raag is up to date");
+    set_status_banner("Checking signed release feed for updates…");
 }
 
 pub fn download_update(info: UpdateInfo) {
+    if is_fixture_mode() {
+        updater_signal().update(|u| u.mark_ready_to_install(false));
+        set_status_banner(format!("Staged preview update v{}", info.version));
+        return;
+    }
     let version = info.version.clone();
     updater_signal().update(|u| {
-        if u.begin_download().is_some() {
-            u.mark_ready_to_install(false);
-        }
+        u.phase = UpdatePhase::Downloading {
+            info: info.clone(),
+            received_bytes: 0,
+            total_bytes: None,
+        };
     });
-    set_status_banner(format!("Update v{version} ready to install"));
+    live_engine::dispatch(EngineCommand::DownloadUpdate(info));
+    set_status_banner(format!("Downloading & verifying v{version}…"));
+}
+
+pub fn cancel_update_download() {
+    if !is_fixture_mode() {
+        live_engine::dispatch(EngineCommand::CancelUpdateDownload);
+    }
+    updater_signal().update(|u| u.phase = UpdatePhase::Idle);
+    set_status_banner("Cancelled update download");
 }
 
 pub fn open_release_url(url: String) {
-    set_status_banner(format!("Release notes: {url}"));
+    copy_text_to_clipboard("release URL", &url);
 }
 
 pub fn install_update_on_quit() {
     updater_signal().update(|u| u.mark_ready_to_install(true));
-    set_status_banner("Update scheduled to install when Raag quits");
+    if !is_fixture_mode() {
+        live_engine::dispatch(EngineCommand::InstallUpdateOnQuit);
+    } else {
+        set_status_banner("Scheduled update install on app quit");
+    }
 }
 
 pub fn restart_to_install_update() {
-    set_status_banner("Restart Raag to finish applying the update");
+    if !is_fixture_mode() {
+        live_engine::dispatch(EngineCommand::RestartToInstallUpdate);
+    } else {
+        set_status_banner("Restarting to apply update (fixture preview)");
+    }
 }
 
 pub fn cast_sheet_open() -> bool {
@@ -798,6 +950,13 @@ pub fn cast_sheet_open() -> bool {
 
 pub fn set_cast_sheet_open(open: bool) {
     cast_signal().update(|c| c.sheet_open = open);
+    if !is_fixture_mode() {
+        if open {
+            live_engine::dispatch(EngineCommand::StartCastDiscovery);
+        } else {
+            live_engine::dispatch(EngineCommand::StopCastDiscovery);
+        }
+    }
 }
 
 pub fn cast_devices() -> Vec<CastDevice> {
@@ -810,32 +969,44 @@ pub fn cast_session() -> CastSessionState {
 
 pub fn select_cast_device(device: CastDevice) {
     let name = device.name.clone();
-    let snap = playback_signal().with(|p| p.player.clone());
-    cast_signal().update(|c| {
-        c.session = CastSessionState::Connected {
-            device,
-            playing: snap.state.is_playing(),
-            position_ms: snap.position_ms,
-            duration_ms: snap.duration_ms,
-            volume_pct: (snap.volume.clamp(0.0, 1.0) * 100.0).round() as u8,
-            muted: false,
-        };
-    });
-    set_status_banner(format!("Casting to {name}"));
+    if is_fixture_mode() {
+        cast_signal().update(|c| {
+            c.session = CastSessionState::Connected {
+                device: device.clone(),
+                playing: true,
+                position_ms: player_snapshot().position_ms,
+                duration_ms: player_snapshot().duration_ms,
+                volume_pct: 100,
+                muted: false,
+            };
+        });
+        set_status_banner(format!("Casting to {name} (fixture preview)"));
+        return;
+    }
+    cast_signal().update(|c| c.session = CastSessionState::Connecting(device.clone()));
+    live_engine::dispatch(EngineCommand::ConnectCastDevice(device));
+    set_status_banner(format!("Connecting to {name}…"));
 }
 
 pub fn disconnect_cast() {
     cast_signal().update(|c| c.session = CastSessionState::Disconnected);
+    if !is_fixture_mode() {
+        live_engine::dispatch(EngineCommand::DisconnectCast);
+    }
     set_status_banner("Disconnected Cast session");
 }
 
 pub fn set_cast_volume(volume: f32) {
-    let pct = (volume.clamp(0.0, 1.0) * 100.0).round() as u8;
+    let clamped = volume.clamp(0.0, 1.0);
+    let pct = (clamped * 100.0).round() as u8;
     cast_signal().update(|c| {
         if let CastSessionState::Connected { volume_pct, .. } = &mut c.session {
             *volume_pct = pct;
         }
     });
+    if !is_fixture_mode() {
+        live_engine::dispatch(EngineCommand::SetCastVolume(clamped));
+    }
 }
 
 #[allow(dead_code)]

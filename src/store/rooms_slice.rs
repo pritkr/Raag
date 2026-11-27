@@ -35,7 +35,10 @@ impl Default for RoomsSlice {
     fn default() -> Self {
         Self {
             sub_mode: ListenTogetherSubMode::RadioMix,
-            relay_url: "https://relay.resonance.dev".to_owned(),
+            relay_url: std::env::var("RAAG_ROOM_RELAY_URL")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| "https://relay.raag.audio".to_owned()),
             room_code_draft: String::new(),
             display_name_draft: "Listener".to_owned(),
             queue_permission: QueuePermission::HostOnly,

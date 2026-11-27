@@ -58,7 +58,11 @@ pub fn listen_together_screen(
     cb: ListenTogetherCallbacks,
 ) -> impl IntoElement {
     let sub_mode = signal(ListenTogetherSubMode::Rooms);
-    let relay_url_draft = signal(String::from("https://relay.resonance.dev"));
+    let default_relay = std::env::var("RAAG_ROOM_RELAY_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "https://relay.raag.audio".to_owned());
+    let relay_url_draft = signal(default_relay);
     let display_name_draft = signal(String::from("Listener"));
     let join_code_draft = signal(String::new());
     let desktop = is_desktop_layout();
