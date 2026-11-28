@@ -76,12 +76,20 @@ fn track_context_menu_and_playlist_mutations_with_rollback() {
     let mut library = LibrarySlice::new(true, Vec::new());
     let mut catalog = CatalogSlice::new(true);
     let mut mutations = MutationSlice::default();
+    let initial_len = library.playlists.len();
 
     let created = mutations.create_local_playlist("Night Drive", "Private", &mut library);
     let pid = created.playlist_id.clone().unwrap();
-    assert_eq!(library.playlists.len(), 1);
+    assert_eq!(library.playlists.len(), initial_len + 1);
     assert!(mutations.rename_local_playlist(&pid, "Late Night Drive", &mut library));
-    assert_eq!(library.playlists[0].title, "Late Night Drive");
+    assert_eq!(
+        library
+            .playlists
+            .iter()
+            .find(|p| p.playlist_id.as_deref() == Some(pid.as_str()))
+            .map(|p| p.title.as_str()),
+        Some("Late Night Drive")
+    );
 
     let _ = mutations.apply_playlist_edit(
         &pid,
@@ -95,17 +103,31 @@ fn track_context_menu_and_playlist_mutations_with_rollback() {
         true,
     );
     let mutation_gen = mutations.next_mutation_gen;
-    assert_eq!(library.playlists[0].track_count, Some(1));
+    assert_eq!(
+        library
+            .playlists
+            .iter()
+            .find(|p| p.playlist_id.as_deref() == Some(pid.as_str()))
+            .and_then(|p| p.track_count),
+        Some(1)
+    );
 
     let toast = mutations.rollback_playlist_edit_by_gen(mutation_gen, &mut library, &mut catalog);
     assert_eq!(
         toast.as_deref(),
         Some("Couldn't update playlist — restored")
     );
-    assert_eq!(library.playlists[0].track_count, Some(0));
+    assert_eq!(
+        library
+            .playlists
+            .iter()
+            .find(|p| p.playlist_id.as_deref() == Some(pid.as_str()))
+            .and_then(|p| p.track_count),
+        Some(0)
+    );
 
     assert!(mutations.delete_local_playlist(&pid, &mut library));
-    assert!(library.playlists.is_empty());
+    assert_eq!(library.playlists.len(), initial_len);
 }
 
 #[test]

@@ -594,8 +594,11 @@ mod host {
             let mut got_any = false;
             loop {
                 let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
                 let timeout = if got_any {
-                    Duration::from_millis(25)
+                    remaining.min(Duration::from_millis(70))
                 } else {
                     remaining
                 };
@@ -774,12 +777,26 @@ mod host {
                     st.control
                         .dispatch_event(p.id, EventKind::PressUp, payload.clone());
                     st.control.dispatch_event(p.id, EventKind::Press, payload);
-                    st.drain_batches(Duration::from_millis(80));
+                    st.drain_batches(Duration::from_millis(160));
                     json_response(StatusCode::OK, &st.snapshot())
                 } else {
                     json_response(
                         StatusCode::BAD_REQUEST,
                         &serde_json::json!({"error": "invalid press payload"}),
+                    )
+                }
+            }
+            (Method::POST, "/api/nsh/focus") => {
+                if let Ok(p) = serde_json::from_slice::<PressReq>(&body_bytes) {
+                    let mut st = state.lock().unwrap();
+                    st.control
+                        .dispatch_event(p.id, EventKind::Focus, EventPayload::None);
+                    st.drain_batches(Duration::from_millis(120));
+                    json_response(StatusCode::OK, &st.snapshot())
+                } else {
+                    json_response(
+                        StatusCode::BAD_REQUEST,
+                        &serde_json::json!({"error": "invalid focus payload"}),
                     )
                 }
             }
@@ -801,7 +818,7 @@ mod host {
                             count,
                         },
                     );
-                    st.drain_batches(Duration::from_millis(80));
+                    st.drain_batches(Duration::from_millis(140));
                     json_response(StatusCode::OK, &st.snapshot())
                 } else {
                     json_response(
@@ -827,7 +844,7 @@ mod host {
                             count,
                         },
                     );
-                    st.drain_batches(Duration::from_millis(80));
+                    st.drain_batches(Duration::from_millis(140));
                     json_response(StatusCode::OK, &st.snapshot())
                 } else {
                     json_response(

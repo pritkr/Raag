@@ -48,6 +48,7 @@ interface NodeViewProps {
   isRoot?: boolean;
   insideButton?: boolean;
   onPress: (id: number) => void;
+  onFocus: (id: number) => void;
   onInput: (id: number, text: string) => void;
   onSubmit: (id: number, text: string) => void;
   onScroll: (id: number, x: number, y: number) => void;
@@ -59,6 +60,7 @@ function NshNodeView({
   isRoot = false,
   insideButton = false,
   onPress,
+  onFocus,
   onInput,
   onSubmit,
   onScroll,
@@ -193,6 +195,7 @@ function NshNodeView({
         placeholder={node.inputPlaceholder}
         aria-label={node.a11yLabel ?? node.inputPlaceholder ?? 'Text input'}
         data-testid={node.testId ?? undefined}
+        onFocus={() => onFocus(node.id)}
         onChange={(e) => {
           const val = e.target.value;
           setDraft(val);
@@ -233,13 +236,13 @@ function NshNodeView({
       : 1.4;
     const rawText = (node.text ?? '').trim();
     const isShortControlLabel =
-      insideButton &&
       node.maxLines === 1 &&
       rawText.length > 0 &&
-      rawText.length <= 16 &&
+      rawText.length <= 20 &&
       node.w > 0 &&
-      node.w <= 112 &&
-      !rawText.includes('•');
+      node.w <= 148 &&
+      !rawText.includes('•') &&
+      (insideButton || !rawText.includes(' '));
     const clampStyle: React.CSSProperties =
       node.maxLines === 1
         ? isShortControlLabel
@@ -323,6 +326,7 @@ function NshNodeView({
         ambient={ambient}
         insideButton={insideButton || node.pressable}
         onPress={onPress}
+        onFocus={onFocus}
         onInput={onInput}
         onSubmit={onSubmit}
         onScroll={onScroll}
@@ -726,6 +730,7 @@ export default function App() {
                 ambient={tree.ambient}
                 isRoot
                 onPress={(id) => void sendAction('/api/nsh/press', { id })}
+                onFocus={(id) => void sendAction('/api/nsh/focus', { id })}
                 onInput={(id, text) =>
                   void sendAction('/api/nsh/input', { id, text })
                 }

@@ -30,7 +30,7 @@ pub fn App() -> impl IntoElement {
     app_window()
         .id("main")
         .title("Raag")
-        .default_size(size(px(1200.0), px(832.0)))
+        .default_size(size(px(1240.0), px(820.0)))
         .restore_bounds(true)
         .content(|| {
             crate::ui::controls::register_global_shortcuts();

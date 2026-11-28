@@ -70,6 +70,7 @@ fn scope_pill(scope: SearchScope, active_scope: Signal<SearchScope>) -> impl Int
         .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
         .child(
             text(scope.label())
+                .number_of_lines(1)
                 .text_xs()
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(move || {
@@ -114,6 +115,7 @@ fn filter_tab(filter: SearchFilter, test_id: &'static str) -> impl IntoElement {
         .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
         .child(
             text(filter.label())
+                .number_of_lines(1)
                 .text_xs()
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(move || {
@@ -693,6 +695,7 @@ pub fn search_screen() -> impl IntoElement {
                                                 .gap_3()
                                                 .child(
                                                     text("Songs")
+                                                        .number_of_lines(1)
                                                         .text_xl()
                                                         .font_weight(FontWeight::BOLD)
                                                         .text_color(move || theme().foreground),
@@ -733,6 +736,7 @@ pub fn search_screen() -> impl IntoElement {
                                             .justify_between()
                                             .child(
                                                 text("Songs")
+                                                    .number_of_lines(1)
                                                     .text_lg()
                                                     .font_weight(FontWeight::BOLD)
                                                     .text_color(move || theme().foreground),

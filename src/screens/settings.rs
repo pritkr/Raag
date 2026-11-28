@@ -156,8 +156,12 @@ fn account_card(cookie_draft: Signal<String>) -> impl IntoElement {
                                 )
                                 .child(
                                     view()
-                                        .px_2()
+                                        .flex_shrink_0()
+                                        .min_w(px(88.0))
+                                        .px_2p5()
                                         .py_0p5()
+                                        .items_center()
+                                        .justify_center()
                                         .rounded_full()
                                         .bg(pill_glass_surface)
                                         .child(
@@ -174,6 +178,7 @@ fn account_card(cookie_draft: Signal<String>) -> impl IntoElement {
                                                     SharedString::from("Anonymous")
                                                 }
                                             })
+                                            .number_of_lines(1)
                                             .text_xs()
                                             .font_weight(FontWeight::MEDIUM)
                                             .text_color(move || {

@@ -84,6 +84,7 @@ pub fn hero_pill_button(
         })
         .child(
             text(label)
+                .number_of_lines(1)
                 .text_sm()
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(color_hero_pill_fg),
@@ -123,6 +124,7 @@ pub fn glass_pill_button(
         })
         .child(
             text(label)
+                .number_of_lines(1)
                 .text_sm()
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(move || theme().foreground),
@@ -152,6 +154,7 @@ pub fn secondary_button(
         .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
         .child(
             text(label)
+                .number_of_lines(1)
                 .text_sm()
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(move || theme().foreground),
@@ -336,6 +339,7 @@ pub fn back_button(on_press: impl Fn() + 'static) -> impl IntoElement {
         .child(icon(IconKind::ChevronLeft, 16.0, move || theme().foreground))
         .child(
             text("Back")
+                .number_of_lines(1)
                 .text_sm()
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(move || theme().foreground),

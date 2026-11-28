@@ -60,19 +60,6 @@ fn trigger_shell_layout_animation() {
     }
 }
 
-fn primary_nav_index(tab: AppTab) -> Option<usize> {
-    match tab {
-        AppTab::Home => Some(0),
-        AppTab::Explore => Some(1),
-        AppTab::Library => Some(2),
-        AppTab::ListenTogether => Some(3),
-        AppTab::NowPlaying
-        | AppTab::Lyrics
-        | AppTab::Queue
-        | AppTab::Search
-        | AppTab::Settings => None,
-    }
-}
 
 fn side_panel_queue_artwork(
     track: Memo<Option<resonance_contract::Track>>,
@@ -197,7 +184,11 @@ fn desktop_nav_item(
         .rounded(radius_card)
         .style_when(
             move || show_static_bg && selected(),
-            |s| s.bg(sidebar_active_surface),
+            |s| {
+                s.bg(sidebar_active_surface)
+                    .border_1()
+                    .border_color(glass_hairline)
+            },
         )
         .transition()
         .duration(shell_transition_ms)
@@ -764,38 +755,6 @@ fn desktop_sidebar() -> impl IntoElement {
     let collapsed = store::sidebar_collapsed;
     let playlists_memo = computed(store::sidebar_playlists);
 
-    // Smooth sliding active pill behind the 4 primary nav items (40px item + 4px gap = 44px pitch).
-    const NAV_PITCH: f32 = 44.0;
-    let init_idx = primary_nav_index(store::active_tab());
-    let nav_y = animated_value(init_idx.unwrap_or(0) as f32 * NAV_PITCH);
-    let nav_visible = animated_value(if init_idx.is_some() { 1.0 } else { 0.0 });
-
-    let nav_y_eff = nav_y.clone();
-    let nav_vis_eff = nav_visible.clone();
-    effect(move || {
-        let idx_opt = primary_nav_index(store::active_tab());
-        let reduced = store::reduced_motion();
-        match idx_opt {
-            Some(idx) => {
-                let target = idx as f32 * NAV_PITCH;
-                if reduced {
-                    nav_y_eff.set(target);
-                    nav_vis_eff.set(1.0);
-                } else {
-                    nav_y_eff.timing(target, motion::LAYOUT_MS, Easing::EaseInOut);
-                    nav_vis_eff.timing(1.0, motion::PRESS_MS, Easing::EaseOut);
-                }
-            }
-            None => {
-                if reduced {
-                    nav_vis_eff.set(0.0);
-                } else {
-                    nav_vis_eff.timing(0.0, motion::PRESS_MS, Easing::EaseOut);
-                }
-            }
-        }
-    });
-
     view()
         .test_id("desktop-sidebar")
         .w(move || if collapsed() { px(72.0) } else { px(236.0) })
@@ -849,7 +808,7 @@ fn desktop_sidebar() -> impl IntoElement {
                             .child(raag_brand_icon(24.0))
                             .child(
                                 text("Music")
-                                    .number_of_lines(1)
+                                    .min_w(px(64.0))
                                     .text_lg()
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(move || theme().foreground),
@@ -860,44 +819,25 @@ fn desktop_sidebar() -> impl IntoElement {
         // Primary navigation in exact ytm-rs order: Home, Explore, Library, Listen together
         .child(
             view()
-                .relative()
                 .gap_1()
-                .child(
-                    view()
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .right_0()
-                        .h(px(40.0))
-                        .rounded(radius_card)
-                        .bg(sidebar_active_surface)
-                        .border_1()
-                        .border_color(glass_hairline)
-                        .flex_row()
-                        .items_center()
-                        .pointer_events(PointerEvents::None)
-                        .accessibility_elements_hidden(true)
-                        .bind_translate_y(&nav_y)
-                        .bind_opacity(&nav_visible),
-                )
-                .child(desktop_nav_item(AppTab::Home, "Home", IconKind::Home, false))
+                .child(desktop_nav_item(AppTab::Home, "Home", IconKind::Home, true))
                 .child(desktop_nav_item(
                     AppTab::Explore,
                     "Explore",
                     IconKind::Explore,
-                    false,
+                    true,
                 ))
                 .child(desktop_nav_item(
                     AppTab::Library,
                     "Library",
                     IconKind::Library,
-                    false,
+                    true,
                 ))
                 .child(desktop_nav_item(
                     AppTab::ListenTogether,
                     "Listen together",
                     IconKind::ListenTogether,
-                    false,
+                    true,
                 )),
         )
         // Divider + PLAYLISTS header
@@ -941,7 +881,7 @@ fn search_suggestions_dropdown(header_query: Signal<String>) -> impl IntoElement
             .rounded(radius_panel)
             .backdrop_blur(px(28.0))
             .backdrop_material(BackdropMaterial::Regular)
-            .bg(frosted_drawer_surface)
+            .bg(move || theme().popover)
             .border_1()
             .border_color(glass_hairline)
             .border_t_color(glass_specular_hairline)

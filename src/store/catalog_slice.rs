@@ -444,7 +444,46 @@ impl CatalogSlice {
         self.search_loading = false;
         self.search_error = None;
         let ql = query.to_lowercase();
-        let matched: Vec<Track> = fixture_tracks()
+        let mut seen_ids = HashSet::new();
+        let mut pool: Vec<Track> = Vec::new();
+        for t in fixture_tracks() {
+            if seen_ids.insert(t.id.clone()) {
+                pool.push(t);
+            }
+        }
+        let mut matched_albums: Vec<Playlist> = Vec::new();
+        let mut seen_album_ids = HashSet::new();
+        for sec in &self.home_sections {
+            for item in &sec.items {
+                match item {
+                    HomeItem::Track(t) => {
+                        if seen_ids.insert(t.id.clone()) {
+                            pool.push(t.clone());
+                        }
+                    }
+                    HomeItem::Collection {
+                        browse_id,
+                        title,
+                        subtitle,
+                        artwork_url,
+                    } => {
+                        let matches_col = ql.is_empty()
+                            || title.to_lowercase().contains(&ql)
+                            || subtitle.to_lowercase().contains(&ql);
+                        if matches_col && seen_album_ids.insert(browse_id.clone()) {
+                            matched_albums.push(Playlist {
+                                id: browse_id.clone(),
+                                title: title.clone(),
+                                subtitle: Some(subtitle.clone()),
+                                artwork_url: artwork_url.clone(),
+                                tracks: Vec::new(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        let matched: Vec<Track> = pool
             .into_iter()
             .filter(|t| {
                 ql.is_empty()
@@ -456,7 +495,7 @@ impl CatalogSlice {
             })
             .collect();
         self.search_all_tracks = matched;
-        self.search_albums.clear();
+        self.search_albums = matched_albums;
         self.search_results = filter_tracks_for_mode(&self.search_all_tracks, self.search_filter);
     }
 
