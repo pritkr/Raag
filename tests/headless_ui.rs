@@ -37,8 +37,8 @@ fn mobile_dark_fixture_journey_covers_now_playing_lyrics_queue_search_and_librar
 -> Result<(), String> {
     let mut app = start_mobile(ColorScheme::Dark);
 
-    // Home shows Quick Picks + torture-test 74-char title + CJK/emoji track
-    app.wait_for("Quick Picks")?;
+    // Home shows Listen again + torture-test 74-char title + CJK/emoji track
+    app.wait_for("Listen again")?;
     assert!(
         app.screen()
             .texts()
@@ -56,7 +56,7 @@ fn mobile_dark_fixture_journey_covers_now_playing_lyrics_queue_search_and_librar
     app.press("Nocturne Telemetry")?;
     app.wait_for("Play")?;
     app.press("Back")?;
-    app.wait_for("Quick Picks")?;
+    app.wait_for("Listen again")?;
 
     // Tap persistent Mini-Player to open Now Playing (Priority Surface #1)
     app.press("id:mini-player-open")?;
@@ -109,6 +109,7 @@ fn mobile_dark_fixture_journey_covers_now_playing_lyrics_queue_search_and_librar
     app.wait_for("Library")?;
     app.press("id:nav-settings-shortcut")?;
     app.wait_for("Settings")?;
+    app.press("General")?;
     app.wait_for("Clear Cache")?;
     // Cancel must keep cached bytes intact
     app.on_dialog(|d| {
@@ -134,14 +135,15 @@ fn mobile_dark_fixture_journey_covers_now_playing_lyrics_queue_search_and_librar
 #[test]
 fn desktop_wide_layout_and_mobile_light_theme_render_cleanly() -> Result<(), String> {
     let mut desktop = start_desktop();
-    desktop.wait_for("Raag")?;
     desktop.wait_for("Music")?;
+    desktop.wait_for("Listen again")?;
     desktop.press("id:nav-now-playing")?;
     desktop.wait_for("Now Playing")?;
 
     let mut light_mobile = start_mobile(ColorScheme::Light);
-    light_mobile.wait_for("Quick Picks")?;
+    light_mobile.wait_for("Listen again")?;
     light_mobile.press("id:nav-settings")?;
+    light_mobile.press("Playback")?;
     light_mobile.wait_for("SponsorBlock (auto-skip non-music)")?;
     Ok(())
 }

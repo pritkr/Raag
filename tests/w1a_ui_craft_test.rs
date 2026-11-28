@@ -50,7 +50,7 @@ fn heart_icon_color_follows_is_liked_not_is_current() {
 #[test]
 fn mobile_and_desktop_layouts_render_cleanly_without_dead_voids() -> Result<(), String> {
     let mut mobile = start_headless(390.0, 844.0);
-    mobile.wait_for("Quick Picks")?;
+    mobile.wait_for("Listen again")?;
     assert!(
         mobile
             .screen()
@@ -60,7 +60,7 @@ fn mobile_and_desktop_layouts_render_cleanly_without_dead_voids() -> Result<(), 
     );
 
     let mut desktop = start_headless(1440.0, 900.0);
-    desktop.wait_for("Quick Picks")?;
+    desktop.wait_for("Listen again")?;
     Ok(())
 }
 

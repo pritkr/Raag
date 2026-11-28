@@ -69,18 +69,18 @@
 }
 
 .nsh-ambient-blob-a {
-  animation: nsh-ambient-drift-a 24s ease-in-out infinite;
-  transition: background-color 700ms ease, opacity 700ms ease;
+  animation: nsh-ambient-drift-a 22s ease-in-out infinite;
+  transition: background-color 850ms ease, opacity 850ms ease;
 }
 
 .nsh-ambient-blob-b {
-  animation: nsh-ambient-drift-b 31s ease-in-out infinite;
-  transition: background-color 700ms ease, opacity 700ms ease;
+  animation: nsh-ambient-drift-b 28s ease-in-out infinite;
+  transition: background-color 850ms ease, opacity 850ms ease;
 }
 
 .nsh-ambient-blob-c {
-  animation: nsh-ambient-drift-c 27s ease-in-out infinite;
-  transition: background-color 700ms ease, opacity 700ms ease;
+  animation: nsh-ambient-drift-c 25s ease-in-out infinite;
+  transition: background-color 850ms ease, opacity 850ms ease;
 }
 
 .nsh-ambient-paused {

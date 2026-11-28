@@ -94,11 +94,11 @@ function NshNodeView({
     opacity: node.opacity,
     backdropFilter:
       node.backdropBlurPx > 0
-        ? `blur(${node.backdropBlurPx}px) saturate(1.4)`
+        ? `blur(${Math.min(node.backdropBlurPx, 20)}px) saturate(1.35)`
         : undefined,
     WebkitBackdropFilter:
       node.backdropBlurPx > 0
-        ? `blur(${node.backdropBlurPx}px) saturate(1.4)`
+        ? `blur(${Math.min(node.backdropBlurPx, 20)}px) saturate(1.35)`
         : undefined,
     overflow: node.scrollable
       ? undefined
@@ -117,57 +117,66 @@ function NshNodeView({
   ) {
     const paused = ambient.reducedMotion;
     const blobPause = paused ? ' nsh-ambient-paused' : '';
+    const softOrbMask =
+      'radial-gradient(closest-side, rgba(0,0,0,0.92) 0%, rgba(0,0,0,0.46) 44%, rgba(0,0,0,0.12) 74%, rgba(0,0,0,0) 100%)';
     return (
       <div
         data-testid={node.testId}
+        data-ambient-accent={ambient.accent}
         aria-hidden="true"
         style={{
           ...baseStyle,
           backgroundColor: ambient.base,
           overflow: 'hidden',
-          transition: paused ? undefined : 'background-color 700ms ease',
+          transition: paused ? undefined : 'background-color 850ms ease',
         }}
       >
         <div
           className={`nsh-ambient-blob-a${blobPause}`}
           style={{
             position: 'absolute',
-            insetInlineStart: '-18%',
-            top: '-22%',
-            width: '74%',
-            height: '78%',
+            insetInlineStart: '-24%',
+            top: '-28%',
+            width: '92%',
+            height: '96%',
             borderRadius: '9999px',
-            background: `radial-gradient(circle, ${ambient.accent} 0%, transparent 72%)`,
-            filter: 'blur(78px)',
-            opacity: 0.78,
+            backgroundColor: ambient.accent,
+            maskImage: softOrbMask,
+            WebkitMaskImage: softOrbMask,
+            opacity: 0.72,
+            willChange: 'transform',
           }}
         />
         <div
           className={`nsh-ambient-blob-b${blobPause}`}
           style={{
             position: 'absolute',
-            insetInlineStart: '34%',
-            top: '18%',
-            width: '76%',
-            height: '84%',
+            insetInlineStart: '26%',
+            top: '12%',
+            width: '94%',
+            height: '98%',
             borderRadius: '9999px',
-            background: `radial-gradient(circle, ${ambient.complementary} 0%, transparent 70%)`,
-            filter: 'blur(88px)',
-            opacity: 0.74,
+            backgroundColor: ambient.complementary,
+            maskImage: softOrbMask,
+            WebkitMaskImage: softOrbMask,
+            opacity: 0.68,
+            willChange: 'transform',
           }}
         />
         <div
           className={`nsh-ambient-blob-c${blobPause}`}
           style={{
             position: 'absolute',
-            insetInlineStart: '12%',
-            top: '48%',
-            width: '62%',
-            height: '66%',
+            insetInlineStart: '6%',
+            top: '38%',
+            width: '78%',
+            height: '82%',
             borderRadius: '9999px',
-            background: `radial-gradient(circle, ${ambient.accent} 0%, transparent 74%)`,
-            filter: 'blur(92px)',
-            opacity: 0.42,
+            backgroundColor: ambient.accent,
+            maskImage: softOrbMask,
+            WebkitMaskImage: softOrbMask,
+            opacity: 0.36,
+            willChange: 'transform',
           }}
         />
       </div>

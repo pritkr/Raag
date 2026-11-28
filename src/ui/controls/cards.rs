@@ -11,8 +11,8 @@ use crate::ui::controls::primitives::{artwork_box, primary_button};
 use crate::ui::icons::{IconKind, icon};
 use crate::ui::tokens::{
     MOBILE_MIN_TOUCH_TARGET, color_hero_pill_bg, color_hero_pill_fg, color_sponsor_badge,
-    color_status_ok, frosted_bar_surface, frosted_settings_card, glass_hairline, is_desktop_layout,
-    motion, muted_caption_label, pill_glass_hover, pill_glass_surface, radius_card,
+    color_status_ok, frosted_settings_card, glass_hairline, is_desktop_layout, motion,
+    muted_caption_label, pill_glass_hover, pill_glass_surface, radius_card,
 };
 
 fn card_transition_ms() -> f32 {
@@ -74,53 +74,6 @@ pub fn media_square_card(
                         .on_press(move || on_open_art())
                         .child(artwork_box(artwork_url, monogram, art_size, 10.0)),
                 )
-                .when_some(on_more, |v, cb| {
-                    v.child(
-                        button()
-                            .accessibility_label("Play Next")
-                            .absolute()
-                            .top_2()
-                            .right_2()
-                            .w(move || {
-                                px(if is_desktop_layout() {
-                                    36.0
-                                } else {
-                                    MOBILE_MIN_TOUCH_TARGET
-                                })
-                            })
-                            .h(move || {
-                                px(if is_desktop_layout() {
-                                    36.0
-                                } else {
-                                    MOBILE_MIN_TOUCH_TARGET
-                                })
-                            })
-                            .items_center()
-                            .justify_center()
-                            .rounded_full()
-                            .bg(frosted_bar_surface)
-                            .border_1()
-                            .border_color(glass_hairline)
-                            .shadow_md()
-                            .opacity(move || if is_desktop_layout() { 0.0_f32 } else { 0.94 })
-                            .transition()
-                            .duration(card_transition_ms)
-                            .ease_out()
-                            .group_hover(|s| s.opacity(1.0))
-                            .group_focus_within(|s| s.opacity(1.0))
-                            .hover(|s| s.bg(pill_glass_hover))
-                            .active(|s| s.scale(card_press_scale))
-                            .focus_visible(|s| {
-                                s.opacity(1.0)
-                                    .outline(px(2.0))
-                                    .outline_color(move || theme().ring)
-                            })
-                            .on_press(cb)
-                            .child(icon(IconKind::MoreVertical, 15.0, move || {
-                                theme().foreground
-                            })),
-                    )
-                })
                 .child(
                     button()
                         .accessibility_label(if is_active {
@@ -182,25 +135,69 @@ pub fn media_square_card(
                 ),
         )
         .child(
-            button()
+            view()
                 .w_full()
-                .gap_0p5()
-                .rounded(move || theme().radius)
-                .transition()
-                .duration(card_transition_ms)
-                .ease_out()
-                .hover(|s| s.opacity(0.9))
-                .active(|s| s.opacity(0.78))
-                .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
-                .on_press(move || on_open_meta())
+                .flex_row()
+                .items_start()
+                .justify_between()
+                .gap_1()
                 .child(
-                    text(title)
-                        .number_of_lines(2)
-                        .text_sm()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(move || theme().foreground),
+                    button()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .gap_0p5()
+                        .rounded(move || theme().radius)
+                        .transition()
+                        .duration(card_transition_ms)
+                        .ease_out()
+                        .hover(|s| s.opacity(0.9))
+                        .active(|s| s.opacity(0.78))
+                        .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
+                        .on_press(move || on_open_meta())
+                        .child(
+                            text(title)
+                                .number_of_lines(2)
+                                .text_sm()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(move || theme().foreground),
+                        )
+                        .child(muted_caption_label(subtitle)),
                 )
-                .child(muted_caption_label(subtitle)),
+                .when_some(on_more, |v, cb| {
+                    v.child(
+                        button()
+                            .accessibility_label("Play Next")
+                            .w(move || {
+                                px(if is_desktop_layout() {
+                                    26.0
+                                } else {
+                                    MOBILE_MIN_TOUCH_TARGET
+                                })
+                            })
+                            .h(move || {
+                                px(if is_desktop_layout() {
+                                    26.0
+                                } else {
+                                    MOBILE_MIN_TOUCH_TARGET
+                                })
+                            })
+                            .items_center()
+                            .justify_center()
+                            .rounded_full()
+                            .transition()
+                            .duration(card_transition_ms)
+                            .ease_out()
+                            .hover(|s| s.bg(pill_glass_hover))
+                            .active(|s| s.scale(card_press_scale))
+                            .focus_visible(|s| {
+                                s.outline(px(2.0)).outline_color(move || theme().ring)
+                            })
+                            .on_press(cb)
+                            .child(icon(IconKind::MoreVertical, 14.0, move || {
+                                theme().muted_foreground
+                            })),
+                    )
+                }),
         )
 }
 

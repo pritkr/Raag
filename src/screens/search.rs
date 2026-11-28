@@ -427,81 +427,84 @@ pub fn search_screen() -> impl IntoElement {
             .p_4()
             .style_when(is_desktop_layout, |s| s.px_8().py_5())
             .gap_5()
-            // Search bar (inline on mobile/tablet or direct test access; complements top bar)
-            .child(
-                view()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        view()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .min_h(px(MOBILE_MIN_TOUCH_TARGET))
-                            .flex_row()
-                            .items_center()
-                            .gap_2()
-                            .px_3p5()
-                            .rounded(radius_pill)
-                            .bg(pill_glass_surface)
-                            .border_1()
-                            .border_color(move || theme().input)
-                            .child(icon(IconKind::Search, 16.0, move || {
-                                theme().muted_foreground
-                            }))
-                            .child(
-                                input()
-                                    .test_id("search-input")
-                                    .value(move || query_sig.get())
-                                    .on_focus(|| set_text_input_focused(true))
-                                    .on_blur(|| set_text_input_focused(false))
-                                    .on_change(move |txt: &str| {
-                                        query_sig.set(txt.to_owned());
-                                        store::fetch_search_suggestions(txt);
-                                        store::run_search_debounced(txt);
-                                    })
-                                    .on_submit(move |txt: &str| {
-                                        query_sig.set(txt.to_owned());
-                                        store::run_search(txt);
-                                    })
-                                    .placeholder("Search songs, albums, artists, podcasts")
-                                    .placeholder_color(|| color(theme().muted_foreground))
-                                    .caret_color(|| color(theme().primary))
-                                    .return_key_type(ReturnKeyType::Search)
-                                    .flex_1()
-                                    .min_h(px(MOBILE_MIN_TOUCH_TARGET))
-                                    .text_sm()
-                                    .text_color(move || theme().foreground)
-                                    .border_color(move || theme().input),
-                            )
-                            .child(when(
-                                move || !query_sig.with(String::is_empty),
-                                move || {
-                                    button()
-                                        .accessibility_label("Clear search")
-                                        .w(px(36.0))
-                                        .h(px(36.0))
-                                        .items_center()
-                                        .justify_center()
-                                        .rounded_full()
-                                        .hover(|s| s.bg(pill_glass_hover))
-                                        .focus_visible(|s| {
-                                            s.outline(px(2.0)).outline_color(move || theme().ring)
+            // Search bar (inline on mobile/tablet where top desktop search header is absent)
+            .child(when(
+                move || !is_desktop_layout(),
+                move || {
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            view()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                                .flex_row()
+                                .items_center()
+                                .gap_2()
+                                .px_3p5()
+                                .rounded(radius_pill)
+                                .bg(pill_glass_surface)
+                                .border_1()
+                                .border_color(move || theme().input)
+                                .child(icon(IconKind::Search, 16.0, move || {
+                                    theme().muted_foreground
+                                }))
+                                .child(
+                                    input()
+                                        .test_id("search-input")
+                                        .value(move || query_sig.get())
+                                        .on_focus(|| set_text_input_focused(true))
+                                        .on_blur(|| set_text_input_focused(false))
+                                        .on_change(move |txt: &str| {
+                                            query_sig.set(txt.to_owned());
+                                            store::fetch_search_suggestions(txt);
+                                            store::run_search_debounced(txt);
                                         })
-                                        .on_press(move || {
-                                            query_sig.set(String::new());
-                                            store::run_search("");
+                                        .on_submit(move |txt: &str| {
+                                            query_sig.set(txt.to_owned());
+                                            store::run_search(txt);
                                         })
-                                        .child(icon(IconKind::Close, 14.0, move || {
-                                            theme().muted_foreground
-                                        }))
-                                },
-                            )),
-                    )
-                    .child(primary_button("Search", move || {
-                        store::run_search(&query_sig.get_untracked());
-                    })),
-            )
+                                        .placeholder("Search songs, albums, artists, podcasts")
+                                        .placeholder_color(|| color(theme().muted_foreground))
+                                        .caret_color(|| color(theme().primary))
+                                        .return_key_type(ReturnKeyType::Search)
+                                        .flex_1()
+                                        .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                                        .text_sm()
+                                        .text_color(move || theme().foreground)
+                                        .border_color(move || theme().input),
+                                )
+                                .child(when(
+                                    move || !query_sig.with(String::is_empty),
+                                    move || {
+                                        button()
+                                            .accessibility_label("Clear search")
+                                            .w(px(36.0))
+                                            .h(px(36.0))
+                                            .items_center()
+                                            .justify_center()
+                                            .rounded_full()
+                                            .hover(|s| s.bg(pill_glass_hover))
+                                            .focus_visible(|s| {
+                                                s.outline(px(2.0)).outline_color(move || theme().ring)
+                                            })
+                                            .on_press(move || {
+                                                query_sig.set(String::new());
+                                                store::run_search("");
+                                            })
+                                            .child(icon(IconKind::Close, 14.0, move || {
+                                                theme().muted_foreground
+                                            }))
+                                    },
+                                )),
+                        )
+                        .child(primary_button("Search", move || {
+                            store::run_search(&query_sig.get_untracked());
+                        }))
+                },
+            ))
             // Scope pills (YT Music, Library, Uploads) + Category filter chips
             .child(
                 view()

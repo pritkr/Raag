@@ -75,35 +75,6 @@ pub fn now_playing_screen() -> impl IntoElement {
         )
 }
 
-fn header_pill_button(
-    label: &'static str,
-    kind: IconKind,
-    on_press: impl Fn() + 'static,
-) -> impl IntoElement {
-    button()
-        .on_press(on_press)
-        .min_h(px(34.0))
-        .px_3()
-        .flex_row()
-        .items_center()
-        .justify_center()
-        .gap_1p5()
-        .rounded(radius_pill)
-        .bg(pill_glass_surface)
-        .border_1()
-        .border_color(glass_hairline)
-        .hover(|s| s.bg(pill_glass_hover))
-        .active(|s| s.opacity(0.78))
-        .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
-        .child(icon(kind, 14.0, move || theme().foreground))
-        .child(
-            text(label)
-                .text_xs()
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(move || theme().foreground),
-        )
-}
-
 fn top_header_bar(desktop: bool) -> impl IntoElement {
     let btn_box = if desktop {
         36.0
@@ -145,6 +116,17 @@ fn top_header_bar(desktop: bool) -> impl IntoElement {
                         .items_center()
                         .gap_1p5()
                         .child(
+                            text("Now Playing")
+                                .text_xs()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(move || theme().foreground),
+                        )
+                        .child(
+                            text("•")
+                                .text_xs()
+                                .text_color(move || theme().muted_foreground),
+                        )
+                        .child(
                             text(move || {
                                 let snap = store::player_snapshot();
                                 if snap.offline_mode {
@@ -184,16 +166,6 @@ fn top_header_bar(desktop: bool) -> impl IntoElement {
                 .flex_row()
                 .items_center()
                 .gap_2()
-                .when(desktop, |v| {
-                    v.child(header_pill_button("Open Lyrics", IconKind::Lyrics, || {
-                        store::set_tab(AppTab::Lyrics)
-                    }))
-                    .child(header_pill_button(
-                        "Up Next Queue",
-                        IconKind::Queue,
-                        || store::set_tab(AppTab::Queue),
-                    ))
-                })
                 .child(
                     button()
                         .selected(|| sleep_timer_badge_label().is_some())
@@ -1214,7 +1186,8 @@ fn now_playing_lyrics_body() -> impl IntoElement {
                                         )
                                     })
                                 })
-                                .text_2xl()
+                                .style_when(is_active, |s| s.text_3xl())
+                                .style_when(move || !is_active(), |s| s.text_2xl())
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(move || {
                                     if is_active() {
@@ -1235,7 +1208,7 @@ fn now_playing_lyrics_body() -> impl IntoElement {
                         })
                         .unwrap_or_default()
                 })
-                .estimated_item_size(px(64.0))
+                .estimated_item_size(px(72.0))
                 .flex_1()
             })
             .otherwise(|| {
@@ -1403,8 +1376,8 @@ fn desktop_now_playing() -> impl IntoElement {
         .flex_1()
         .min_h(px(0.0))
         .px_8()
-        .py_5()
-        .gap_5()
+        .py_4()
+        .gap_4()
         .items_center()
         .child(
             view()
@@ -1419,19 +1392,18 @@ fn desktop_now_playing() -> impl IntoElement {
                 .flex_1()
                 .min_h(px(0.0))
                 .flex_row()
-                .items_start()
+                .items_center()
                 .gap_10()
                 .child(
-                    scroll().w(px(384.0)).h_full().child(
-                        view()
-                            .w_full()
-                            .gap_4()
-                            .items_center()
-                            .pb_4()
-                            .child(focal_artwork(340.0))
-                            .child(track_info_and_actions())
-                            .child(now_playing_control_dock(true)),
-                    ),
+                    view()
+                        .w(px(384.0))
+                        .h_full()
+                        .justify_center()
+                        .items_center()
+                        .gap_5()
+                        .pb_4()
+                        .child(focal_artwork(356.0))
+                        .child(track_info_and_actions()),
                 )
                 .child(desktop_now_playing_right_panel()),
         )

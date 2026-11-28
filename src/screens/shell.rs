@@ -857,15 +857,6 @@ fn desktop_sidebar() -> impl IntoElement {
                     },
                 )),
         )
-        // Collapsed emblem icon (matches 06c_sidebar_collapsed.png)
-        .child(when(collapsed, || {
-            view()
-                .w_full()
-                .pb_2()
-                .items_center()
-                .justify_center()
-                .child(raag_brand_icon(24.0))
-        }))
         // Primary navigation in exact ytm-rs order: Home, Explore, Library, Listen together
         .child(
             view()
@@ -996,15 +987,25 @@ fn search_suggestions_dropdown(header_query: Signal<String>) -> impl IntoElement
                     items.push("Midnight Raga".to_owned());
                 }
 
-                view()
-                    .gap_0p5()
-                    .children(items.into_iter().take(6).map(move |suggestion| {
+                let ql = trimmed.to_lowercase();
+                let entity_tracks: Vec<resonance_contract::Track> = store::all_library_songs()
+                    .into_iter()
+                    .filter(|t| {
+                        ql.is_empty()
+                            || t.title.to_lowercase().contains(&ql)
+                            || t.artist_display().to_lowercase().contains(&ql)
+                    })
+                    .take(3)
+                    .collect();
+
+                let mut list_col = view().gap_0p5().children(items.into_iter().take(5).map(
+                    move |suggestion| {
                         let s_click = suggestion.clone();
                         let s_label = suggestion.clone();
                         button()
                             .accessibility_label(s_label)
                             .w_full()
-                            .min_h(px(38.0))
+                            .min_h(px(36.0))
                             .px_3()
                             .flex_row()
                             .items_center()
@@ -1031,8 +1032,95 @@ fn search_suggestions_dropdown(header_query: Signal<String>) -> impl IntoElement
                                     .text_sm()
                                     .text_color(move || theme().foreground),
                             )
-                    }))
-                    .into_element()
+                    },
+                ));
+
+                if !entity_tracks.is_empty() {
+                    list_col = list_col
+                        .child(view().h(px(1.0)).w_full().bg(glass_hairline).my_1())
+                        .children(entity_tracks.into_iter().enumerate().map(|(idx, track)| {
+                            let is_artist_row = idx == 0 && !track.artists.is_empty();
+                            let artist_name = track.artist_display();
+                            let artist_id = track
+                                .artists
+                                .first()
+                                .and_then(|a| a.id.clone())
+                                .unwrap_or_else(|| format!("UC_{artist_name}"));
+                            let mono = if is_artist_row {
+                                artist_name
+                                    .chars()
+                                    .find(|c| c.is_alphanumeric())
+                                    .map(|c| c.to_uppercase().to_string())
+                                    .unwrap_or_else(|| "♪".into())
+                            } else {
+                                track.fallback_monogram()
+                            };
+                            let art_url = track.artwork_url.clone();
+                            let title = if is_artist_row {
+                                artist_name.clone()
+                            } else {
+                                track.title.clone()
+                            };
+                            let subtitle = if is_artist_row {
+                                "Artist".to_owned()
+                            } else {
+                                format!("Song • {artist_name}")
+                            };
+                            let t_play = track.clone();
+                            let a11y = title.clone();
+
+                            button()
+                                .accessibility_label(a11y)
+                                .w_full()
+                                .min_h(px(46.0))
+                                .px_2p5()
+                                .py_1()
+                                .flex_row()
+                                .items_center()
+                                .gap_2p5()
+                                .rounded(radius_card)
+                                .hover(|s| s.bg(pill_glass_hover))
+                                .active(|s| s.opacity(0.8))
+                                .focus_visible(|s| {
+                                    s.outline(px(2.0)).outline_color(move || theme().ring)
+                                })
+                                .on_press(move || {
+                                    store::set_search_dropdown_open(false);
+                                    if is_artist_row {
+                                        store::open_artist_entity(artist_id.clone());
+                                    } else {
+                                        store::play_track(t_play.clone());
+                                    }
+                                })
+                                .child(artwork_box(
+                                    art_url,
+                                    mono,
+                                    34.0,
+                                    if is_artist_row { 17.0 } else { 6.0 },
+                                ))
+                                .child(
+                                    view()
+                                        .flex_1()
+                                        .min_w(px(0.0))
+                                        .gap_0p5()
+                                        .child(
+                                            text(title)
+                                                .number_of_lines(1)
+                                                .text_sm()
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(move || theme().foreground),
+                                        )
+                                        .child(
+                                            text(subtitle)
+                                                .number_of_lines(1)
+                                                .text_xs()
+                                                .text_color(move || theme().muted_foreground),
+                                        ),
+                                )
+                        }));
+                }
+
+                list_col.into_element()
             }))
     })
 }

@@ -159,7 +159,7 @@ fn destructive_confirmations_cancel_is_noop_and_confirm_executes() -> Result<(),
     })
     .expect("headless start");
 
-    app.wait_for("Quick Picks")?;
+    app.wait_for("Listen again")?;
     app.press("id:nav-queue")?;
     app.wait_for("Clear Up Next")?;
     app.wait_for("4 tracks in queue • 15:26 total")?;
@@ -204,7 +204,7 @@ fn escape_key_dismisses_auth_sheet_and_now_playing() -> Result<(), String> {
     })
     .expect("headless desktop start");
 
-    app.wait_for("Quick Picks")?;
+    app.wait_for("Listen again")?;
     app.press("id:nav-settings")?;
     app.wait_for("Settings")?;
     app.press("id:open-auth-sheet-btn")?;
@@ -239,7 +239,7 @@ fn reflow_320px_light_and_dark_smoke() -> Result<(), String> {
         })
         .expect("320px headless start");
 
-        app.wait_for("Quick Picks")?;
+        app.wait_for("Listen again")?;
         app.press("id:nav-search")?;
         app.wait_for("Search")?;
         app.press("id:nav-queue")?;

@@ -85,11 +85,11 @@ pub fn volume_slider(
         .max(1.0)
         .step(0.02)
         .accessibility_label("Volume")
-        .track_class("w-20 h-6 justify-center")
+        .track_class("w-16 h-6 justify-center")
         .indicator_class("w-full h-1 rounded-full bg-muted")
         .range_class("rounded-full")
         .range_style(|s| s.bg(|| ambient_progress_color(store::active_ambient_palette())))
-        .thumb_class("size-3 rounded-full")
+        .thumb_class("size-2.5 rounded-full")
         .thumb_style(|s| s.bg(|| ambient_progress_color(store::active_ambient_palette())))
         .on_change(move |v: &SliderValue| {
             on_change(v.start() as f32);
@@ -153,13 +153,13 @@ pub fn desktop_player_bar() -> impl IntoElement {
                         })
                         .step(500.0)
                         .accessibility_label("Desktop Playback Seek Bar")
-                        .track_class("w-full h-3 justify-start")
+                        .track_class("w-full h-1.5 justify-start")
                         .indicator_class("w-full h-0.5 bg-muted")
                         .range_class("h-0.5")
                         .range_style(|s| {
                             s.bg(|| ambient_progress_color(store::active_ambient_palette()))
                         })
-                        .thumb_class("size-3 rounded-full")
+                        .thumb_class("size-2 rounded-full")
                         .thumb_style(|s| {
                             s.bg(|| ambient_progress_color(store::active_ambient_palette()))
                         })
@@ -175,8 +175,8 @@ pub fn desktop_player_bar() -> impl IntoElement {
                 .justify_between()
                 .px_4()
                 .pb_2()
-                .pt_0p5()
-                .min_h(px(62.0))
+                .pt_1()
+                .min_h(px(64.0))
                 .gap_3()
                 // Left: Square artwork + Title/Artist + Like / Dislike / More
                 .child(
@@ -531,7 +531,7 @@ pub fn desktop_player_bar() -> impl IntoElement {
                         .flex_row()
                         .items_center()
                         .justify_end()
-                        .gap_1p5()
+                        .gap_1()
                         .child(
                             text(move || {
                                 let snap = store::player_snapshot();

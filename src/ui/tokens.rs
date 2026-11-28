@@ -191,7 +191,7 @@ pub fn frosted_bar_surface() -> AdaptiveColor {
     theme()
         .color("glass-bar")
         .unwrap_or(theme().card)
-        .opacity(0.62)
+        .opacity(0.44)
 }
 
 /// Calibrated translucent frosted glass surface for the Left Sidebar over the moving ambient backdrop.
@@ -199,7 +199,7 @@ pub fn frosted_sidebar_surface() -> AdaptiveColor {
     theme()
         .color("glass-sidebar")
         .unwrap_or(theme().card)
-        .opacity(0.28)
+        .opacity(0.12)
 }
 
 /// Calibrated translucent frosted glass surface for the Right `Up next` Queue / Lyrics drawer.
@@ -207,7 +207,7 @@ pub fn frosted_drawer_surface() -> AdaptiveColor {
     theme()
         .color("glass-drawer")
         .unwrap_or(theme().card)
-        .opacity(0.54)
+        .opacity(0.56)
 }
 
 /// Calibrated translucent frosted glass surface for the sticky Desktop Top Header.
@@ -215,7 +215,7 @@ pub fn frosted_header_surface() -> AdaptiveColor {
     theme()
         .color("glass-header")
         .unwrap_or(theme().background)
-        .opacity(0.16)
+        .opacity(0.05)
 }
 
 /// Calibrated translucent glass card surface for Settings cards, Listen Together cards, and Search Top Result.
@@ -276,7 +276,7 @@ pub fn glass_hairline() -> AdaptiveColor {
     theme()
         .color("glass-hairline")
         .unwrap_or(theme().border)
-        .opacity(0.10)
+        .opacity(0.08)
 }
 
 /// Subtle 1px top specular highlight hairline for elevated glass docks and sheets.
@@ -284,7 +284,7 @@ pub fn glass_specular_hairline() -> AdaptiveColor {
     theme()
         .color("glass-specular")
         .unwrap_or(theme().foreground)
-        .opacity(0.16)
+        .opacity(0.15)
 }
 
 /// Deterministic editorial artwork cover gradient pair `(from, to)` resolved from `theme.json`.
