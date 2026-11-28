@@ -899,19 +899,19 @@ pub fn create_local_playlist_and_add(title: &str, privacy: &str, track: Track) {
     let signed_in = settings_signal().with(|s| s.signed_in);
     let mut created_id = String::new();
     let mut created_title = String::new();
+    let mut l = library_signal().get_untracked();
     mutations_signal().update(|m| {
-        library_signal().update(|l| {
-            let created = m.create_local_playlist(title, privacy, l);
-            created_id = created.browse_id.clone();
-            created_title = created.title.clone();
-            if let Some(pl) = l.playlists.first_mut() {
-                pl.track_count = Some(1);
-            }
-            if live && signed_in {
-                m.pending_mutations += 1;
-            }
-        });
+        let created = m.create_local_playlist(title, privacy, &mut l);
+        created_id = created.browse_id.clone();
+        created_title = created.title.clone();
+        if let Some(pl) = l.playlists.first_mut() {
+            pl.track_count = Some(1);
+        }
+        if live && signed_in {
+            m.pending_mutations += 1;
+        }
     });
+    library_signal().set(l);
     let track_id = track.id.clone();
     ui_signal().update(|u| {
         u.add_to_playlist_track = None;
@@ -940,16 +940,16 @@ pub fn create_playlist(title: &str, privacy: &str) {
     let signed_in = settings_signal().with(|s| s.signed_in);
     let mut created_id = String::new();
     let mut created_title = String::new();
+    let mut l = library_signal().get_untracked();
     mutations_signal().update(|m| {
-        library_signal().update(|l| {
-            let created = m.create_local_playlist(title, privacy, l);
-            created_id = created.browse_id.clone();
-            created_title = created.title.clone();
-            if live && signed_in {
-                m.pending_mutations += 1;
-            }
-        });
+        let created = m.create_local_playlist(title, privacy, &mut l);
+        created_id = created.browse_id.clone();
+        created_title = created.title.clone();
+        if live && signed_in {
+            m.pending_mutations += 1;
+        }
     });
+    library_signal().set(l);
     ui_signal().update(|u| {
         u.set_status_banner(format!("Created playlist \"{created_title}\""));
     });
@@ -981,19 +981,19 @@ pub fn save_queue_as_playlist() {
 
     let mut created_id = String::new();
     let mut created_title = String::new();
+    let mut l = library_signal().get_untracked();
     mutations_signal().update(|m| {
-        library_signal().update(|l| {
-            let created = m.create_local_playlist(&title, "private", l);
-            created_id = created.browse_id.clone();
-            created_title = created.title.clone();
-            if let Some(pl) = l.playlists.first_mut() {
-                pl.track_count = Some(track_count as u32);
-            }
-            if live && signed_in {
-                m.pending_mutations += 1;
-            }
-        });
+        let created = m.create_local_playlist(&title, "private", &mut l);
+        created_id = created.browse_id.clone();
+        created_title = created.title.clone();
+        if let Some(pl) = l.playlists.first_mut() {
+            pl.track_count = Some(track_count as u32);
+        }
+        if live && signed_in {
+            m.pending_mutations += 1;
+        }
     });
+    library_signal().set(l);
 
     ui_signal().update(|u| {
         u.set_status_banner(if live && signed_in {
@@ -1022,14 +1022,14 @@ pub fn rename_playlist(playlist_id: String, new_title: String) {
     let live = !is_fixture_mode();
     let signed_in = settings_signal().with(|s| s.signed_in);
     let mut renamed = false;
+    let mut l = library_signal().get_untracked();
     mutations_signal().update(|m| {
-        library_signal().update(|l| {
-            renamed = m.rename_local_playlist(&playlist_id, &clean, l);
-            if renamed && live && signed_in {
-                m.pending_mutations += 1;
-            }
-        });
+        renamed = m.rename_local_playlist(&playlist_id, &clean, &mut l);
+        if renamed && live && signed_in {
+            m.pending_mutations += 1;
+        }
     });
+    library_signal().set(l);
     if renamed {
         catalog_signal().update(|c| {
             if let Some(col) = c.selected_collection.as_mut()
@@ -1052,14 +1052,14 @@ pub fn delete_playlist(playlist_id: String) {
     let live = !is_fixture_mode();
     let signed_in = settings_signal().with(|s| s.signed_in);
     let mut deleted = false;
+    let mut l = library_signal().get_untracked();
     mutations_signal().update(|m| {
-        library_signal().update(|l| {
-            deleted = m.delete_local_playlist(&playlist_id, l);
-            if deleted && live && signed_in {
-                m.pending_mutations += 1;
-            }
-        });
+        deleted = m.delete_local_playlist(&playlist_id, &mut l);
+        if deleted && live && signed_in {
+            m.pending_mutations += 1;
+        }
     });
+    library_signal().set(l);
     if deleted {
         catalog_signal().update(|c| {
             if c.selected_collection
@@ -1083,14 +1083,21 @@ pub fn add_track_to_playlist(playlist_id: String, playlist_title: String, track:
         video_id: track.id.clone(),
     };
     let mut dispatch_cmd = None;
+    let mut c = catalog_signal().get_untracked();
+    let mut l = library_signal().get_untracked();
     mutations_signal().update(|m| {
-        catalog_signal().update(|c| {
-            library_signal().update(|l| {
-                dispatch_cmd =
-                    m.apply_playlist_edit(&playlist_id, &op, Some(track), c, l, live, signed_in);
-            });
-        });
+        dispatch_cmd = m.apply_playlist_edit(
+            &playlist_id,
+            &op,
+            Some(track),
+            &mut c,
+            &mut l,
+            live,
+            signed_in,
+        );
     });
+    catalog_signal().set(c);
+    library_signal().set(l);
     ui_signal().update(|u| {
         u.add_to_playlist_track = None;
         u.set_status_banner(format!("Added to {playlist_title}"));
@@ -1108,14 +1115,14 @@ pub fn remove_track_from_playlist(playlist_id: String, video_id: String) {
         set_video_id: video_id,
     };
     let mut dispatch_cmd = None;
+    let mut c = catalog_signal().get_untracked();
+    let mut l = library_signal().get_untracked();
     mutations_signal().update(|m| {
-        catalog_signal().update(|c| {
-            library_signal().update(|l| {
-                dispatch_cmd =
-                    m.apply_playlist_edit(&playlist_id, &op, None, c, l, live, signed_in);
-            });
-        });
+        dispatch_cmd =
+            m.apply_playlist_edit(&playlist_id, &op, None, &mut c, &mut l, live, signed_in);
     });
+    catalog_signal().set(c);
+    library_signal().set(l);
     ui_signal().update(|u| u.set_status_banner("Removed from playlist"));
     if let Some((playlist_id, op)) = dispatch_cmd {
         live_engine::dispatch(EngineCommand::EditPlaylist { playlist_id, op });
@@ -1134,14 +1141,14 @@ pub fn move_playlist_track(
         predecessor_set_video_id: predecessor_video_id,
     };
     let mut dispatch_cmd = None;
+    let mut c = catalog_signal().get_untracked();
+    let mut l = library_signal().get_untracked();
     mutations_signal().update(|m| {
-        catalog_signal().update(|c| {
-            library_signal().update(|l| {
-                dispatch_cmd =
-                    m.apply_playlist_edit(&playlist_id, &op, None, c, l, live, signed_in);
-            });
-        });
+        dispatch_cmd =
+            m.apply_playlist_edit(&playlist_id, &op, None, &mut c, &mut l, live, signed_in);
     });
+    catalog_signal().set(c);
+    library_signal().set(l);
     if let Some((playlist_id, op)) = dispatch_cmd {
         live_engine::dispatch(EngineCommand::EditPlaylist { playlist_id, op });
     }
@@ -1151,13 +1158,13 @@ pub fn toggle_like_current() {
     let live = !is_fixture_mode();
     let signed_in = settings_signal().with(|s| s.signed_in);
     let mut dispatch_cmd = None;
+    let mut p = playback_signal().get_untracked();
+    let mut l = library_signal().get_untracked();
     mutations_signal().update(|m| {
-        playback_signal().update(|p| {
-            library_signal().update(|l| {
-                dispatch_cmd = m.toggle_like_current(p, l, live, signed_in);
-            });
-        });
+        dispatch_cmd = m.toggle_like_current(&mut p, &mut l, live, signed_in);
     });
+    playback_signal().set(p);
+    library_signal().set(l);
     if let Some((video_id, action)) = dispatch_cmd {
         live_engine::dispatch(EngineCommand::SetLike { video_id, action });
     }
@@ -1167,13 +1174,13 @@ pub fn toggle_like_track(track: Track) {
     let live = !is_fixture_mode();
     let signed_in = settings_signal().with(|s| s.signed_in);
     let mut dispatch_cmd = None;
+    let mut p = playback_signal().get_untracked();
+    let mut l = library_signal().get_untracked();
     mutations_signal().update(|m| {
-        playback_signal().update(|p| {
-            library_signal().update(|l| {
-                dispatch_cmd = m.toggle_like_track(track, p, l, live, signed_in);
-            });
-        });
+        dispatch_cmd = m.toggle_like_track(track, &mut p, &mut l, live, signed_in);
     });
+    playback_signal().set(p);
+    library_signal().set(l);
     if let Some((video_id, action)) = dispatch_cmd {
         live_engine::dispatch(EngineCommand::SetLike { video_id, action });
     }
@@ -1184,15 +1191,15 @@ pub fn toggle_dislike_current() {
     let signed_in = settings_signal().with(|s| s.signed_in);
     let mut dispatch_cmd = None;
     let mut banner = None;
+    let mut p = playback_signal().get_untracked();
+    let mut l = library_signal().get_untracked();
     mutations_signal().update(|m| {
-        playback_signal().update(|p| {
-            library_signal().update(|l| {
-                let (cmd, msg) = m.toggle_dislike_current(p, l, live, signed_in);
-                dispatch_cmd = cmd;
-                banner = msg;
-            });
-        });
+        let (cmd, msg) = m.toggle_dislike_current(&mut p, &mut l, live, signed_in);
+        dispatch_cmd = cmd;
+        banner = msg;
     });
+    playback_signal().set(p);
+    library_signal().set(l);
     if let Some(msg) = banner {
         ui_signal().update(|u| u.set_status_banner(msg));
     }

@@ -433,15 +433,15 @@ fn apply_live_update(update: LiveUpdate) {
             mutations_signal().update(|m| m.complete_mutation(&receipt));
         }
         LiveUpdate::MutationFailed { command, reason } => {
+            let mut p = playback_signal().get_untracked();
+            let mut l = library_signal().get_untracked();
+            let mut c = catalog_signal().get_untracked();
             mutations_signal().update(|m| {
-                playback_signal().update(|p| {
-                    library_signal().update(|l| {
-                        catalog_signal().update(|c| {
-                            m.rollback_mutation(command, p, l, c);
-                        });
-                    });
-                });
+                m.rollback_mutation(command, &mut p, &mut l, &mut c);
             });
+            playback_signal().set(p);
+            library_signal().set(l);
+            catalog_signal().set(c);
             ui_signal().update(|u| u.set_status_banner(format!("Action failed: {reason}")));
         }
         LiveUpdate::DownloadsLoaded(records) => {
@@ -489,24 +489,28 @@ fn apply_live_update(update: LiveUpdate) {
                 "tab_library",
                 snapshot.liked_songs.clone(),
             );
-            playback_signal().update(|p| {
-                library_signal().update(|l| {
-                    l.apply_snapshot(snapshot, p.player.current_track.as_mut());
-                });
+            let mut track = playback_signal().with_untracked(|p| p.player.current_track.clone());
+            library_signal().update(|l| {
+                l.apply_snapshot(snapshot, track.as_mut());
             });
+            if let Some(t) = track {
+                playback_signal().update(|p| {
+                    p.player.current_track = Some(t);
+                });
+            }
         }
         LiveUpdate::SettingsLoaded(settings) => {
             let mut loaded_theme = ThemeChoice::System;
             let mut loaded_volume = 1.0_f32;
             let mut loaded_dsp = resonance_core::audio_dsp::DspConfig::default();
+            let mut p = playback_signal().get_untracked();
             settings_signal().update(|s| {
-                playback_signal().update(|p| {
-                    s.apply_persisted_settings(&settings, p);
-                    loaded_volume = p.player.volume;
-                });
+                s.apply_persisted_settings(&settings, &mut p);
+                loaded_volume = p.player.volume;
                 loaded_theme = s.theme_choice;
                 loaded_dsp = s.dsp_config.clone();
             });
+            playback_signal().set(p);
             let channel = if settings.update_channel.eq_ignore_ascii_case("beta") {
                 UpdateChannel::Beta
             } else {
