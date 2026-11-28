@@ -1,0 +1,6 @@
+{
+  "name": "Resonance — Pure Rust YouTube Music Client",
+  "description": "Cross-platform YouTube Music client in 100% Pure Rust using Native Shell (nsh.dev) targeting Android and Desktop.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

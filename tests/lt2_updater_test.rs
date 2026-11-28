@@ -250,5 +250,5 @@ fn settings_updater_card_headless_ui_and_zero_raw_colors() {
             resonance::App,
         >()))
         .expect("headless app starts cleanly");
-    app.wait_for("Quick Picks").expect("home renders");
+    app.wait_for("Listen again").expect("home renders");
 }

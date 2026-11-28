@@ -233,8 +233,9 @@ pub fn move_queue_item(from: usize, to: usize) {
 }
 
 pub fn remove_queue_item(index: usize) {
-    playback_signal().update(|p| p.remove_queue_item(index, proxy_stream_url));
-    if !is_fixture_mode() {
+    let live = !is_fixture_mode();
+    playback_signal().update(|p| p.remove_queue_item(index, live, proxy_stream_url));
+    if live {
         live_engine::dispatch(EngineCommand::RemoveQueueItem(index));
     }
 }

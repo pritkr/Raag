@@ -29,16 +29,196 @@ mod host {
     use hyper::service::service_fn;
     use hyper::{Method, Request, Response, StatusCode, header};
     use hyper_util::rt::TokioIo;
+    use nsh_core::audio::{
+        AudioBackend as NshAudioTrait, AudioCommand, AudioEvent, AudioSink,
+    };
     use nsh_core::platform::Os;
     use nsh_core::{
         ApproxTextEngine, Bounds, Color, EdgeInsets, EventKind, EventPayload, MountBatch,
-        MountItem, NodeId, Point, Points, PressEvent, ROOT_ID, Size, TextAlign, ViewKind,
+        MountItem, NodeId, Point, PointerType, Points, PressEvent, ROOT_ID, Size, TextAlign,
+        TouchEvent, TouchPhase, TouchPoint, ViewKind,
     };
     use nsh_engine::{
         ColorScheme, Engine, EngineConfig, EngineControl, Environment, MountSink, Root,
     };
     use serde::{Deserialize, Serialize};
     use tokio::net::TcpListener;
+
+    /// Real-time wall-clock `nsh_core::audio::AudioBackend` for the interactive web preview.
+    ///
+    /// Keeps headless unit tests 100% deterministic (lives only in `nsh_preview`), while letting
+    /// users in the live preview leave songs playing and watch elapsed time tick forward, synced
+    /// lyrics highlight in real time, Pause/Resume/Seek/Loop take effect, and `AudioEvent::Ended`
+    /// naturally auto-advance to the next track in Up Next.
+    struct PreviewTrackClock {
+        id: u32,
+        sink: AudioSink,
+        duration_ms: u64,
+        position_ms: u64,
+        playing: bool,
+        looped: bool,
+        rate: f32,
+        last_tick: Instant,
+    }
+
+    struct PreviewAudioClockBackend {
+        state: Arc<Mutex<Option<PreviewTrackClock>>>,
+        initial_track_opened: std::sync::atomic::AtomicBool,
+    }
+
+    impl PreviewAudioClockBackend {
+        fn start() -> Arc<Self> {
+            let state: Arc<Mutex<Option<PreviewTrackClock>>> = Arc::new(Mutex::new(None));
+            let state_bg = Arc::clone(&state);
+            std::thread::Builder::new()
+                .name("nsh-preview-audio-clock".into())
+                .spawn(move || {
+                    loop {
+                        std::thread::sleep(Duration::from_millis(500));
+                        let now = Instant::now();
+                        let mut guard = state_bg.lock().unwrap();
+                        let Some(clock) = guard.as_mut() else {
+                            continue;
+                        };
+                        if !clock.playing {
+                            clock.last_tick = now;
+                            continue;
+                        }
+                        let dt_ms = now.saturating_duration_since(clock.last_tick).as_millis() as f64;
+                        clock.last_tick = now;
+                        if dt_ms <= 0.0 {
+                            continue;
+                        }
+                        let rate = (clock.rate as f64).clamp(0.25, 3.0);
+                        let advance = (dt_ms * rate).round() as u64;
+                        clock.position_ms = clock.position_ms.saturating_add(advance);
+                        if clock.duration_ms > 0 && clock.position_ms >= clock.duration_ms {
+                            if clock.looped {
+                                clock.position_ms = 0;
+                                let _ = clock.sink.send(AudioEvent::Progress {
+                                    position: Duration::from_millis(0),
+                                    duration: Some(Duration::from_millis(clock.duration_ms)),
+                                });
+                            } else {
+                                clock.position_ms = clock.duration_ms;
+                                clock.playing = false;
+                                let _ = clock.sink.send(AudioEvent::Progress {
+                                    position: Duration::from_millis(clock.duration_ms),
+                                    duration: Some(Duration::from_millis(clock.duration_ms)),
+                                });
+                                let _ = clock.sink.send(AudioEvent::Ended);
+                            }
+                        } else {
+                            let _ = clock.sink.send(AudioEvent::Progress {
+                                position: Duration::from_millis(clock.position_ms),
+                                duration: (clock.duration_ms > 0)
+                                    .then(|| Duration::from_millis(clock.duration_ms)),
+                            });
+                        }
+                    }
+                })
+                .expect("spawn preview audio clock thread");
+            Arc::new(Self {
+                state,
+                initial_track_opened: std::sync::atomic::AtomicBool::new(false),
+            })
+        }
+
+        fn lookup_duration_ms(src: &str) -> u64 {
+            let track_id = src
+                .split("/stream/")
+                .nth(1)
+                .map(|rest| rest.split(['?', '#']).next().unwrap_or(rest))
+                .unwrap_or_default();
+            resonance_core::fixture::fixture_tracks()
+                .into_iter()
+                .find(|t| t.id == track_id)
+                .map(|t| t.duration_ms)
+                .filter(|&d| d > 0)
+                .unwrap_or(240_000)
+        }
+    }
+
+    impl NshAudioTrait for PreviewAudioClockBackend {
+        fn available(&self) -> bool {
+            true
+        }
+
+        fn command(&self, command: AudioCommand, events: &AudioSink) {
+            let mut guard = self.state.lock().unwrap();
+            match command {
+                AudioCommand::Open { id, src, settings } => {
+                    let duration_ms = Self::lookup_duration_ms(&src);
+                    let is_first = !self
+                        .initial_track_opened
+                        .swap(true, std::sync::atomic::Ordering::SeqCst);
+                    let start_pos_ms = if is_first && src.contains("fix-long-70") {
+                        26_000.min(duration_ms)
+                    } else {
+                        0
+                    };
+                    let _ = events.send(AudioEvent::Load {
+                        duration: Some(Duration::from_millis(duration_ms)),
+                    });
+                    *guard = Some(PreviewTrackClock {
+                        id,
+                        sink: events.clone(),
+                        duration_ms,
+                        position_ms: start_pos_ms,
+                        playing: false,
+                        looped: settings.looped,
+                        rate: settings.rate,
+                        last_tick: Instant::now(),
+                    });
+                }
+                AudioCommand::Resume { id } => {
+                    if let Some(clock) = guard.as_mut()
+                        && clock.id == id
+                    {
+                        clock.playing = true;
+                        clock.last_tick = Instant::now();
+                        let _ = events.send(AudioEvent::Playing);
+                    }
+                }
+                AudioCommand::Pause { id } => {
+                    if let Some(clock) = guard.as_mut()
+                        && clock.id == id
+                    {
+                        clock.playing = false;
+                        clock.last_tick = Instant::now();
+                        let _ = events.send(AudioEvent::Paused);
+                    }
+                }
+                AudioCommand::Seek { id, position } => {
+                    if let Some(clock) = guard.as_mut()
+                        && clock.id == id
+                    {
+                        let target = (position.as_millis() as u64).min(clock.duration_ms);
+                        clock.position_ms = target;
+                        clock.last_tick = Instant::now();
+                        let _ = events.send(AudioEvent::Progress {
+                            position: Duration::from_millis(target),
+                            duration: Some(Duration::from_millis(clock.duration_ms)),
+                        });
+                    }
+                }
+                AudioCommand::Set { id, settings } => {
+                    if let Some(clock) = guard.as_mut()
+                        && clock.id == id
+                    {
+                        clock.looped = settings.looped;
+                        clock.rate = settings.rate;
+                    }
+                }
+                AudioCommand::Close { id } => {
+                    if guard.as_ref().is_some_and(|c| c.id == id) {
+                        *guard = None;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
 
     const THEME_JSON: &str = include_str!("../../theme.json");
 
@@ -199,6 +379,7 @@ mod host {
         content_bounds: Bounds<Points>,
         image_uri: Option<String>,
         pressable: bool,
+        wants_touch: bool,
         scrollable: bool,
         scroll_horizontal: bool,
         scroll_content: Size<Points>,
@@ -237,6 +418,7 @@ mod host {
                 content_bounds: Bounds::default(),
                 image_uri: None,
                 pressable: false,
+                wants_touch: false,
                 scrollable: matches!(kind, ViewKind::Scroll),
                 scroll_horizontal: false,
                 scroll_content: Size::default(),
@@ -271,15 +453,18 @@ mod host {
 
     struct NshScene {
         nodes: HashMap<NodeId, NodeState>,
+        sub_roots: Vec<NodeId>,
+        pending_sub_roots: Vec<NodeId>,
         version: u64,
         device: String,
         scheme: String,
         width: f32,
         height: f32,
+        safe_area: EdgeInsets,
     }
 
     impl NshScene {
-        fn new(width: f32, height: f32) -> Self {
+        fn new(width: f32, height: f32, safe_area: EdgeInsets) -> Self {
             let mut nodes = HashMap::new();
             let mut root = NodeState::new(ROOT_ID, ViewKind::View);
             root.bounds = Bounds::new(
@@ -289,11 +474,21 @@ mod host {
             nodes.insert(ROOT_ID, root);
             Self {
                 nodes,
+                sub_roots: Vec::new(),
+                pending_sub_roots: Vec::new(),
                 version: 0,
                 device: "desktop".into(),
                 scheme: "dark".into(),
                 width,
                 height,
+                safe_area,
+            }
+        }
+
+        fn register_sub_root(&mut self, id: NodeId) {
+            if id != ROOT_ID && !self.sub_roots.contains(&id) {
+                self.sub_roots.push(id);
+                self.pending_sub_roots.push(id);
             }
         }
 
@@ -305,6 +500,9 @@ mod host {
             for item in batch.items {
                 match item {
                     MountItem::Create { id, kind } => {
+                        if matches!(kind, ViewKind::Modal | ViewKind::Screen) {
+                            self.register_sub_root(id);
+                        }
                         self.nodes.insert(id, NodeState::new(id, kind));
                     }
                     MountItem::Insert {
@@ -347,6 +545,8 @@ mod host {
                             p.children.retain(|&c| c != id);
                         }
                         self.nodes.remove(&id);
+                        self.sub_roots.retain(|&rid| rid != id);
+                        self.pending_sub_roots.retain(|&rid| rid != id);
                     }
                     MountItem::Frame { id, frame } => {
                         if let Some(n) = self.nodes.get_mut(&id) {
@@ -418,8 +618,10 @@ mod host {
                     }
                     MountItem::Events { id, events } => {
                         if let Some(n) = self.nodes.get_mut(&id) {
+                            n.wants_touch = events.contains(EventKind::Touch);
                             n.pressable = events.contains(EventKind::Press)
-                                || events.contains(EventKind::PressDown);
+                                || events.contains(EventKind::PressDown)
+                                || n.wants_touch;
                         }
                     }
                     MountItem::ScrollConfig { id, horizontal, .. } => {
@@ -469,6 +671,9 @@ mod host {
                         if let Some(n) = self.nodes.get_mut(&id) {
                             n.content_bounds = content;
                         }
+                    }
+                    MountItem::ModalConfig { id, .. } => {
+                        self.register_sub_root(id);
                     }
                     _ => {}
                 }
@@ -533,6 +738,56 @@ mod host {
                 children,
             })
         }
+
+        fn page_origin(&self, id: NodeId) -> (f32, f32) {
+            let mut x = 0.0_f32;
+            let mut y = 0.0_f32;
+            let mut cur = Some(id);
+            let mut depth = 0usize;
+            while let Some(nid) = cur {
+                if depth > 128 {
+                    break;
+                }
+                depth += 1;
+                let Some(n) = self.nodes.get(&nid) else {
+                    break;
+                };
+                x += n.bounds.origin.x.0;
+                y += n.bounds.origin.y.0;
+                if let Some(pid) = n.parent {
+                    if let Some(p) = self.nodes.get(&pid)
+                        && p.scrollable
+                    {
+                        x -= p.scroll_offset.x.0;
+                        y -= p.scroll_offset.y.0;
+                    }
+                    cur = Some(pid);
+                } else {
+                    break;
+                }
+            }
+            (x, y)
+        }
+
+        fn touch_path(&self, id: NodeId) -> Vec<NodeId> {
+            let mut path = Vec::new();
+            let mut cur = Some(id);
+            let mut depth = 0usize;
+            while let Some(nid) = cur {
+                if depth > 128 {
+                    break;
+                }
+                depth += 1;
+                let Some(n) = self.nodes.get(&nid) else {
+                    break;
+                };
+                if n.wants_touch {
+                    path.push(nid);
+                }
+                cur = n.parent;
+            }
+            path
+        }
     }
 
     #[derive(Serialize)]
@@ -589,31 +844,43 @@ mod host {
     }
 
     impl HostState {
-        fn drain_batches(&mut self, wait_first: Duration) {
-            let deadline = Instant::now() + wait_first;
-            let mut got_any = false;
-            loop {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                if remaining.is_zero() {
-                    break;
+        fn drain_ready(&mut self) {
+            while let Ok(batch) = self.rx.try_recv() {
+                self.scene.apply(batch);
+            }
+        }
+
+        fn flush_once(&mut self) {
+            let (done_tx, done_rx) = crossbeam_channel::bounded::<()>(1);
+            self.control.flush(move |_| {
+                let _ = done_tx.send(());
+            });
+            let _ = done_rx.recv_timeout(Duration::from_secs(2));
+            self.drain_ready();
+        }
+
+        /// Deterministic NSH engine barrier: processes all queued control messages
+        /// (`dispatch_event`, `resize`, `set_root_size`, `set_environment`), applies
+        /// every committed `MountBatch`, sizes any newly mounted sub-roots, and
+        /// flushes once more if new sub-roots required layout.
+        fn sync_flush(&mut self) {
+            self.flush_once();
+            if !self.scene.pending_sub_roots.is_empty() {
+                let size = Size::new(Points(self.scene.width), Points(self.scene.height));
+                let safe_area = self.scene.safe_area;
+                let pending: Vec<NodeId> = self.scene.pending_sub_roots.drain(..).collect();
+                for rid in pending {
+                    self.control.set_root_size(rid, size, safe_area);
                 }
-                let timeout = if got_any {
-                    remaining.min(Duration::from_millis(70))
-                } else {
-                    remaining
-                };
-                match self.rx.recv_timeout(timeout) {
-                    Ok(batch) => {
-                        got_any = true;
-                        self.scene.apply(batch);
-                    }
-                    Err(_) => break,
-                }
+                self.flush_once();
             }
         }
 
         fn snapshot(&mut self) -> TreeResponse {
-            self.drain_batches(Duration::from_millis(2));
+            self.drain_ready();
+            if !self.scene.pending_sub_roots.is_empty() {
+                self.sync_flush();
+            }
             let apk_meta = std::fs::metadata(Path::new("public/raag-arm64-debug.apk"))
                 .or_else(|_| std::fs::metadata(Path::new("public/resonance-arm64-debug.apk")))
                 .ok();
@@ -649,6 +916,10 @@ mod host {
     #[derive(Deserialize)]
     struct PressReq {
         id: u32,
+        #[serde(default)]
+        x: Option<f32>,
+        #[serde(default)]
+        y: Option<f32>,
     }
 
     #[derive(Deserialize)]
@@ -691,7 +962,7 @@ mod host {
             ColorScheme::Dark
         };
         if device == "desktop" {
-            let size = Size::new(Points(1240.0), Points(820.0));
+            let size = Size::new(Points(1200.0), Points(800.0));
             (
                 size,
                 Environment {
@@ -766,9 +1037,53 @@ mod host {
             (Method::POST, "/api/nsh/press") => {
                 if let Ok(p) = serde_json::from_slice::<PressReq>(&body_bytes) {
                     let mut st = state.lock().unwrap();
+                    let lx = p.x.unwrap_or(8.0);
+                    let ly = p.y.unwrap_or(8.0);
+                    let (ox, oy) = st.scene.page_origin(p.id);
+                    let loc = Point::new(Points(lx), Points(ly));
+                    let page = Point::new(Points(ox + lx), Points(oy + ly));
+
+                    let touch_path = st.scene.touch_path(p.id);
+                    if !touch_path.is_empty() {
+                        let ts = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs_f64() * 1000.0)
+                            .unwrap_or(0.0);
+                        let make_touch = |phase: TouchPhase, pressure: f32| {
+                            EventPayload::Touch(Box::new(TouchEvent {
+                                phase,
+                                timestamp: ts,
+                                points: vec![TouchPoint {
+                                    id: 1,
+                                    target: p.id,
+                                    path: touch_path.clone(),
+                                    page,
+                                    location: loc,
+                                    changed: true,
+                                    pointer_type: PointerType::Mouse,
+                                    pressure,
+                                    tilt_x: 0.0,
+                                    tilt_y: 0.0,
+                                }],
+                                activated: None,
+                                modifiers: Default::default(),
+                            }))
+                        };
+                        st.control.dispatch_event(
+                            ROOT_ID,
+                            EventKind::Touch,
+                            make_touch(TouchPhase::Start, 0.5),
+                        );
+                        st.control.dispatch_event(
+                            ROOT_ID,
+                            EventKind::Touch,
+                            make_touch(TouchPhase::End, 0.0),
+                        );
+                    }
+
                     let payload = EventPayload::Press(PressEvent {
-                        position: Point::new(Points(8.0), Points(8.0)),
-                        page_position: Point::new(Points(8.0), Points(8.0)),
+                        position: loc,
+                        page_position: page,
                         modifiers: Default::default(),
                         clicks: 1,
                     });
@@ -777,7 +1092,7 @@ mod host {
                     st.control
                         .dispatch_event(p.id, EventKind::PressUp, payload.clone());
                     st.control.dispatch_event(p.id, EventKind::Press, payload);
-                    st.drain_batches(Duration::from_millis(160));
+                    st.sync_flush();
                     json_response(StatusCode::OK, &st.snapshot())
                 } else {
                     json_response(
@@ -791,7 +1106,7 @@ mod host {
                     let mut st = state.lock().unwrap();
                     st.control
                         .dispatch_event(p.id, EventKind::Focus, EventPayload::None);
-                    st.drain_batches(Duration::from_millis(120));
+                    st.sync_flush();
                     json_response(StatusCode::OK, &st.snapshot())
                 } else {
                     json_response(
@@ -818,7 +1133,7 @@ mod host {
                             count,
                         },
                     );
-                    st.drain_batches(Duration::from_millis(140));
+                    st.sync_flush();
                     json_response(StatusCode::OK, &st.snapshot())
                 } else {
                     json_response(
@@ -844,7 +1159,7 @@ mod host {
                             count,
                         },
                     );
-                    st.drain_batches(Duration::from_millis(140));
+                    st.sync_flush();
                     json_response(StatusCode::OK, &st.snapshot())
                 } else {
                     json_response(
@@ -865,7 +1180,7 @@ mod host {
                     };
                     st.control
                         .scroll(sc.id, Point::new(Points(sc.x), Points(sc.y)), applied);
-                    st.drain_batches(Duration::from_millis(40));
+                    st.sync_flush();
                     json_response(StatusCode::OK, &st.snapshot())
                 } else {
                     json_response(
@@ -893,12 +1208,20 @@ mod host {
                     env.window = size;
                     st.scene.width = size.width.0;
                     st.scene.height = size.height.0;
+                    st.scene.safe_area = env.safe_area;
                     if let Some(root) = st.scene.nodes.get_mut(&ROOT_ID) {
                         root.bounds = Bounds::new(Point::new(Points(0.0), Points(0.0)), size);
                     }
-                    st.control.set_environment(env);
                     st.control.resize(size);
-                    st.drain_batches(Duration::from_millis(160));
+                    for rid in st.scene.sub_roots.clone() {
+                        st.control.set_root_size(rid, size, env.safe_area);
+                    }
+                    st.control.set_environment(env);
+                    st.sync_flush();
+                    for rid in st.scene.sub_roots.clone() {
+                        st.control.set_root_size(rid, size, env.safe_area);
+                    }
+                    st.sync_flush();
                     json_response(StatusCode::OK, &st.snapshot())
                 } else {
                     json_response(
@@ -924,9 +1247,11 @@ mod host {
         let tokens = nsh_base::tokens_of(Some(THEME_JSON))
             .expect("theme.json must parse into valid NSH tokens");
 
+        let audio_clock = PreviewAudioClockBackend::start();
         let config = EngineConfig {
             viewport: initial_size,
             environment: initial_env,
+            audio: Some(audio_clock),
             ..EngineConfig::new(Root::of::<resonance::App>())
         };
 
@@ -945,10 +1270,14 @@ mod host {
             _engine: engine,
             control,
             rx,
-            scene: NshScene::new(initial_size.width.0, initial_size.height.0),
+            scene: NshScene::new(
+                initial_size.width.0,
+                initial_size.height.0,
+                initial_env.safe_area,
+            ),
         };
-        // Wait for initial NSH mount commit
-        host.drain_batches(Duration::from_millis(250));
+        // Wait for initial NSH mount commit deterministically
+        host.sync_flush();
 
         let shared = Arc::new(Mutex::new(host));
         let port: u16 = std::env::var("NSH_PREVIEW_PORT")

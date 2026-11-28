@@ -227,9 +227,9 @@ fn listen_together_screen_renders_create_join_and_active_room_headless() {
     }
 
     let mut app = Headless::start(EngineConfig::new(Root::of::<EmptyRoomRoot>())).unwrap();
-    app.wait_for("Start or Join a Room").unwrap();
-    app.wait_for("Create Room").unwrap();
-    app.wait_for("Join Room").unwrap();
+    app.wait_for("Start a jam").unwrap();
+    app.wait_for("Host a jam").unwrap();
+    app.wait_for("Join a jam").unwrap();
 
     #[component]
     fn ActiveRoomRoot() -> impl IntoElement {
@@ -275,7 +275,7 @@ fn listen_together_screen_renders_create_join_and_active_room_headless() {
     }
 
     let mut active_app = Headless::start(EngineConfig::new(Root::of::<ActiveRoomRoot>())).unwrap();
-    active_app.wait_for("Room RAAG-7K4M").unwrap();
+    active_app.wait_for("Jam RAAG-7K4M").unwrap();
     active_app.wait_for("Participants (2)").unwrap();
     active_app.wait_for("Vote Skip").unwrap();
 }

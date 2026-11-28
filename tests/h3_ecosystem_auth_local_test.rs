@@ -326,5 +326,5 @@ fn local_files_screen_headless_and_zero_raw_colors() {
             resonance::App,
         >()))
         .expect("headless app starts cleanly");
-    app.wait_for("Quick Picks").expect("home renders");
+    app.wait_for("Listen again").expect("home renders");
 }

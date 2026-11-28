@@ -113,8 +113,8 @@ fn artist_and_album_entity_screens_render_discography_related_and_start_radio() 
         ..nsh_engine::EngineConfig::new(nsh_engine::Root::of::<resonance::App>())
     })
     .expect("headless app starts cleanly");
-    app.wait_for("Radio & Rooms")
-        .expect("Radio & Rooms nav visible");
+    app.wait_for("Listen together")
+        .expect("Listen together nav visible");
 }
 
 #[tokio::test]

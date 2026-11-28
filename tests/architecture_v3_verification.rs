@@ -718,10 +718,12 @@ fn settings_surfaces_po_token_diagnostics_badge_and_audio_dsp_controls() -> Resu
     })
     .expect("desktop headless starts cleanly");
 
-    app.wait_for("Raag")?;
+    app.wait_for("Music")?;
     app.press("id:nav-settings")?;
+    app.press("id:settings-tab-about")?;
     app.wait_for("Stream Acquisition & PO Token")?;
     app.wait_for("Degraded Fallback")?;
+    app.press("id:settings-tab-playback")?;
     app.wait_for("Audio DSP & Gapless")?;
     app.wait_for("Native PCM Engine Required")?;
     app.wait_for("10-Band EQ: Flat")?;

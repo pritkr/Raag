@@ -174,9 +174,10 @@ fn stage3_search_filters_desktop_side_panel_and_zero_blur_in_virtual_lists() -> 
     })
     .map_err(|e| format!("{e:?}"))?;
 
-    // Desktop >= 1080px mounts the right-hand frosted Queue/Lyrics side panel
+    // Desktop >= 1080px opens the right-hand frosted Queue/Lyrics side panel via id:nav-queue
+    desktop.wait_for("Listen again")?;
+    desktop.press("id:nav-queue")?;
     desktop.wait_for("Up Next")?;
-    desktop.wait_for("Synced Lyrics")?;
     desktop.press("id:side-panel-tab-lyrics")?;
     desktop.wait_for("Streetlights blur into copper and glass")?;
     desktop.press("id:side-panel-tab-queue")?;

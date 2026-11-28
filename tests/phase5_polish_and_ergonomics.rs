@@ -45,7 +45,7 @@ fn start_desktop() -> Headless {
 #[test]
 fn phase5_mini_player_now_playing_volume_lyrics_queue_and_offline_toast() -> Result<(), String> {
     let mut app = start_mobile_dark();
-    app.wait_for("Quick Picks")?;
+    app.wait_for("Listen again")?;
 
     // 1. Mini-player shows dynamic monogram 'M' for track 0 ("Midnight Reflections...")
     assert!(
@@ -104,14 +104,17 @@ fn phase5_mini_player_now_playing_volume_lyrics_queue_and_offline_toast() -> Res
 
     // 5. Open Settings -> verify active theme indicator, Offline Mode switch -> global dismissible toast
     app.press("id:nav-settings")?;
+    app.press("id:settings-tab-appearance")?;
     app.wait_for("✓ System Theme")?;
     app.press("Dark Theme")?;
     app.wait_for("✓ Dark Theme")?;
+    app.press("id:settings-tab-playback")?;
     app.press("label:Offline Mode (local chunk cache only)")?;
     app.wait_for("Offline mode enabled — playing from local 256 KB chunk cache")?;
 
     // Dismiss global status toast cleanly
     app.press("id:dismiss-toast")?;
+    app.press("id:settings-tab-general")?;
     app.wait_for("Offline & Local Cache")?;
 
     // Verify Now Playing now shows Offline telemetry badge
@@ -146,23 +149,24 @@ fn phase5_desktop_shortcuts_and_zero_raw_colors_in_controls() -> Result<(), Stri
 
     // Desktop layout exposes keyboard shortcuts in a header `?` popover
     let mut desktop = start_desktop();
-    desktop.wait_for("Quick Picks")?;
+    desktop.wait_for("Listen again")?;
     desktop.press("id:shortcuts-help-btn")?;
     desktop.wait_for("Keyboard Shortcuts")?;
     desktop.wait_for("Play / Pause")?;
 
-    // Exercise desktop Now Playing controls on the live NSH engine thread
+    // Exercise desktop Now Playing & persistent player bar controls on the live NSH engine thread
     desktop.press("id:nav-now-playing")?;
     desktop.wait_for("Playing")?;
-    desktop.wait_for("0:26")?;
-    desktop.press("label:Play or Pause")?;
+    desktop.wait_for("0:26 / 4:04")?;
+    desktop.press("label:Player Bar Play or Pause")?;
     desktop.wait_for("Paused")?;
-    desktop.press("label:Play or Pause")?;
+    desktop.press("label:Player Bar Play or Pause")?;
     desktop.wait_for("Playing")?;
-    desktop.press("label:Toggle Mute")?;
-    desktop.wait_for("Volume 0%")?;
-    desktop.press("label:Toggle Mute")?;
-    desktop.wait_for("Volume 100%")?;
+    desktop.press("label:Player Bar Mute")?;
+    desktop.press("label:Player Bar Mute")?;
+    desktop.press("label:Player Bar Repeat Mode")?;
+    desktop.press("label:Player Bar Repeat Mode (All)")?;
+    desktop.press("label:Player Bar Repeat Mode (One)")?;
 
     // Pure shortcut mapping verification across all media keys
     use resonance::store::{ShortcutAction, map_shortcut_key};

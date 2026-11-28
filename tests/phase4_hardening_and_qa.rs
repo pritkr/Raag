@@ -226,7 +226,7 @@ fn virtual_list_queue_reorder_remove_and_scroll_recycle_cleanly() -> Result<(), 
     })
     .expect("headless start");
 
-    app.wait_for("Quick Picks")?;
+    app.wait_for("Listen again")?;
     app.press("id:nav-queue")?;
     app.wait_for("Queue")?;
     app.wait_for("4 tracks in queue • 15:26 total")?;

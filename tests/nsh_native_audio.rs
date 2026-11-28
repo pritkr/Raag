@@ -81,13 +81,13 @@ fn native_nsh_audio_player_drives_open_pause_resume_seek_volume_loop_and_auto_ad
 
     let recorder = Arc::new(RecordingNshAudio::default());
     let mut app = Headless::start(EngineConfig {
-        viewport: Size::new(Points(1200.0), Points(800.0)),
+        viewport: Size::new(Points(390.0), Points(844.0)),
         audio: Some(recorder.clone()),
         ..EngineConfig::new(Root::of::<resonance::App>())
     })
     .expect("headless NSH engine with native audio backend starts");
 
-    app.wait_for("Raag")?;
+    app.wait_for("Listen again")?;
 
     // 1. Initial mount opens & resumes the first fixture track via Loopback Proxy URL
     let initial_cmds = recorder.commands();
@@ -111,7 +111,7 @@ fn native_nsh_audio_player_drives_open_pause_resume_seek_volume_loop_and_auto_ad
     );
 
     // Navigate to Now Playing to drive transport, seek, volume, and repeat controls
-    app.press("id:nav-now-playing")?;
+    app.press("id:mini-player-open")?;
     app.wait_for("Now Playing")?;
 
     // 2. Pause -> Resume

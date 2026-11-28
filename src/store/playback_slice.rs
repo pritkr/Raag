@@ -370,7 +370,12 @@ impl PlaybackSlice {
         }
     }
 
-    pub fn remove_queue_item(&mut self, index: usize, proxy_url_for: impl Fn(&str) -> String) {
+    pub fn remove_queue_item(
+        &mut self,
+        index: usize,
+        live: bool,
+        proxy_url_for: impl Fn(&str) -> String,
+    ) {
         if index >= self.player.queue.items.len() {
             return;
         }
@@ -381,11 +386,23 @@ impl PlaybackSlice {
             Some(None) => {
                 self.player.current_track = None;
                 self.player.active_proxy_url = None;
+                self.player.position_ms = 0;
+                self.player.duration_ms = 0;
+                self.player.queue.resume_position_ms = 0;
                 self.player.state = PlayerState::Idle;
+                self.lyrics = None;
                 self.shuffle_deck = ShuffleDeck::default();
             }
             Some(Some(next_track)) => {
+                self.player.duration_ms = next_track.duration_ms;
+                self.player.position_ms = 0;
+                self.player.queue.resume_position_ms = 0;
                 self.player.active_proxy_url = Some(proxy_url_for(&next_track.id));
+                self.lyrics = if live {
+                    None
+                } else {
+                    Some(fixture_lyrics(&next_track.id))
+                };
                 self.player.current_track = Some(next_track);
             }
             None => {}
@@ -607,5 +624,26 @@ mod tests {
         );
         assert_eq!(map_shortcut_key("m"), Some(ShortcutAction::ToggleMute));
         assert_eq!(map_shortcut_key("z"), None);
+    }
+
+    #[test]
+    fn remove_active_queue_item_updates_duration_position_and_lyrics() {
+        let tracks = fixture_tracks();
+        let expected_next = tracks[1].clone();
+        let mut slice = PlaybackSlice::new(true, tracks, mock_proxy);
+        slice.seek_ms(45_000);
+        slice.remove_queue_item(0, false, mock_proxy);
+
+        assert_eq!(
+            slice.player.current_track.as_ref().map(|t| t.id.as_str()),
+            Some(expected_next.id.as_str())
+        );
+        assert_eq!(slice.player.duration_ms, expected_next.duration_ms);
+        assert_eq!(slice.player.position_ms, 0);
+        assert_eq!(slice.player.queue.resume_position_ms, 0);
+        assert_eq!(
+            slice.lyrics.as_ref().map(|l| l.video_id.as_str()),
+            Some(expected_next.id.as_str())
+        );
     }
 }

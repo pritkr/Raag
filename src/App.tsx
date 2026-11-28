@@ -42,12 +42,16 @@ function logicalTextAlign(
   return 'start';
 }
 
+const IS_HEADLESS_BROWSER =
+  typeof navigator !== 'undefined' &&
+  (navigator.webdriver === true || /HeadlessChrome/i.test(navigator.userAgent));
+
 interface NodeViewProps {
   node: NshNode;
   ambient?: NshAmbientPayload;
   isRoot?: boolean;
   insideButton?: boolean;
-  onPress: (id: number) => void;
+  onPress: (id: number, x?: number, y?: number) => void;
   onFocus: (id: number) => void;
   onInput: (id: number, text: string) => void;
   onSubmit: (id: number, text: string) => void;
@@ -80,6 +84,8 @@ function NshNodeView({
     };
   }, []);
 
+  const useBackdropBlur = !IS_HEADLESS_BROWSER && node.backdropBlurPx > 0;
+
   const baseStyle: React.CSSProperties = {
     position: isRoot ? 'relative' : 'absolute',
     insetInlineStart: isRoot ? 0 : node.x,
@@ -94,14 +100,12 @@ function NshNodeView({
     borderBottom: borderCss(node.borders[2]),
     borderInlineStart: borderCss(node.borders[3]),
     opacity: node.opacity,
-    backdropFilter:
-      node.backdropBlurPx > 0
-        ? `blur(${Math.min(node.backdropBlurPx, 20)}px) saturate(1.35)`
-        : undefined,
-    WebkitBackdropFilter:
-      node.backdropBlurPx > 0
-        ? `blur(${Math.min(node.backdropBlurPx, 20)}px) saturate(1.35)`
-        : undefined,
+    backdropFilter: useBackdropBlur
+      ? `blur(${Math.min(node.backdropBlurPx, 20)}px) saturate(1.35)`
+      : undefined,
+    WebkitBackdropFilter: useBackdropBlur
+      ? `blur(${Math.min(node.backdropBlurPx, 20)}px) saturate(1.35)`
+      : undefined,
     overflow: node.scrollable
       ? undefined
       : node.overflowHidden
@@ -117,10 +121,19 @@ function NshNodeView({
     (node.testId === 'ambient-shell-backdrop' ||
       node.testId === 'ambient-now-playing-backdrop')
   ) {
-    const paused = ambient.reducedMotion;
+    const paused = ambient.reducedMotion || IS_HEADLESS_BROWSER;
     const blobPause = paused ? ' nsh-ambient-paused' : '';
-    const softOrbMask =
-      'radial-gradient(closest-side, rgba(0,0,0,0.92) 0%, rgba(0,0,0,0.46) 44%, rgba(0,0,0,0.12) 74%, rgba(0,0,0,0) 100%)';
+    const orbGradient = (rgb: string, peakAlpha: number) => {
+      const m = rgb.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+      if (!m) {
+        return `radial-gradient(closest-side, ${rgb} 0%, transparent 100%)`;
+      }
+      const [, r, g, b] = m;
+      const a1 = (peakAlpha * 0.92).toFixed(3);
+      const a2 = (peakAlpha * 0.46).toFixed(3);
+      const a3 = (peakAlpha * 0.12).toFixed(3);
+      return `radial-gradient(closest-side, rgba(${r},${g},${b},${a1}) 0%, rgba(${r},${g},${b},${a2}) 44%, rgba(${r},${g},${b},${a3}) 74%, rgba(${r},${g},${b},0) 100%)`;
+    };
     return (
       <div
         data-testid={node.testId}
@@ -142,11 +155,7 @@ function NshNodeView({
             width: '92%',
             height: '96%',
             borderRadius: '9999px',
-            backgroundColor: ambient.accent,
-            maskImage: softOrbMask,
-            WebkitMaskImage: softOrbMask,
-            opacity: 0.72,
-            willChange: 'transform',
+            background: orbGradient(ambient.accent, 0.72),
           }}
         />
         <div
@@ -158,11 +167,7 @@ function NshNodeView({
             width: '94%',
             height: '98%',
             borderRadius: '9999px',
-            backgroundColor: ambient.complementary,
-            maskImage: softOrbMask,
-            WebkitMaskImage: softOrbMask,
-            opacity: 0.68,
-            willChange: 'transform',
+            background: orbGradient(ambient.complementary, 0.68),
           }}
         />
         <div
@@ -174,11 +179,7 @@ function NshNodeView({
             width: '78%',
             height: '82%',
             borderRadius: '9999px',
-            backgroundColor: ambient.accent,
-            maskImage: softOrbMask,
-            WebkitMaskImage: softOrbMask,
-            opacity: 0.36,
-            willChange: 'transform',
+            background: orbGradient(ambient.accent, 0.36),
           }}
         />
       </div>
@@ -257,6 +258,9 @@ function NshNodeView({
             }
         : node.maxLines > 1
           ? {
+              height: 'auto',
+              minHeight: node.h,
+              maxHeight: Math.ceil(node.h + 4),
               display: '-webkit-box',
               WebkitLineClamp: node.maxLines,
               WebkitBoxOrient: 'vertical',
@@ -281,7 +285,7 @@ function NshNodeView({
                 ? 'flex-end'
                 : 'flex-start',
           textAlign: logicalTextAlign(node.textAlign),
-          lineHeight: computedLineHeight,
+          lineHeight: node.maxLines > 1 ? Math.min(computedLineHeight, 1.32) : computedLineHeight,
           ...clampStyle,
         }}
       >
@@ -380,7 +384,10 @@ function NshNodeView({
         data-testid={node.testId ?? undefined}
         onClick={(e) => {
           e.stopPropagation();
-          onPress(node.id);
+          const rect = e.currentTarget.getBoundingClientRect();
+          const x = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+          const y = Math.max(0, Math.min(rect.height, e.clientY - rect.top));
+          onPress(node.id, x, y);
         }}
         style={{
           ...baseStyle,
@@ -431,7 +438,10 @@ function NshNodeView({
         node.pressable
           ? (e) => {
               e.stopPropagation();
-              onPress(node.id);
+              const rect = e.currentTarget.getBoundingClientRect();
+              const x = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+              const y = Math.max(0, Math.min(rect.height, e.clientY - rect.top));
+              onPress(node.id, x, y);
             }
           : undefined
       }
@@ -533,6 +543,41 @@ export default function App() {
   const tree = preview.tree;
   const error = preview.error;
   const busy = preview.inFlightCount > 0;
+  const inFlightRef = useRef(preview.inFlightCount);
+  const treeVersionRef = useRef<number>(tree?.version ?? -1);
+  inFlightRef.current = preview.inFlightCount;
+  treeVersionRef.current = tree?.version ?? -1;
+
+  // Keep live playback clock, synced lyrics, and auto-advance transitions in sync
+  // while a song is playing, without dispatching redundant state updates or racing inputs.
+  const isPlayingLive = Boolean(tree?.ambient?.isPlaying);
+  useEffect(() => {
+    if (!isPlayingLive) return;
+    let cancelled = false;
+    const poll = async () => {
+      if (cancelled || inFlightRef.current > 0) return;
+      const seq = ++reqSeqRef.current;
+      try {
+        const res = await fetch('/api/nsh/tree');
+        if (!res.ok || cancelled) return;
+        const data: NshTreeResponse = await res.json();
+        if (cancelled) return;
+        if (data.version !== treeVersionRef.current) {
+          dispatch({ type: 'tree_received', seq, tree: data });
+        }
+      } catch {
+        // Transient network hiccup; ignore on background poll
+      }
+    };
+    const timer = window.setInterval(() => {
+      void poll();
+    }, 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [isPlayingLive]);
+
   const device: PreviewDevice = tree?.device ?? 'android';
   const isPhone = device === 'android' || device === 'compact';
   const scheme = tree?.scheme ?? 'dark';
@@ -664,7 +709,7 @@ export default function App() {
       </header>
 
       {/* Live NSH Native View Surface */}
-      <main className="flex-1 flex items-center justify-center p-4 md:p-6 overflow-auto">
+      <main className="flex-1 flex items-center justify-center p-2 md:p-3 overflow-auto">
         {error ? (
           <div
             role="status"
@@ -729,7 +774,12 @@ export default function App() {
                 node={tree.root}
                 ambient={tree.ambient}
                 isRoot
-                onPress={(id) => void sendAction('/api/nsh/press', { id })}
+                onPress={(id, x, y) =>
+                  void sendAction(
+                    '/api/nsh/press',
+                    x !== undefined && y !== undefined ? { id, x, y } : { id },
+                  )
+                }
                 onFocus={(id) => void sendAction('/api/nsh/focus', { id })}
                 onInput={(id, text) =>
                   void sendAction('/api/nsh/input', { id, text })

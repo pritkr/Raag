@@ -233,8 +233,8 @@ fn download_action_surface_reflects_queued_downloading_offline_and_failed_states
     })
     .unwrap();
 
-    app.wait_for("Quick Picks").unwrap();
-    app.press("Now Playing").unwrap();
+    app.wait_for("Listen again").unwrap();
+    app.press("id:nav-now-playing").unwrap();
     app.wait_for("now-playing-download-btn").unwrap();
     app.press("now-playing-download-btn").unwrap();
     app.wait_for("Offline").unwrap();
@@ -245,7 +245,7 @@ fn playlist_edit_add_remove_reorder_optimistically_updates_and_rolls_back_on_fai
     let tracks = fixture_tracks();
     let mut playback =
         PlaybackSlice::new(true, tracks.clone(), |id| format!("http://127.0.0.1/{id}"));
-    let mut library = LibrarySlice::new(true, Vec::new());
+    let mut library = LibrarySlice::new(false, Vec::new());
     library.playlists.push(LibraryCollectionRef {
         browse_id: "VLPL_1".into(),
         playlist_id: Some("PL_1".into()),
@@ -410,7 +410,7 @@ async fn offline_vault_pinned_collections_surface_and_honest_radio_mix_label() {
         ..EngineConfig::new(Root::of::<resonance::App>())
     })
     .unwrap();
-    app.wait_for("Radio & Rooms").unwrap();
+    app.wait_for("Listen together").unwrap();
 
     app.press("Library").unwrap();
     app.wait_for("lib-filter-downloads").unwrap();

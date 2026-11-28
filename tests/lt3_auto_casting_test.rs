@@ -354,6 +354,6 @@ fn cast_sheet_headless_ui_renders_devices_and_zero_raw_colors() {
             ..nsh_engine::EngineConfig::new(nsh_engine::Root::of::<resonance::App>())
         })
         .expect("headless app starts cleanly");
-        app.wait_for("Quick Picks").expect("home renders");
+        app.wait_for("Listen again").expect("home renders");
     }
 }
