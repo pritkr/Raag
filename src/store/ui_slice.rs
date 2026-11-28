@@ -179,6 +179,60 @@ pub enum NowPlayingTab {
     Related,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SettingsSection {
+    #[default]
+    Account,
+    Playback,
+    Lyrics,
+    Appearance,
+    Connections,
+    General,
+    KeyboardShortcuts,
+    About,
+}
+
+impl SettingsSection {
+    pub fn all() -> &'static [Self] {
+        &[
+            Self::Account,
+            Self::Playback,
+            Self::Lyrics,
+            Self::Appearance,
+            Self::Connections,
+            Self::General,
+            Self::KeyboardShortcuts,
+            Self::About,
+        ]
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Account => "Account",
+            Self::Playback => "Playback",
+            Self::Lyrics => "Lyrics",
+            Self::Appearance => "Appearance",
+            Self::Connections => "Connections",
+            Self::General => "General",
+            Self::KeyboardShortcuts => "Keyboard shortcuts",
+            Self::About => "About",
+        }
+    }
+
+    pub fn test_id(self) -> &'static str {
+        match self {
+            Self::Account => "settings-tab-account",
+            Self::Playback => "settings-tab-playback",
+            Self::Lyrics => "settings-tab-lyrics",
+            Self::Appearance => "settings-tab-appearance",
+            Self::Connections => "settings-tab-connections",
+            Self::General => "settings-tab-general",
+            Self::KeyboardShortcuts => "settings-tab-shortcuts",
+            Self::About => "settings-tab-about",
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct UiSlice {
     pub active_tab: AppTab,
@@ -188,6 +242,10 @@ pub struct UiSlice {
     pub desktop_side_panel_open: bool,
     pub desktop_side_panel: DesktopSidePanel,
     pub now_playing_tab: NowPlayingTab,
+    pub settings_section: SettingsSection,
+    pub settings_search_query: String,
+    pub search_dropdown_open: bool,
+    pub miniplayer_open: bool,
     pub status_banner: Option<String>,
     pub active_track_sheet: Option<(Track, Option<String>)>,
     pub add_to_playlist_track: Option<Track>,
@@ -204,9 +262,13 @@ impl Default for UiSlice {
             nav_history: vec![AppTab::Home],
             nav_pos: 0,
             sidebar_collapsed: false,
-            desktop_side_panel_open: true,
+            desktop_side_panel_open: false,
             desktop_side_panel: DesktopSidePanel::Queue,
             now_playing_tab: NowPlayingTab::UpNext,
+            settings_section: SettingsSection::Account,
+            settings_search_query: String::new(),
+            search_dropdown_open: false,
+            miniplayer_open: false,
             status_banner: None,
             active_track_sheet: None,
             add_to_playlist_track: None,
@@ -300,7 +362,10 @@ mod tests {
     #[test]
     fn desktop_side_panel_toggles_cleanly() {
         let mut ui = UiSlice::default();
+        assert!(!ui.desktop_side_panel_open);
+        ui.toggle_desktop_side_panel(DesktopSidePanel::Queue);
         assert!(ui.desktop_side_panel_open);
+        assert_eq!(ui.desktop_side_panel, DesktopSidePanel::Queue);
         ui.toggle_desktop_side_panel(DesktopSidePanel::Queue);
         assert!(!ui.desktop_side_panel_open);
         ui.toggle_desktop_side_panel(DesktopSidePanel::Lyrics);

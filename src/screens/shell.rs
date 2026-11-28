@@ -26,17 +26,17 @@ use crate::store::{
     self, AppTab, DesktopSidePanel, EntityRoute, LibraryFilter, SidebarPlaylist,
 };
 use crate::ui::controls::{
-    active_state_dot, add_to_playlist_sheet, artwork_box, back_button, cast_picker_sheet,
-    desktop_player_bar, live_equalizer_indicator, mini_player_bar, sleep_timer_sheet, speed_sheet,
-    svg_icon_button, track_action_sheet,
+    active_state_dot, add_to_playlist_sheet, ambient_shell_backdrop, artwork_box, back_button,
+    cast_picker_sheet, desktop_player_bar, live_equalizer_indicator, mini_player_bar,
+    setting_switch, sleep_timer_sheet, speed_sheet, svg_icon_button, track_action_sheet,
 };
 use crate::ui::icons::{IconKind, icon, liked_music_tile_svg, raag_brand_icon};
 use crate::ui::tokens::{
-    MOBILE_MIN_TOUCH_TARGET, color_ambient_warm, color_lyric_inactive, color_on_cover,
-    color_sidebar_border, color_sidebar_surface, cover_gradient_pair, eyebrow_label,
-    frosted_bar_surface, frosted_card_surface, frosted_header_surface, glass_hairline,
-    glass_specular_hairline, is_desktop_layout, is_desktop_panel_visible, motion, overlay_scrim,
-    pill_glass_hover, pill_glass_surface, radius_card, radius_panel, radius_pill, radius_tab_inner,
+    MOBILE_MIN_TOUCH_TARGET, color_lyric_inactive, color_on_cover, cover_gradient_pair,
+    eyebrow_label, frosted_bar_surface, frosted_card_surface, frosted_drawer_surface,
+    frosted_header_surface, frosted_sidebar_surface, glass_hairline, glass_specular_hairline,
+    is_desktop_layout, is_desktop_panel_visible, motion, overlay_scrim, pill_glass_hover,
+    pill_glass_surface, radius_card, radius_panel, radius_pill, radius_tab_inner,
     sidebar_active_surface,
 };
 
@@ -66,10 +66,11 @@ fn primary_nav_index(tab: AppTab) -> Option<usize> {
         AppTab::Explore => Some(1),
         AppTab::Library => Some(2),
         AppTab::ListenTogether => Some(3),
-        AppTab::NowPlaying => Some(4),
-        AppTab::Lyrics => Some(5),
-        AppTab::Queue => Some(6),
-        AppTab::Search | AppTab::Settings => None,
+        AppTab::NowPlaying
+        | AppTab::Lyrics
+        | AppTab::Queue
+        | AppTab::Search
+        | AppTab::Settings => None,
     }
 }
 
@@ -763,7 +764,7 @@ fn desktop_sidebar() -> impl IntoElement {
     let collapsed = store::sidebar_collapsed;
     let playlists_memo = computed(store::sidebar_playlists);
 
-    // Smooth sliding active pill behind the 7 primary nav items (40px item + 4px gap = 44px pitch).
+    // Smooth sliding active pill behind the 4 primary nav items (40px item + 4px gap = 44px pitch).
     const NAV_PITCH: f32 = 44.0;
     let init_idx = primary_nav_index(store::active_tab());
     let nav_y = animated_value(init_idx.unwrap_or(0) as f32 * NAV_PITCH);
@@ -796,34 +797,46 @@ fn desktop_sidebar() -> impl IntoElement {
     });
 
     view()
+        .test_id("desktop-sidebar")
         .w(move || if collapsed() { px(72.0) } else { px(236.0) })
         .h_full()
         .p_3()
         .gap_1()
-        .bg(color_sidebar_surface)
+        .backdrop_blur(px(20.0))
+        .backdrop_material(BackdropMaterial::Thin)
+        .bg(frosted_sidebar_surface)
         .border_r_1()
-        .border_color(color_sidebar_border)
-        // Top header row: Menu toggle + original Raag emblem + Raag brand title
+        .border_color(glass_hairline)
+        // Top header row: Hamburger menu toggle + crimson Music emblem + "Music" wordmark
         .child(
             view()
                 .flex_row()
                 .items_center()
-                .py_2()
+                .py_1p5()
                 .mb_2()
                 .style_when(collapsed, |s| s.justify_center())
                 .style_when(move || !collapsed(), |s| s.gap_2p5().px_1())
-                .child(svg_icon_button(
-                    IconKind::Menu,
-                    18.0,
-                    36.0,
-                    "Toggle Sidebar",
-                    true,
-                    move || theme().foreground,
-                    || {
-                        trigger_shell_layout_animation();
-                        store::toggle_sidebar();
-                    },
-                ))
+                .child(
+                    button()
+                        .test_id("sidebar-toggle")
+                        .accessibility_label("Toggle Sidebar")
+                        .w(px(36.0))
+                        .h(px(36.0))
+                        .items_center()
+                        .justify_center()
+                        .rounded_full()
+                        .transition()
+                        .duration(shell_transition_ms)
+                        .ease_out()
+                        .hover(|s| s.bg(pill_glass_hover))
+                        .active(|s| s.scale(shell_press_scale))
+                        .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
+                        .on_press(|| {
+                            trigger_shell_layout_animation();
+                            store::toggle_sidebar();
+                        })
+                        .child(icon(IconKind::Menu, 18.0, move || theme().foreground)),
+                )
                 .child(when(
                     move || !collapsed(),
                     || {
@@ -833,29 +846,27 @@ fn desktop_sidebar() -> impl IntoElement {
                             .gap_2()
                             .flex_1()
                             .min_w(px(0.0))
-                            .child(raag_brand_icon(26.0))
+                            .child(raag_brand_icon(24.0))
                             .child(
-                                view()
-                                    .flex_1()
-                                    .min_w(px(0.0))
-                                    .child(
-                                        text("Raag")
-                                            .number_of_lines(1)
-                                            .text_lg()
-                                            .font_weight(FontWeight::BOLD)
-                                            .text_color(move || theme().foreground),
-                                    )
-                                    .child(
-                                        text("Music")
-                                            .number_of_lines(1)
-                                            .text_xs()
-                                            .text_color(move || theme().muted_foreground),
-                                    ),
+                                text("Music")
+                                    .number_of_lines(1)
+                                    .text_lg()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(move || theme().foreground),
                             )
                     },
                 )),
         )
-        // Primary navigation with smoothly sliding active indicator pill
+        // Collapsed emblem icon (matches 06c_sidebar_collapsed.png)
+        .child(when(collapsed, || {
+            view()
+                .w_full()
+                .pb_2()
+                .items_center()
+                .justify_center()
+                .child(raag_brand_icon(24.0))
+        }))
+        // Primary navigation in exact ytm-rs order: Home, Explore, Library, Listen together
         .child(
             view()
                 .relative()
@@ -876,17 +887,7 @@ fn desktop_sidebar() -> impl IntoElement {
                         .pointer_events(PointerEvents::None)
                         .accessibility_elements_hidden(true)
                         .bind_translate_y(&nav_y)
-                        .bind_opacity(&nav_visible)
-                        .child(when(
-                            move || !collapsed(),
-                            || {
-                                view()
-                                    .w(px(3.0))
-                                    .h(px(18.0))
-                                    .rounded_full()
-                                    .bg(move || theme().primary)
-                            },
-                        )),
+                        .bind_opacity(&nav_visible),
                 )
                 .child(desktop_nav_item(AppTab::Home, "Home", IconKind::Home, false))
                 .child(desktop_nav_item(
@@ -903,36 +904,18 @@ fn desktop_sidebar() -> impl IntoElement {
                 ))
                 .child(desktop_nav_item(
                     AppTab::ListenTogether,
-                    "Radio & Rooms",
+                    "Listen together",
                     IconKind::ListenTogether,
-                    false,
-                ))
-                .child(desktop_nav_item(
-                    AppTab::NowPlaying,
-                    "Now Playing",
-                    IconKind::NowPlaying,
-                    false,
-                ))
-                .child(desktop_nav_item(
-                    AppTab::Lyrics,
-                    "Lyrics",
-                    IconKind::Lyrics,
-                    false,
-                ))
-                .child(desktop_nav_item(
-                    AppTab::Queue,
-                    "Queue",
-                    IconKind::Queue,
                     false,
                 )),
         )
-        // Divider + Playlists header
-        .child(view().h(px(1.0)).w_full().bg(color_sidebar_border).my_2())
+        // Divider + PLAYLISTS header
+        .child(view().h(px(1.0)).w_full().bg(glass_hairline).my_2())
         .child(when(
             move || !collapsed(),
             || view().px_3().pb_1().child(eyebrow_label("Playlists")),
         ))
-        // Scrollable playlists list
+        // Independently scrollable playlists list
         .child(scroll().flex_1().min_h(px(0.0)).child(dynamic(move || {
             let is_collapsed = collapsed();
             let list = playlists_memo.get();
@@ -941,14 +924,117 @@ fn desktop_sidebar() -> impl IntoElement {
                     .map(move |pl| sidebar_playlist_row(pl, is_collapsed)),
             )
         })))
-        // Clean pinned footer: Settings only (shortcuts moved to header `?` popover)
-        .child(view().h(px(1.0)).w_full().bg(color_sidebar_border).my_1())
+        // Bottom-pinned Settings item
+        .child(view().h(px(1.0)).w_full().bg(glass_hairline).my_1())
         .child(desktop_nav_item(
             AppTab::Settings,
             "Settings",
             IconKind::Settings,
             true,
         ))
+}
+
+fn search_suggestions_dropdown(header_query: Signal<String>) -> impl IntoElement {
+    let show_dropdown = move || store::search_dropdown_open();
+
+    when(show_dropdown, move || {
+        view()
+            .test_id("search-suggestions-dropdown")
+            .absolute()
+            .top(px(46.0))
+            .left_0()
+            .right_0()
+            .z_index(40)
+            .p_2()
+            .gap_1()
+            .rounded(radius_panel)
+            .backdrop_blur(px(28.0))
+            .backdrop_material(BackdropMaterial::Regular)
+            .bg(frosted_drawer_surface)
+            .border_1()
+            .border_color(glass_hairline)
+            .border_t_color(glass_specular_hairline)
+            .shadow_2xl()
+            .child(dynamic(move || {
+                let q = header_query.get();
+                let trimmed = q.trim();
+                let live_suggs = store::search_suggestions();
+
+                let mut items: Vec<String> = if !live_suggs.is_empty() {
+                    live_suggs
+                } else if trimmed.is_empty() {
+                    vec![
+                        "Midnight Raga".to_owned(),
+                        "A.R. Rahman".to_owned(),
+                        "Monsoon Synth".to_owned(),
+                        "Lo-Fi Chill Beats".to_owned(),
+                        "Indian Indie Acoustics".to_owned(),
+                    ]
+                } else {
+                    let ql = trimmed.to_lowercase();
+                    let mut matches: Vec<String> = store::all_library_songs()
+                        .into_iter()
+                        .filter_map(|t| {
+                            if t.title.to_lowercase().contains(&ql) {
+                                Some(t.title)
+                            } else if t.artist_display().to_lowercase().contains(&ql) {
+                                Some(t.artist_display())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    matches.sort();
+                    matches.dedup();
+                    if matches.is_empty() {
+                        matches.push(trimmed.to_owned());
+                    }
+                    matches.into_iter().take(6).collect()
+                };
+
+                if items.is_empty() {
+                    items.push("Midnight Raga".to_owned());
+                }
+
+                view()
+                    .gap_0p5()
+                    .children(items.into_iter().take(6).map(move |suggestion| {
+                        let s_click = suggestion.clone();
+                        let s_label = suggestion.clone();
+                        button()
+                            .accessibility_label(s_label)
+                            .w_full()
+                            .min_h(px(38.0))
+                            .px_3()
+                            .flex_row()
+                            .items_center()
+                            .gap_2p5()
+                            .rounded(radius_card)
+                            .hover(|s| s.bg(pill_glass_hover))
+                            .active(|s| s.opacity(0.8))
+                            .focus_visible(|s| {
+                                s.outline(px(2.0)).outline_color(move || theme().ring)
+                            })
+                            .on_press(move || {
+                                header_query.set(s_click.clone());
+                                store::set_search_dropdown_open(false);
+                                store::run_search(&s_click);
+                                store::set_tab(AppTab::Search);
+                            })
+                            .child(icon(IconKind::Search, 14.0, move || {
+                                theme().muted_foreground
+                            }))
+                            .child(
+                                text(suggestion)
+                                    .flex_1()
+                                    .number_of_lines(1)
+                                    .text_sm()
+                                    .text_color(move || theme().foreground),
+                            )
+                    }))
+                    .into_element()
+            }))
+    })
 }
 
 fn desktop_top_header() -> impl IntoElement {
@@ -974,196 +1060,223 @@ fn desktop_top_header() -> impl IntoElement {
                 .gap_4()
                 .px_6()
                 .py_3()
-                .backdrop_blur(px(20.0))
+                .backdrop_blur(px(16.0))
                 .backdrop_material(BackdropMaterial::Thin)
                 .bg(frosted_header_surface)
-                .border_b_1()
-                .border_color(glass_hairline)
-                // Left: Back / Forward / Refresh + Pill Search Bar
+                // Left: Back / Forward / Refresh circular ghost buttons
+                .child(
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .gap_1()
+                        .child(
+                            button()
+                                .accessibility_label("Go Back")
+                                .w(px(34.0))
+                                .h(px(34.0))
+                                .items_center()
+                                .justify_center()
+                                .rounded_full()
+                                .transition()
+                                .duration(shell_transition_ms)
+                                .ease_out()
+                                .hover(|s| s.bg(pill_glass_hover))
+                                .active(|s| s.scale(shell_press_scale).opacity(0.8))
+                                .focus_visible(|s| {
+                                    s.outline(px(2.0)).outline_color(move || theme().ring)
+                                })
+                                .on_press(store::go_back)
+                                .child(icon(IconKind::ChevronLeft, 18.0, move || {
+                                    if store::can_go_back() {
+                                        theme().foreground
+                                    } else {
+                                        theme().muted_foreground
+                                    }
+                                })),
+                        )
+                        .child(
+                            button()
+                                .accessibility_label("Go Forward")
+                                .w(px(34.0))
+                                .h(px(34.0))
+                                .items_center()
+                                .justify_center()
+                                .rounded_full()
+                                .transition()
+                                .duration(shell_transition_ms)
+                                .ease_out()
+                                .hover(|s| s.bg(pill_glass_hover))
+                                .active(|s| s.scale(shell_press_scale).opacity(0.8))
+                                .focus_visible(|s| {
+                                    s.outline(px(2.0)).outline_color(move || theme().ring)
+                                })
+                                .on_press(store::go_forward)
+                                .child(icon(IconKind::ChevronRight, 18.0, move || {
+                                    if store::can_go_forward() {
+                                        theme().foreground
+                                    } else {
+                                        theme().muted_foreground
+                                    }
+                                })),
+                        )
+                        .child(svg_icon_button(
+                            IconKind::Refresh,
+                            16.0,
+                            34.0,
+                            "Refresh Home",
+                            true,
+                            move || theme().muted_foreground,
+                            store::refresh_home,
+                        )),
+                )
+                // Center: Pill-shaped search bar + floating live suggestions dropdown
                 .child(
                     view()
                         .flex_1()
                         .min_w(px(0.0))
-                        .flex_row()
                         .items_center()
-                        .gap_3()
                         .child(
                             view()
-                                .flex_row()
-                                .items_center()
-                                .gap_1()
+                                .relative()
+                                .w_full()
+                                .max_w(px(520.0))
                                 .child(
-                                    button()
-                                        .accessibility_label("Go Back")
-                                        .w(px(34.0))
-                                        .h(px(34.0))
+                                    view()
+                                        .w_full()
+                                        .h(px(40.0))
+                                        .px_3()
+                                        .flex_row()
                                         .items_center()
-                                        .justify_center()
-                                        .rounded_full()
-                                        .transition()
-                                        .duration(shell_transition_ms)
-                                        .ease_out()
-                                        .hover(|s| s.bg(pill_glass_hover))
-                                        .active(|s| s.scale(shell_press_scale).opacity(0.8))
-                                        .focus_visible(|s| {
-                                            s.outline(px(2.0)).outline_color(move || theme().ring)
-                                        })
-                                        .on_press(store::go_back)
-                                        .child(icon(IconKind::ChevronLeft, 18.0, move || {
-                                            if store::can_go_back() {
-                                                theme().foreground
-                                            } else {
-                                                theme().muted_foreground
-                                            }
-                                        })),
+                                        .gap_2()
+                                        .rounded(radius_pill)
+                                        .bg(pill_glass_surface)
+                                        .border_1()
+                                        .border_color(move || theme().input)
+                                        .child(
+                                            button()
+                                                .test_id("nav-search")
+                                                .accessibility_label("Open Search")
+                                                .w(px(28.0))
+                                                .h(px(28.0))
+                                                .items_center()
+                                                .justify_center()
+                                                .rounded_full()
+                                                .transition()
+                                                .duration(shell_transition_ms)
+                                                .ease_out()
+                                                .hover(|s| s.bg(pill_glass_hover))
+                                                .active(|s| s.scale(shell_press_scale))
+                                                .focus_visible(|s| {
+                                                    s.outline(px(2.0))
+                                                        .outline_color(move || theme().ring)
+                                                })
+                                                .on_press(move || {
+                                                    store::set_search_dropdown_open(false);
+                                                    store::run_search(&header_query.get_untracked());
+                                                    store::set_tab(AppTab::Search);
+                                                })
+                                                .child(icon(IconKind::Search, 16.0, move || {
+                                                    theme().muted_foreground
+                                                })),
+                                        )
+                                        .child(
+                                            input()
+                                                .test_id("header-search-input")
+                                                .value(move || header_query.get())
+                                                .on_focus(|| {
+                                                    crate::ui::controls::set_text_input_focused(
+                                                        true,
+                                                    );
+                                                    store::set_search_dropdown_open(true);
+                                                })
+                                                .on_blur(|| {
+                                                    crate::ui::controls::set_text_input_focused(
+                                                        false,
+                                                    );
+                                                })
+                                                .on_change(move |txt: &str| {
+                                                    header_query.set(txt.to_owned());
+                                                    store::fetch_search_suggestions(txt);
+                                                    store::set_search_dropdown_open(true);
+                                                    store::run_search(txt);
+                                                    if !txt.trim().is_empty()
+                                                        && store::active_tab() != AppTab::Search
+                                                    {
+                                                        store::set_tab(AppTab::Search);
+                                                    }
+                                                })
+                                                .on_submit(move |txt: &str| {
+                                                    header_query.set(txt.to_owned());
+                                                    store::set_search_dropdown_open(false);
+                                                    store::run_search(txt);
+                                                    store::set_tab(AppTab::Search);
+                                                })
+                                                .placeholder(
+                                                    "Search songs, albums, artists, podcasts",
+                                                )
+                                                .placeholder_color(|| {
+                                                    color(theme().muted_foreground)
+                                                })
+                                                .caret_color(|| color(theme().primary))
+                                                .return_key_type(ReturnKeyType::Search)
+                                                .flex_1()
+                                                .min_w(px(0.0))
+                                                .text_sm()
+                                                .text_color(move || theme().foreground),
+                                        )
+                                        .child(when(
+                                            move || !header_query.get().trim().is_empty(),
+                                            move || {
+                                                svg_icon_button(
+                                                    IconKind::Close,
+                                                    15.0,
+                                                    28.0,
+                                                    "Clear Search",
+                                                    true,
+                                                    move || theme().muted_foreground,
+                                                    move || {
+                                                        header_query.set(String::new());
+                                                        store::set_search_dropdown_open(false);
+                                                        store::run_search("");
+                                                    },
+                                                )
+                                            },
+                                        ))
+                                        .child(
+                                            button()
+                                                .accessibility_label("Audio Search")
+                                                .w(px(28.0))
+                                                .h(px(28.0))
+                                                .items_center()
+                                                .justify_center()
+                                                .rounded_full()
+                                                .hover(|s| s.bg(pill_glass_hover))
+                                                .focus_visible(|s| {
+                                                    s.outline(px(2.0))
+                                                        .outline_color(move || theme().ring)
+                                                })
+                                                .on_press(|| {
+                                                    store::set_search_dropdown_open(false);
+                                                    store::set_tab(AppTab::Search);
+                                                })
+                                                .child(icon(IconKind::Headphones, 16.0, move || {
+                                                    theme().muted_foreground
+                                                })),
+                                        ),
                                 )
-                                .child(
-                                    button()
-                                        .accessibility_label("Go Forward")
-                                        .w(px(34.0))
-                                        .h(px(34.0))
-                                        .items_center()
-                                        .justify_center()
-                                        .rounded_full()
-                                        .transition()
-                                        .duration(shell_transition_ms)
-                                        .ease_out()
-                                        .hover(|s| s.bg(pill_glass_hover))
-                                        .active(|s| s.scale(shell_press_scale).opacity(0.8))
-                                        .focus_visible(|s| {
-                                            s.outline(px(2.0)).outline_color(move || theme().ring)
-                                        })
-                                        .on_press(store::go_forward)
-                                        .child(icon(IconKind::ChevronRight, 18.0, move || {
-                                            if store::can_go_forward() {
-                                                theme().foreground
-                                            } else {
-                                                theme().muted_foreground
-                                            }
-                                        })),
-                                )
-                                .child(svg_icon_button(
-                                    IconKind::Refresh,
-                                    16.0,
-                                    34.0,
-                                    "Refresh Home",
-                                    true,
-                                    move || theme().muted_foreground,
-                                    store::refresh_home,
-                                )),
-                        )
-                        // Sleek pill search bar
-                        .child(
-                            view()
-                                .flex_1()
-                                .max_w(px(480.0))
-                                .h(px(40.0))
-                                .px_3()
-                                .flex_row()
-                                .items_center()
-                                .gap_2()
-                                .rounded(radius_pill)
-                                .bg(pill_glass_surface)
-                                .border_1()
-                                .border_color(move || theme().input)
-                                .child(
-                                    button()
-                                        .test_id("nav-search")
-                                        .accessibility_label("Open Search")
-                                        .w(px(28.0))
-                                        .h(px(28.0))
-                                        .items_center()
-                                        .justify_center()
-                                        .rounded_full()
-                                        .transition()
-                                        .duration(shell_transition_ms)
-                                        .ease_out()
-                                        .hover(|s| s.bg(pill_glass_hover))
-                                        .active(|s| s.scale(shell_press_scale))
-                                        .focus_visible(|s| {
-                                            s.outline(px(2.0)).outline_color(move || theme().ring)
-                                        })
-                                        .on_press(move || {
-                                            store::run_search(&header_query.get_untracked());
-                                            store::set_tab(AppTab::Search);
-                                        })
-                                        .child(icon(IconKind::Search, 16.0, move || {
-                                            theme().muted_foreground
-                                        })),
-                                )
-                                .child(
-                                    input()
-                                        .test_id("header-search-input")
-                                        .value(move || header_query.get())
-                                        .on_focus(|| {
-                                            crate::ui::controls::set_text_input_focused(true);
-                                        })
-                                        .on_blur(|| {
-                                            crate::ui::controls::set_text_input_focused(false);
-                                        })
-                                        .on_change(move |txt: &str| {
-                                            header_query.set(txt.to_owned());
-                                            store::run_search(txt);
-                                            if !txt.trim().is_empty()
-                                                && store::active_tab() != AppTab::Search
-                                            {
-                                                store::set_tab(AppTab::Search);
-                                            }
-                                        })
-                                        .on_submit(move |txt: &str| {
-                                            header_query.set(txt.to_owned());
-                                            store::run_search(txt);
-                                            store::set_tab(AppTab::Search);
-                                        })
-                                        .placeholder("Search songs, albums, artists, podcasts")
-                                        .placeholder_color(|| color(theme().muted_foreground))
-                                        .caret_color(|| color(theme().primary))
-                                        .return_key_type(ReturnKeyType::Search)
-                                        .flex_1()
-                                        .min_w(px(0.0))
-                                        .text_sm()
-                                        .text_color(move || theme().foreground),
-                                )
-                                .child(
-                                    when(
-                                        move || !header_query.get().trim().is_empty(),
-                                        move || {
-                                            svg_icon_button(
-                                                IconKind::Close,
-                                                15.0,
-                                                28.0,
-                                                "Clear Search",
-                                                true,
-                                                move || theme().muted_foreground,
-                                                move || {
-                                                    header_query.set(String::new());
-                                                    store::run_search("");
-                                                },
-                                            )
-                                        },
-                                    )
-                                    .otherwise(|| {
-                                        view()
-                                            .w(px(28.0))
-                                            .h(px(28.0))
-                                            .items_center()
-                                            .justify_center()
-                                            .child(icon(IconKind::Headphones, 16.0, move || {
-                                                theme().muted_foreground
-                                            }))
-                                    }),
-                                ),
+                                .child(search_suggestions_dropdown(header_query)),
                         ),
                 )
-                // Right: Keyboard Shortcuts `?` Popover + Account Avatar
+                // Right: Keyboard Shortcuts `?` Popover + Circular User Profile Avatar -> Settings > Account
                 .child(
                     view()
                         .flex_row()
                         .items_center()
-                        .gap_2p5()
+                        .gap_2()
                         .child(keyboard_shortcuts_popover())
                         .child(
                             button()
+                                .test_id("nav-account-avatar")
                                 .accessibility_label("Account & Settings")
                                 .rounded_full()
                                 .transition()
@@ -1174,13 +1287,13 @@ fn desktop_top_header() -> impl IntoElement {
                                 .focus_visible(|s| {
                                     s.outline(px(2.0)).outline_color(move || theme().ring)
                                 })
-                                .on_press(|| store::set_tab(AppTab::Settings))
+                                .on_press(store::open_settings_account)
                                 .child(
                                     view()
-                                        .w(px(36.0))
-                                        .h(px(36.0))
+                                        .w(px(34.0))
+                                        .h(px(34.0))
                                         .rounded_full()
-                                        .bg(move || theme().secondary)
+                                        .bg(move || theme().primary)
                                         .border_1()
                                         .border_color(glass_hairline)
                                         .items_center()
@@ -1199,11 +1312,11 @@ fn desktop_top_header() -> impl IntoElement {
                                                     .filter(|c| c.is_alphanumeric());
                                                 let initials: String = chars
                                                     .by_ref()
-                                                    .take(2)
+                                                    .take(1)
                                                     .flat_map(|c| c.to_uppercase())
                                                     .collect();
                                                 SharedString::from(if initials.is_empty() {
-                                                    "RA".to_owned()
+                                                    "R".to_owned()
                                                 } else {
                                                     initials
                                                 })
@@ -1211,7 +1324,7 @@ fn desktop_top_header() -> impl IntoElement {
                                             .number_of_lines(1)
                                             .text_xs()
                                             .font_weight(FontWeight::BOLD)
-                                            .text_color(move || theme().foreground),
+                                            .text_color(color_on_cover),
                                         ),
                                 ),
                         ),
@@ -1221,13 +1334,11 @@ fn desktop_top_header() -> impl IntoElement {
 }
 
 fn desktop_side_panel() -> impl IntoElement {
+    // Allow right-hand `Up next` drawer to open on Home/Explore/Library/NowPlaying (matching 07_now_playing_02_queue.png!)
     let show_panel = move || {
         is_desktop_panel_visible()
             && store::desktop_side_panel_open()
-            && !matches!(
-                store::active_tab(),
-                AppTab::Queue | AppTab::Lyrics | AppTab::NowPlaying
-            )
+            && !matches!(store::active_tab(), AppTab::Queue | AppTab::Lyrics)
     };
     let is_queue = move || store::desktop_side_panel() == DesktopSidePanel::Queue;
     let is_lyrics = move || store::desktop_side_panel() == DesktopSidePanel::Lyrics;
@@ -1236,212 +1347,280 @@ fn desktop_side_panel() -> impl IntoElement {
     when(show_panel, move || {
         view()
             .test_id("desktop-side-panel")
-            .w(px(336.0))
+            .w(px(344.0))
             .h_full()
             .p_3()
             .gap_3()
-            .backdrop_blur(px(16.0))
-            .backdrop_material(BackdropMaterial::Thin)
-            .bg(frosted_bar_surface)
+            .backdrop_blur(px(28.0))
+            .backdrop_material(BackdropMaterial::Regular)
+            .bg(frosted_drawer_surface)
             .border_l_1()
             .border_color(glass_hairline)
+            // Top bar: "Up next" title + Save to Playlist, Clear Queue, Close buttons
             .child(
                 view()
                     .flex_row()
                     .items_center()
+                    .justify_between()
+                    .px_1()
                     .gap_2()
                     .child(
-                        tabs()
-                            .flex_1()
-                            .flex_row()
-                            .gap_1()
-                            .p_1()
-                            .rounded(radius_card)
-                            .bg(pill_glass_surface)
-                            .indicator_style(|s| {
-                                s.top_1()
-                                    .bottom_1()
-                                    .rounded(radius_tab_inner)
-                                    .bg(move || theme().primary)
-                            })
-                            .accessibility_label("Side panel sections")
-                            .child(
-                                tab()
-                                    .test_id("side-panel-tab-queue")
-                                    .selected(is_queue)
-                                    .on_press(|| {
-                                        store::set_desktop_side_panel(DesktopSidePanel::Queue)
-                                    })
-                                    .flex_1()
-                                    .min_h(px(36.0))
-                                    .px_1()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded(radius_tab_inner)
-                                    .focus_visible(|s| {
-                                        s.outline(px(2.0)).outline_color(move || theme().ring)
-                                    })
-                                    .child(
-                                        text("Up Next")
-                                            .number_of_lines(1)
-                                            .text_xs()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(move || {
-                                                if is_queue() {
-                                                    theme().primary_foreground
-                                                } else {
-                                                    theme().muted_foreground
-                                                }
-                                            }),
-                                    ),
-                            )
-                            .child(
-                                tab()
-                                    .test_id("side-panel-tab-lyrics")
-                                    .selected(is_lyrics)
-                                    .on_press(|| {
-                                        store::set_desktop_side_panel(DesktopSidePanel::Lyrics)
-                                    })
-                                    .flex_grow(1.45)
-                                    .min_h(px(36.0))
-                                    .px_1()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded(radius_tab_inner)
-                                    .focus_visible(|s| {
-                                        s.outline(px(2.0)).outline_color(move || theme().ring)
-                                    })
-                                    .child(
-                                        text("Synced Lyrics")
-                                            .number_of_lines(1)
-                                            .text_xs()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(move || {
-                                                if is_lyrics() {
-                                                    theme().primary_foreground
-                                                } else {
-                                                    theme().muted_foreground
-                                                }
-                                            }),
-                                    ),
-                            )
-                            .child(
-                                tab()
-                                    .test_id("side-panel-tab-related")
-                                    .selected(is_related)
-                                    .on_press(|| {
-                                        store::set_desktop_side_panel(DesktopSidePanel::Related)
-                                    })
-                                    .flex_1()
-                                    .min_h(px(36.0))
-                                    .px_1()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded(radius_tab_inner)
-                                    .focus_visible(|s| {
-                                        s.outline(px(2.0)).outline_color(move || theme().ring)
-                                    })
-                                    .child(
-                                        text("Related")
-                                            .number_of_lines(1)
-                                            .text_xs()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(move || {
-                                                if is_related() {
-                                                    theme().primary_foreground
-                                                } else {
-                                                    theme().muted_foreground
-                                                }
-                                            }),
-                                    ),
-                            ),
+                        text(move || match store::desktop_side_panel() {
+                            DesktopSidePanel::Queue => SharedString::from("Up next"),
+                            DesktopSidePanel::Lyrics => SharedString::from("Lyrics"),
+                            DesktopSidePanel::Related => SharedString::from("Related"),
+                        })
+                        .text_base()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(move || theme().foreground),
                     )
-                    .child(svg_icon_button(
-                        IconKind::Close,
-                        15.0,
-                        34.0,
-                        "Close Side Panel",
-                        true,
-                        move || theme().muted_foreground,
-                        move || {
-                            trigger_shell_layout_animation();
-                            store::toggle_desktop_side_panel(store::desktop_side_panel());
-                        },
-                    )),
+                    .child(
+                        view()
+                            .flex_row()
+                            .items_center()
+                            .gap_1()
+                            .child(svg_icon_button(
+                                IconKind::ListPlus,
+                                15.0,
+                                32.0,
+                                "Save queue to playlist",
+                                true,
+                                move || theme().muted_foreground,
+                                || {
+                                    if let Some(track) = store::player_snapshot().current_track {
+                                        store::open_add_to_playlist_sheet(track);
+                                    }
+                                },
+                            ))
+                            .child(svg_icon_button(
+                                IconKind::Trash,
+                                15.0,
+                                32.0,
+                                "Clear Up Next",
+                                true,
+                                move || theme().muted_foreground,
+                                store::clear_queue,
+                            ))
+                            .child(svg_icon_button(
+                                IconKind::Close,
+                                15.0,
+                                32.0,
+                                "Close Side Panel",
+                                true,
+                                move || theme().muted_foreground,
+                                move || {
+                                    trigger_shell_layout_animation();
+                                    store::toggle_desktop_side_panel(store::desktop_side_panel());
+                                },
+                            )),
+                    ),
             )
+            // Compact segmented switcher (`Up Next` / `Synced Lyrics` / `Related`)
             .child(
-                when(is_queue, || {
-                    virtual_list(store::queue_len, move |at| {
-                        let track = computed(move || store::queue_track_at(at.index()));
-                        let active = move || {
-                            store::player_snapshot().queue.current_index == Some(at.index())
-                        };
-                        button()
-                            .w_full()
-                            .min_h(px(48.0))
-                            .px_2p5()
-                            .py_1p5()
-                            .rounded(radius_card)
-                            .style_when(active, |s| s.bg(sidebar_active_surface))
-                            .hover(|s| s.bg(pill_glass_surface))
+                tabs()
+                    .w_full()
+                    .flex_row()
+                    .gap_1()
+                    .p_1()
+                    .rounded(radius_card)
+                    .bg(pill_glass_surface)
+                    .indicator_style(|s| {
+                        s.top_1()
+                            .bottom_1()
+                            .rounded(radius_tab_inner)
+                            .bg(sidebar_active_surface)
+                    })
+                    .accessibility_label("Side panel sections")
+                    .child(
+                        tab()
+                            .test_id("side-panel-tab-queue")
+                            .selected(is_queue)
+                            .on_press(|| store::set_desktop_side_panel(DesktopSidePanel::Queue))
+                            .flex_1()
+                            .min_h(px(32.0))
+                            .px_1()
+                            .items_center()
+                            .justify_center()
+                            .rounded(radius_tab_inner)
                             .focus_visible(|s| {
                                 s.outline(px(2.0)).outline_color(move || theme().ring)
                             })
-                            .on_press(move || store::jump_queue(at.index()))
                             .child(
-                                view()
-                                    .flex_row()
-                                    .items_center()
-                                    .gap_2p5()
+                                text("Up Next")
+                                    .number_of_lines(1)
+                                    .text_xs()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(move || {
+                                        if is_queue() {
+                                            theme().foreground
+                                        } else {
+                                            theme().muted_foreground
+                                        }
+                                    }),
+                            ),
+                    )
+                    .child(
+                        tab()
+                            .test_id("side-panel-tab-lyrics")
+                            .selected(is_lyrics)
+                            .on_press(|| store::set_desktop_side_panel(DesktopSidePanel::Lyrics))
+                            .flex_grow(1.35)
+                            .min_h(px(32.0))
+                            .px_1()
+                            .items_center()
+                            .justify_center()
+                            .rounded(radius_tab_inner)
+                            .focus_visible(|s| {
+                                s.outline(px(2.0)).outline_color(move || theme().ring)
+                            })
+                            .child(
+                                text("Synced Lyrics")
+                                    .number_of_lines(1)
+                                    .text_xs()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(move || {
+                                        if is_lyrics() {
+                                            theme().foreground
+                                        } else {
+                                            theme().muted_foreground
+                                        }
+                                    }),
+                            ),
+                    )
+                    .child(
+                        tab()
+                            .test_id("side-panel-tab-related")
+                            .selected(is_related)
+                            .on_press(|| store::set_desktop_side_panel(DesktopSidePanel::Related))
+                            .flex_1()
+                            .min_h(px(32.0))
+                            .px_1()
+                            .items_center()
+                            .justify_center()
+                            .rounded(radius_tab_inner)
+                            .focus_visible(|s| {
+                                s.outline(px(2.0)).outline_color(move || theme().ring)
+                            })
+                            .child(
+                                text("Related")
+                                    .number_of_lines(1)
+                                    .text_xs()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(move || {
+                                        if is_related() {
+                                            theme().foreground
+                                        } else {
+                                            theme().muted_foreground
+                                        }
+                                    }),
+                            ),
+                    ),
+            )
+            // Body: Queue (with Autoplay similar songs toggle + duration column), Synced Lyrics, or Related
+            .child(
+                when(is_queue, || {
+                    view()
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .gap_2()
+                        .child(setting_switch(
+                            "Autoplay similar songs",
+                            || store::player_snapshot().queue.autoplay_radio,
+                            store::set_autoplay_radio,
+                        ))
+                        .child(
+                            virtual_list(store::queue_len, move |at| {
+                                let track = computed(move || store::queue_track_at(at.index()));
+                                let active = move || {
+                                    store::player_snapshot().queue.current_index == Some(at.index())
+                                };
+                                button()
                                     .w_full()
-                                    .min_w(px(0.0))
-                                    .child(side_panel_queue_artwork(track, active))
+                                    .min_h(px(50.0))
+                                    .px_2()
+                                    .py_1p5()
+                                    .rounded(radius_card)
+                                    .style_when(active, |s| s.bg(sidebar_active_surface))
+                                    .hover(|s| s.bg(pill_glass_surface))
+                                    .focus_visible(|s| {
+                                        s.outline(px(2.0)).outline_color(move || theme().ring)
+                                    })
+                                    .on_press(move || store::jump_queue(at.index()))
                                     .child(
                                         view()
-                                            .flex_1()
+                                            .flex_row()
+                                            .items_center()
+                                            .gap_2p5()
+                                            .w_full()
                                             .min_w(px(0.0))
-                                            .gap_0p5()
+                                            .child(side_panel_queue_artwork(track, active))
                                             .child(
-                                                text(move || {
-                                                    track.with(|t| {
-                                                        SharedString::from(
-                                                            t.as_ref()
-                                                                .map(|x| x.title.clone())
-                                                                .unwrap_or_default(),
-                                                        )
-                                                    })
-                                                })
-                                                .number_of_lines(1)
-                                                .text_xs()
-                                                .font_weight(FontWeight::SEMIBOLD)
-                                                .text_color(move || {
-                                                    if active() {
-                                                        theme().primary
-                                                    } else {
-                                                        theme().foreground
-                                                    }
-                                                }),
+                                                view()
+                                                    .flex_1()
+                                                    .min_w(px(0.0))
+                                                    .gap_0p5()
+                                                    .child(
+                                                        text(move || {
+                                                            track.with(|t| {
+                                                                SharedString::from(
+                                                                    t.as_ref()
+                                                                        .map(|x| x.title.clone())
+                                                                        .unwrap_or_default(),
+                                                                )
+                                                            })
+                                                        })
+                                                        .number_of_lines(1)
+                                                        .text_xs()
+                                                        .font_weight(FontWeight::SEMIBOLD)
+                                                        .text_color(move || {
+                                                            if active() {
+                                                                theme().primary
+                                                            } else {
+                                                                theme().foreground
+                                                            }
+                                                        }),
+                                                    )
+                                                    .child(
+                                                        text(move || {
+                                                            track.with(|t| {
+                                                                SharedString::from(
+                                                                    t.as_ref()
+                                                                        .map(|x| x.artist_display())
+                                                                        .unwrap_or_default(),
+                                                                )
+                                                            })
+                                                        })
+                                                        .number_of_lines(1)
+                                                        .text_xs()
+                                                        .text_color(move || {
+                                                            theme().muted_foreground
+                                                        }),
+                                                    ),
                                             )
                                             .child(
                                                 text(move || {
                                                     track.with(|t| {
                                                         SharedString::from(
                                                             t.as_ref()
-                                                                .map(|x| x.artist_display())
+                                                                .map(|x| {
+                                                                    resonance_contract::format_duration_ms(
+                                                                        x.duration_ms,
+                                                                    )
+                                                                })
                                                                 .unwrap_or_default(),
                                                         )
                                                     })
                                                 })
-                                                .number_of_lines(1)
                                                 .text_xs()
+                                                .tabular_nums()
                                                 .text_color(move || theme().muted_foreground),
                                             ),
-                                    ),
-                            )
-                    })
-                    .keys(store::queue_ids)
-                    .estimated_item_size(px(54.0))
-                    .flex_1()
+                                    )
+                            })
+                            .keys(store::queue_ids)
+                            .estimated_item_size(px(54.0))
+                            .flex_1(),
+                        )
                 })
                 .otherwise(move || {
                     when(is_lyrics, || {
@@ -1621,6 +1800,8 @@ fn mobile_top_header() -> impl IntoElement {
                 .justify_between()
                 .px_4()
                 .py_1p5()
+                .backdrop_blur(px(16.0))
+                .bg(frosted_header_surface)
                 .border_b_1()
                 .border_color(glass_hairline)
                 .child(
@@ -1631,9 +1812,9 @@ fn mobile_top_header() -> impl IntoElement {
                         .gap_2()
                         .child(raag_brand_icon(22.0))
                         .child(
-                            text("Raag")
+                            text("Music")
                                 .number_of_lines(1)
-                                .min_w(px(64.0))
+                                .min_w(px(56.0))
                                 .text_base()
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(move || theme().foreground),
@@ -1648,7 +1829,7 @@ fn mobile_top_header() -> impl IntoElement {
                             button()
                                 .test_id("nav-rooms")
                                 .selected(move || store::active_tab() == AppTab::ListenTogether)
-                                .accessibility_label("Radio & Rooms")
+                                .accessibility_label("Listen together")
                                 .w(px(MOBILE_MIN_TOUCH_TARGET))
                                 .h(px(MOBILE_MIN_TOUCH_TARGET))
                                 .flex_col()
@@ -1776,92 +1957,61 @@ pub fn app_shell() -> impl IntoElement {
     let desktop = is_desktop_layout;
 
     view()
+        .relative()
         .flex_1()
+        .overflow_hidden()
         .bg(move || theme().background)
+        // Full-window dynamic moving blurred-glass ambient backdrop (outside all virtual lists)
+        .child(ambient_shell_backdrop())
         .child(
-            when(desktop, || {
-                view()
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .child(
+            view()
+                .relative()
+                .flex_1()
+                .min_h(px(0.0))
+                .child(
+                    when(desktop, || {
                         view()
                             .flex_1()
                             .min_h(px(0.0))
-                            .flex_row()
-                            .child(desktop_sidebar())
                             .child(
                                 view()
-                                    .relative()
                                     .flex_1()
-                                    .min_w(px(0.0))
                                     .min_h(px(0.0))
-                                    // Seamless full-canvas atmospheric wash behind header & mood chips
-                                    .child(when(
-                                        move || store::active_tab() != AppTab::NowPlaying,
-                                        || {
-                                            view()
-                                                .absolute()
-                                                .top_0()
-                                                .left_0()
-                                                .right_0()
-                                                .h(px(520.0))
-                                                .pointer_events(PointerEvents::None)
-                                                .accessibility_elements_hidden(true)
-                                                .bg_linear_to_b()
-                                                .gradient_from(move || {
-                                                    color_ambient_warm().opacity(0.76)
-                                                })
-                                                .gradient_via(move || {
-                                                    color_ambient_warm().opacity(0.24)
-                                                })
-                                                .gradient_via_position(percentage(0.45))
-                                                .gradient_to(move || {
-                                                    theme().background.opacity(0.0)
-                                                })
-                                                .child(
-                                                    view()
-                                                        .absolute()
-                                                        .top_0()
-                                                        .left_0()
-                                                        .right_0()
-                                                        .h(px(340.0))
-                                                        .pointer_events(PointerEvents::None)
-                                                        .bg_radial()
-                                                        .gradient_from(move || {
-                                                            color_ambient_warm().opacity(0.42)
-                                                        })
-                                                        .gradient_to(move || {
-                                                            theme().background.opacity(0.0)
-                                                        }),
+                                    .flex_row()
+                                    .child(desktop_sidebar())
+                                    .child(
+                                        view()
+                                            .relative()
+                                            .flex_1()
+                                            .min_w(px(0.0))
+                                            .min_h(px(0.0))
+                                            .child(desktop_top_header())
+                                            .child(dynamic(move || {
+                                                updater_top_banner(
+                                                    store::updater_available(),
+                                                    Rc::new(|| store::set_tab(AppTab::Settings)),
+                                                    Rc::new(store::dismiss_updater_banner),
                                                 )
-                                        },
-                                    ))
-                                    .child(desktop_top_header())
-                                    .child(dynamic(move || {
-                                        updater_top_banner(
-                                            store::updater_available(),
-                                            Rc::new(|| store::set_tab(AppTab::Settings)),
-                                            Rc::new(store::dismiss_updater_banner),
-                                        )
-                                        .into_element()
-                                    }))
-                                    .child(active_screen())
-                                    .child(status_toast()),
+                                                .into_element()
+                                            }))
+                                            .child(active_screen())
+                                            .child(status_toast()),
+                                    )
+                                    .child(desktop_side_panel()),
                             )
-                            .child(desktop_side_panel()),
-                    )
-                    .child(desktop_player_bar())
-            })
-            .otherwise(|| {
-                view()
-                    .flex_1()
-                    .pt_safe_area()
-                    .child(mobile_top_header())
-                    .child(active_screen())
-                    .child(status_toast())
-                    .child(persistent_mini_player())
-                    .child(mobile_bottom_nav())
-            }),
+                            .child(desktop_player_bar())
+                    })
+                    .otherwise(|| {
+                        view()
+                            .flex_1()
+                            .pt_safe_area()
+                            .child(mobile_top_header())
+                            .child(active_screen())
+                            .child(status_toast())
+                            .child(persistent_mini_player())
+                            .child(mobile_bottom_nav())
+                    }),
+                ),
         )
         .child(track_action_sheet())
         .child(add_to_playlist_sheet())

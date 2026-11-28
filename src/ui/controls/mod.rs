@@ -23,8 +23,8 @@ pub mod transport;
 pub mod vault_widgets;
 
 pub use ambient::{
-    ambient_shader_backdrop, animated_like_heart, animated_play_pause_icon,
-    live_equalizer_indicator,
+    AmbientBackdropSnapshot, ambient_shader_backdrop, ambient_shell_backdrop, animated_like_heart,
+    animated_play_pause_icon, latest_ambient_snapshot, live_equalizer_indicator,
 };
 pub use cards::{diagnostics_badge, media_square_card, status_card};
 pub use cast_sheet::{active_cast_banner, cast_button, cast_picker_sheet};

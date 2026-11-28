@@ -1,11 +1,16 @@
 //! Priority Visual Surface #4: Home Feed & Playlist / Collection Detail.
-//! Warm dark YouTube Music Desktop aesthetic with mood filter chips, "Listen again"
-//! square cards, 3-column "Quick Picks" grid on desktop, paginated shelves, and
-//! a rich Playlist / Collection hero detail view with search & sort.
+//! Matches `ytm-rs` reference (`01_home_01.png`–`01_home_03.png` & `04_playlist_detail_1.png`–`_4.png`):
+//! - Wrapping mood/activity filter pills over the moving blurred-glass ambient backdrop
+//! - Clean section headings with `< >` carousel arrows (no redundant eyebrow clutter)
+//! - Horizontal single-row square-card carousels (`Listen again`, `Your daily discover`, etc.)
+//!   and 3-column compact `Song mixes` grid on desktop
+//! - Rich Playlist / Collection Detail hero (`PLAYLIST`, 220px artwork, Play/Shuffle/Radio/Select,
+//!   Download, Sort + Find in this list)
 
-use nsh_base::{input, theme};
+use nsh_base::{button, input, theme};
 use nsh_core::prelude::*;
 use resonance_contract::{HomeItem, HomeSection, Track};
+use resonance_core::offline::PinnedCollectionKind;
 
 use crate::store::{self, AppTab};
 use crate::ui::controls::{
@@ -13,25 +18,26 @@ use crate::ui::controls::{
     media_square_card, mood_chip, mood_chip_with_icon, set_text_input_focused, skeleton_row,
     status_card, svg_icon_button, track_row_view,
 };
-use crate::ui::icons::IconKind;
+use crate::ui::icons::{IconKind, icon};
 use crate::ui::text_format::{format_recoverable_error, pluralize, quote_term};
 use crate::ui::tokens::{
-    MOBILE_MIN_TOUCH_TARGET, eyebrow_label, glass_hairline, is_desktop_layout, is_narrow_viewport,
-    pill_glass_surface, radius_card, radius_pill,
+    MOBILE_MIN_TOUCH_TARGET, eyebrow_label, frosted_settings_card, glass_hairline,
+    is_desktop_layout, is_narrow_viewport, pill_glass_hover, pill_glass_surface, radius_card,
+    radius_pill,
 };
 
 const HOME_MOODS: [&str; 11] = [
     "Podcasts",
-    "Feel good",
-    "Romance",
-    "Energize",
     "Relax",
     "Workout",
+    "Energize",
+    "Romance",
     "Commute",
+    "Feel good",
     "Party",
-    "Sleep",
     "Sad",
     "Focus",
+    "Sleep",
 ];
 
 pub fn home_screen() -> impl IntoElement {
@@ -52,219 +58,378 @@ fn collection_detail_view() -> impl IntoElement {
     let collection_memo = computed(store::selected_collection);
     let current_id_memo = computed(|| store::player_snapshot().current_track.map(|t| t.id));
     let desktop_memo = computed(is_desktop_layout);
+    let select_mode = signal(false);
 
     view()
         .flex_1()
         .min_h(px(0.0))
-        .child(scroll().flex_1().min_h(px(0.0)).child(dynamic(move || {
-            let Some(playlist) = collection_memo.get() else {
-                return view().flex_1().into_element();
-            };
-            let desktop = desktop_memo.get();
-            let art_size = if desktop { 168.0 } else { 120.0 };
-            let mono = playlist
-                .title
-                .chars()
-                .find(|c| c.is_alphanumeric())
-                .map(|c| c.to_uppercase().to_string())
-                .unwrap_or_else(|| "♫".into());
-            let song_count = playlist.tracks.len();
-            let songs_label = pluralize(song_count, "song", "songs");
-            let total_mins = format_total_minutes(&playlist.tracks);
-            let stats_line = match playlist.subtitle.as_deref() {
-                Some(sub) if !sub.is_empty() => {
-                    format!("{sub} • {songs_label} • {total_mins} min")
-                }
-                _ => format!("{songs_label} • {total_mins} min"),
-            };
+        .child(
+            scroll()
+                .flex_1()
+                .min_h(px(0.0))
+                .pb_safe_area()
+                .child(dynamic(move || {
+                    let Some(playlist) = collection_memo.get() else {
+                        return view().flex_1().into_element();
+                    };
+                    let desktop = desktop_memo.get();
+                    let art_size = if desktop { 220.0 } else { 136.0 };
+                    let mono = playlist
+                        .title
+                        .chars()
+                        .find(|c| c.is_alphanumeric())
+                        .map(|c| c.to_uppercase().to_string())
+                        .unwrap_or_else(|| "♫".into());
+                    let song_count = playlist.tracks.len();
+                    let songs_label = pluralize(song_count, "song", "songs");
+                    let total_mins = format_total_minutes(&playlist.tracks);
+                    let owner_line = playlist
+                        .subtitle
+                        .as_deref()
+                        .filter(|s| !s.is_empty())
+                        .map(|sub| format!("{sub} • {songs_label}"))
+                        .unwrap_or_else(|| songs_label.clone());
+                    let stats_line = format!("{songs_label} • {total_mins} min");
 
-            let tracks_for_play_all = playlist.tracks.clone();
-            let tracks_for_shuffle = playlist.tracks.clone();
-            let tracks_for_radio = playlist.tracks.clone();
-            let radio_title = playlist.title.clone();
+                    let tracks_for_play_all = playlist.tracks.clone();
+                    let tracks_for_shuffle = playlist.tracks.clone();
+                    let tracks_for_radio = playlist.tracks.clone();
+                    let tracks_for_download = playlist.tracks.clone();
+                    let radio_title = playlist.title.clone();
+                    let dl_id = playlist.id.clone();
+                    let dl_title = playlist.title.clone();
+                    let dl_sub = playlist.subtitle.clone();
+                    let dl_art = playlist.artwork_url.clone();
+                    let is_pinned = store::pinned_collections()
+                        .iter()
+                        .any(|p| p.id == playlist.id);
+                    let pin_id = playlist.id.clone();
 
-            view()
-                .p_4()
-                .when(desktop, |v| v.px_8().py_6())
-                .gap_5()
-                .child(
                     view()
-                        .flex_row()
-                        .items_center()
-                        .justify_between()
-                        .gap_3()
-                        .child(back_button(store::close_collection)),
-                )
-                .child(
-                    view()
-                        .when(desktop, |v| v.flex_row().items_end().gap_6())
-                        .when(!desktop, |v| v.gap_4())
                         .p_4()
-                        .rounded(radius_card)
-                        .bg(move || theme().card)
-                        .border_1()
-                        .border_color(glass_hairline)
-                        .child(artwork_box(
-                            playlist.artwork_url.clone(),
-                            mono,
-                            art_size,
-                            12.0,
-                        ))
+                        .when(desktop, |v| v.px_8().py_6())
+                        .gap_5()
                         .child(
                             view()
-                                .flex_1()
-                                .min_w(px(0.0))
-                                .gap_2()
-                                .child(eyebrow_label("Playlist"))
-                                .child(
-                                    text(playlist.title.clone())
-                                        .number_of_lines(2)
-                                        .text_2xl()
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_color(move || theme().foreground),
-                                )
-                                .child(
-                                    text(stats_line)
-                                        .number_of_lines(2)
-                                        .tabular_nums()
-                                        .text_sm()
-                                        .text_color(move || theme().muted_foreground),
-                                )
+                                .flex_row()
+                                .items_center()
+                                .justify_between()
+                                .gap_3()
+                                .child(back_button(store::close_collection)),
+                        )
+                        // Playlist Hero Header matching 04_playlist_detail_1.png
+                        .child(
+                            view()
+                                .when(desktop, |v| v.flex_row().items_end().gap_7())
+                                .when(!desktop, |v| v.gap_4())
+                                .child(artwork_box(
+                                    playlist.artwork_url.clone(),
+                                    mono,
+                                    art_size,
+                                    14.0,
+                                ))
                                 .child(
                                     view()
-                                        .pt_2()
-                                        .flex_row()
-                                        .flex_wrap()
-                                        .items_center()
-                                        .gap_2()
-                                        .child(hero_pill_button(
-                                            "Play All",
-                                            Some(IconKind::Play),
-                                            move || {
-                                                store::play_queue(tracks_for_play_all.clone(), 0);
-                                            },
-                                        ))
-                                        .child(glass_pill_button(
-                                            "Shuffle",
-                                            Some(IconKind::Shuffle),
-                                            move || {
-                                                store::play_all_shuffled(
-                                                    tracks_for_shuffle.clone(),
-                                                );
-                                            },
-                                        ))
-                                        .child(glass_pill_button(
-                                            "Radio",
-                                            Some(IconKind::Radio),
-                                            move || {
-                                                store::set_autoplay_radio(true);
-                                                store::play_queue(tracks_for_radio.clone(), 0);
-                                                store::set_status_banner(format!(
-                                                    "Radio started from {}",
-                                                    quote_term(&radio_title)
-                                                ));
-                                            },
-                                        )),
+                                        .flex_1()
+                                        .min_w(px(0.0))
+                                        .gap_1p5()
+                                        .child(eyebrow_label("Playlist"))
+                                        .child(
+                                            text(playlist.title.clone())
+                                                .number_of_lines(2)
+                                                .when(desktop, |t| t.text_3xl())
+                                                .when(!desktop, |t| t.text_2xl())
+                                                .font_weight(FontWeight::BOLD)
+                                                .text_color(move || theme().foreground),
+                                        )
+                                        .child(
+                                            text(owner_line)
+                                                .number_of_lines(1)
+                                                .text_sm()
+                                                .text_color(move || theme().muted_foreground),
+                                        )
+                                        .child(
+                                            text(stats_line)
+                                                .number_of_lines(1)
+                                                .tabular_nums()
+                                                .text_xs()
+                                                .text_color(move || theme().muted_foreground),
+                                        )
+                                        // Primary action pills row
+                                        .child(
+                                            view()
+                                                .pt_2()
+                                                .flex_row()
+                                                .flex_wrap()
+                                                .items_center()
+                                                .gap_2()
+                                                .child(hero_pill_button(
+                                                    "Play",
+                                                    Some(IconKind::Play),
+                                                    move || {
+                                                        store::play_queue(
+                                                            tracks_for_play_all.clone(),
+                                                            0,
+                                                        );
+                                                    },
+                                                ))
+                                                .child(glass_pill_button(
+                                                    "Shuffle",
+                                                    Some(IconKind::Shuffle),
+                                                    move || {
+                                                        store::play_all_shuffled(
+                                                            tracks_for_shuffle.clone(),
+                                                        );
+                                                    },
+                                                ))
+                                                .child(glass_pill_button(
+                                                    "Radio",
+                                                    Some(IconKind::Radio),
+                                                    move || {
+                                                        store::set_autoplay_radio(true);
+                                                        store::play_queue(
+                                                            tracks_for_radio.clone(),
+                                                            0,
+                                                        );
+                                                        store::set_status_banner(format!(
+                                                            "Radio started from {}",
+                                                            quote_term(&radio_title)
+                                                        ));
+                                                    },
+                                                ))
+                                                .child(glass_pill_button(
+                                                    move || {
+                                                        if select_mode.get() {
+                                                            SharedString::from("Done")
+                                                        } else {
+                                                            SharedString::from("Select")
+                                                        }
+                                                    },
+                                                    Some(IconKind::Check),
+                                                    move || {
+                                                        select_mode
+                                                            .set(!select_mode.get_untracked());
+                                                    },
+                                                )),
+                                        )
+                                        // Secondary library/download pills row
+                                        .child(
+                                            view()
+                                                .pt_1()
+                                                .flex_row()
+                                                .flex_wrap()
+                                                .items_center()
+                                                .gap_2()
+                                                .child(glass_pill_button(
+                                                    if is_pinned {
+                                                        "Remove from library"
+                                                    } else {
+                                                        "Save to library"
+                                                    },
+                                                    None,
+                                                    move || {
+                                                        if is_pinned {
+                                                            store::unpin_collection(&pin_id);
+                                                            store::set_status_banner(
+                                                                "Removed playlist from offline library",
+                                                            );
+                                                        } else {
+                                                            store::pin_collection(
+                                                                dl_id.clone(),
+                                                                PinnedCollectionKind::Playlist,
+                                                                dl_title.clone(),
+                                                                dl_sub.clone(),
+                                                                dl_art.clone(),
+                                                                tracks_for_download.clone(),
+                                                            );
+                                                            store::set_status_banner(
+                                                                "Saved playlist to library",
+                                                            );
+                                                        }
+                                                    },
+                                                ))
+                                                .child(glass_pill_button(
+                                                    "Download",
+                                                    Some(IconKind::Download),
+                                                    {
+                                                        let tracks_dl = playlist.tracks.clone();
+                                                        move || {
+                                                            for t in tracks_dl.iter().cloned() {
+                                                                store::enqueue_download(t);
+                                                            }
+                                                            store::set_status_banner(
+                                                                "Queued playlist tracks for offline download",
+                                                            );
+                                                        }
+                                                    },
+                                                ))
+                                                .child(svg_icon_button(
+                                                    IconKind::MoreVertical,
+                                                    16.0,
+                                                    if desktop {
+                                                        38.0
+                                                    } else {
+                                                        MOBILE_MIN_TOUCH_TARGET
+                                                    },
+                                                    "Playlist options",
+                                                    true,
+                                                    move || theme().foreground,
+                                                    {
+                                                        let title_copy = playlist.title.clone();
+                                                        move || {
+                                                            store::copy_text_to_clipboard(
+                                                                "playlist",
+                                                                &title_copy,
+                                                            );
+                                                        }
+                                                    },
+                                                )),
+                                        )
+                                        // Sort + Find in this list row
+                                        .child(
+                                            view()
+                                                .pt_2()
+                                                .flex_row()
+                                                .flex_wrap()
+                                                .items_center()
+                                                .gap_2()
+                                                .child(glass_pill_button(
+                                                    move || {
+                                                        if store::collection_sort_asc() {
+                                                            SharedString::from("Sort (A–Z)")
+                                                        } else {
+                                                            SharedString::from("Sort")
+                                                        }
+                                                    },
+                                                    Some(IconKind::Sort),
+                                                    store::toggle_collection_sort,
+                                                ))
+                                                .child(
+                                                    view()
+                                                        .flex_1()
+                                                        .min_w(px(180.0))
+                                                        .max_w(px(300.0))
+                                                        .min_h(px(if desktop {
+                                                            38.0
+                                                        } else {
+                                                            MOBILE_MIN_TOUCH_TARGET
+                                                        }))
+                                                        .flex_row()
+                                                        .items_center()
+                                                        .gap_2()
+                                                        .px_3p5()
+                                                        .rounded(radius_pill)
+                                                        .bg(pill_glass_surface)
+                                                        .border_1()
+                                                        .border_color(glass_hairline)
+                                                        .child(icon(
+                                                            IconKind::Search,
+                                                            14.0,
+                                                            move || theme().muted_foreground,
+                                                        ))
+                                                        .child(
+                                                            input()
+                                                                .test_id("collection-filter-input")
+                                                                .value(
+                                                                    store::collection_search_query,
+                                                                )
+                                                                .on_change(
+                                                                    store::set_collection_search_query,
+                                                                )
+                                                                .on_focus(|| {
+                                                                    set_text_input_focused(true)
+                                                                })
+                                                                .on_blur(|| {
+                                                                    set_text_input_focused(false)
+                                                                })
+                                                                .placeholder("Find in this list")
+                                                                .placeholder_color(|| {
+                                                                    color(
+                                                                        theme().muted_foreground,
+                                                                    )
+                                                                })
+                                                                .caret_color(|| {
+                                                                    color(theme().primary)
+                                                                })
+                                                                .flex_1()
+                                                                .min_w(px(0.0))
+                                                                .text_xs()
+                                                                .text_color(move || {
+                                                                    theme().foreground
+                                                                })
+                                                                .border_color(move || {
+                                                                    theme().input
+                                                                }),
+                                                        ),
+                                                ),
+                                        ),
                                 ),
-                        ),
-                )
-                .child(
-                    view()
-                        .flex_row()
-                        .items_center()
-                        .gap_3()
-                        .child(glass_pill_button(
-                            move || {
-                                if store::collection_sort_asc() {
-                                    SharedString::from("Sort (A–Z)")
-                                } else {
-                                    SharedString::from("Sort")
-                                }
-                            },
-                            Some(IconKind::Sort),
-                            store::toggle_collection_sort,
-                        ))
-                        .child(
-                            input()
-                                .test_id("collection-filter-input")
-                                .value(store::collection_search_query)
-                                .on_change(store::set_collection_search_query)
-                                .on_focus(|| set_text_input_focused(true))
-                                .on_blur(|| set_text_input_focused(false))
-                                .placeholder("Filter songs, artists, albums…")
-                                .placeholder_color(|| color(theme().muted_foreground))
-                                .caret_color(|| color(theme().primary))
-                                .flex_1()
-                                .min_h(px(MOBILE_MIN_TOUCH_TARGET))
-                                .px_3p5()
-                                .text_sm()
-                                .text_color(move || theme().foreground)
-                                .bg(pill_glass_surface)
-                                .rounded(radius_pill)
-                                .border_1()
-                                .border_color(move || theme().input)
-                                .focus(|s| s.border_color(move || theme().ring)),
-                        ),
-                )
-                .child(dynamic(move || {
-                    let query = store::collection_search_query().trim().to_lowercase();
-                    let sort_asc = store::collection_sort_asc();
-                    let active_id = current_id_memo.get();
-                    let mut filtered: Vec<Track> = playlist
-                        .tracks
-                        .iter()
-                        .filter(|t| {
-                            query.is_empty()
-                                || t.title.to_lowercase().contains(&query)
-                                || t.artist_display().to_lowercase().contains(&query)
-                                || t.album
-                                    .as_ref()
-                                    .is_some_and(|a| a.title.to_lowercase().contains(&query))
-                        })
-                        .cloned()
-                        .collect();
-
-                    if sort_asc {
-                        filtered
-                            .sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
-                    }
-
-                    if filtered.is_empty() {
-                        if query.is_empty() {
-                            return status_card(
-                                "Playlist has no tracks",
-                                "Tracks will appear here once loaded.",
-                                Some("Back to Home"),
-                                Some(Box::new(store::close_collection)),
-                            )
-                            .into_element();
-                        }
-                        return status_card(
-                            SharedString::from(format!("No tracks match {}", quote_term(&query))),
-                            "Try another song title or artist name, or clear the filter.",
-                            Some("Clear filter"),
-                            Some(Box::new(|| store::set_collection_search_query(""))),
                         )
-                        .into_element();
-                    }
+                        // Track list
+                        .child(dynamic(move || {
+                            let query = store::collection_search_query().trim().to_lowercase();
+                            let sort_asc = store::collection_sort_asc();
+                            let active_id = current_id_memo.get();
+                            let mut filtered: Vec<Track> = playlist
+                                .tracks
+                                .iter()
+                                .filter(|t| {
+                                    query.is_empty()
+                                        || t.title.to_lowercase().contains(&query)
+                                        || t.artist_display().to_lowercase().contains(&query)
+                                        || t.album.as_ref().is_some_and(|a| {
+                                            a.title.to_lowercase().contains(&query)
+                                        })
+                                })
+                                .cloned()
+                                .collect();
 
-                    view()
-                        .gap_1()
-                        .children(filtered.into_iter().map(move |track| {
-                            let is_cur = active_id.as_deref() == Some(track.id.as_str());
-                            let t_play = track.clone();
-                            let t_next = track.clone();
-                            track_row_view(
-                                track,
-                                is_cur,
-                                move || store::play_track(t_play.clone()),
-                                move || store::play_next(t_next.clone()),
-                            )
+                            if sort_asc {
+                                filtered.sort_by(|a, b| {
+                                    a.title.to_lowercase().cmp(&b.title.to_lowercase())
+                                });
+                            }
+
+                            if filtered.is_empty() {
+                                if query.is_empty() {
+                                    return status_card(
+                                        "Playlist has no tracks",
+                                        "Tracks will appear here once loaded.",
+                                        Some("Back to Home"),
+                                        Some(Box::new(store::close_collection)),
+                                    )
+                                    .into_element();
+                                }
+                                return status_card(
+                                    SharedString::from(format!(
+                                        "No tracks match {}",
+                                        quote_term(&query)
+                                    )),
+                                    "Try another song title or artist name, or clear the filter.",
+                                    Some("Clear filter"),
+                                    Some(Box::new(|| store::set_collection_search_query(""))),
+                                )
+                                .into_element();
+                            }
+
+                            view()
+                                .gap_1()
+                                .children(filtered.into_iter().map(move |track| {
+                                    let is_cur = active_id.as_deref() == Some(track.id.as_str());
+                                    let t_play = track.clone();
+                                    let t_next = track.clone();
+                                    track_row_view(
+                                        track,
+                                        is_cur,
+                                        move || store::play_track(t_play.clone()),
+                                        move || store::play_next(t_next.clone()),
+                                    )
+                                }))
+                                .into_element()
                         }))
                         .into_element()
-                }))
-                .into_element()
-        })))
+                })),
+        )
 }
 
 fn section_header_with_pager(
@@ -276,7 +441,7 @@ fn section_header_with_pager(
     desktop: bool,
 ) -> impl IntoElement {
     let btn_px = if desktop {
-        34.0
+        32.0
     } else {
         MOBILE_MIN_TOUCH_TARGET
     };
@@ -293,13 +458,11 @@ fn section_header_with_pager(
                 .flex_1()
                 .min_w(px(0.0))
                 .gap_0p5()
-                .when_some(eyebrow, |v, sub| {
-                    v.child(eyebrow_label(sub))
-                })
+                .when_some(eyebrow, |v, sub| v.child(eyebrow_label(sub)))
                 .child(
                     text(title)
                         .number_of_lines(1)
-                        .when(desktop, |t| t.text_xl())
+                        .when(desktop, |t| t.text_2xl())
                         .when(!desktop, |t| t.text_lg())
                         .font_weight(FontWeight::BOLD)
                         .text_color(move || theme().foreground),
@@ -309,23 +472,23 @@ fn section_header_with_pager(
             view()
                 .flex_row()
                 .items_center()
-                .gap_1p5()
+                .gap_1()
                 .child(svg_icon_button(
                     IconKind::ChevronLeft,
-                    16.0,
+                    15.0,
                     btn_px,
                     "Previous page",
                     false,
-                    move || theme().foreground,
+                    move || theme().muted_foreground,
                     move || store::shift_section_page(&sec_prev, -1, total_items, page_size),
                 ))
                 .child(svg_icon_button(
                     IconKind::ChevronRight,
-                    16.0,
+                    15.0,
                     btn_px,
                     "Next page",
                     false,
-                    move || theme().foreground,
+                    move || theme().muted_foreground,
                     move || store::shift_section_page(&sec_next, 1, total_items, page_size),
                 )),
         )
@@ -360,43 +523,44 @@ fn listen_again_shelf(
     view()
         .gap_3()
         .child(section_header_with_pager(
-            Some("Your recent rotation"),
-            title,
-            header_id,
-            total,
-            page_size,
-            desktop,
+            None, title, header_id, total, page_size, desktop,
         ))
         .child(dynamic(move || {
             let page = store::section_page(&shelf_id);
             let slice = paginated_slice(&tracks, page, page_size);
             let active_id = current_id_memo.get();
+            let card_w = if is_narrow_viewport() { 148.0 } else { 172.0 };
 
-            view()
+            scroll()
+                .horizontal()
                 .w_full()
-                .when(desktop, |v| v.flex_row().flex_wrap().items_start().gap_4())
-                .when(!desktop, |v| v.gap_2())
-                .py_1()
-                .children(slice.into_iter().map(move |track| {
-                    let is_active = active_id.as_deref() == Some(track.id.as_str());
-                    let t_open = track.clone();
-                    let t_more = track.clone();
-                    let mono = track.fallback_monogram();
-                    let art = track.artwork_url.clone();
-                    let title = track.title.clone();
-                    let sub = track.artist_display();
+                .child(
+                    view()
+                        .flex_row()
+                        .items_start()
+                        .gap_4()
+                        .py_1()
+                        .children(slice.into_iter().map(move |track| {
+                            let is_active = active_id.as_deref() == Some(track.id.as_str());
+                            let t_open = track.clone();
+                            let t_more = track.clone();
+                            let mono = track.fallback_monogram();
+                            let art = track.artwork_url.clone();
+                            let title = track.title.clone();
+                            let sub = track.artist_display();
 
-                    media_square_card(
-                        art,
-                        mono,
-                        title,
-                        sub,
-                        164.0,
-                        is_active,
-                        move || store::play_track(t_open.clone()),
-                        Some(Box::new(move || store::play_next(t_more.clone()))),
-                    )
-                }))
+                            media_square_card(
+                                art,
+                                mono,
+                                title,
+                                sub,
+                                card_w,
+                                is_active,
+                                move || store::play_track(t_open.clone()),
+                                Some(Box::new(move || store::play_next(t_more.clone()))),
+                            )
+                        })),
+                )
                 .into_element()
         }))
 }
@@ -409,12 +573,12 @@ fn track_section_view(
 ) -> impl IntoElement {
     let sec_id = section.id.clone();
     let total = tracks.len();
-    let page_size = if desktop { 9 } else { 6 };
+    let page_size = if desktop { 12 } else { 6 };
 
     view()
         .gap_3()
         .child(section_header_with_pager(
-            Some("Start radio from a song"),
+            None,
             section.title,
             sec_id.clone(),
             total,
@@ -439,9 +603,9 @@ fn track_section_view(
                     0.0
                 };
                 let center_w = (win_w - sidebar_w - panel_w - 64.0).max(0.0);
-                let col_count: usize = if center_w >= 960.0 {
+                let col_count: usize = if center_w >= 860.0 {
                     3
-                } else if center_w >= 660.0 {
+                } else if center_w >= 580.0 {
                     2
                 } else {
                     1
@@ -487,7 +651,7 @@ fn track_section_view(
                             while cols.len() < col_count {
                                 cols.push(view().flex_1().min_w(px(0.0)).into_element());
                             }
-                            view().flex_row().gap_3().children(cols)
+                            view().flex_row().gap_4().children(cols)
                         }))
                         .into_element()
                 }
@@ -534,22 +698,63 @@ fn collection_section_view(
     });
     let page = page_memo.get();
     let slice = paginated_slice(&collections, page, page_size);
+    let card_w = if is_narrow_viewport() { 148.0 } else { 172.0 };
 
     view()
         .gap_3()
         .child(section_header_with_pager(
-            Some("Mixes & albums"),
-            title,
-            header_id,
-            total,
-            page_size,
-            desktop,
+            None, title, header_id, total, page_size, desktop,
         ))
-        .child(
+        .child(if desktop {
+            scroll()
+                .horizontal()
+                .w_full()
+                .child(
+                    view()
+                        .flex_row()
+                        .items_start()
+                        .gap_4()
+                        .py_1()
+                        .children(slice.into_iter().map(move |col| {
+                            let mono = col
+                                .title
+                                .chars()
+                                .find(|c| c.is_alphanumeric())
+                                .map(|c| c.to_uppercase().to_string())
+                                .unwrap_or_else(|| "♫".into());
+                            let id_btn = col.browse_id.clone();
+                            let title_btn = col.title.clone();
+                            let sub_btn = col.subtitle.clone();
+                            let art_btn = col.artwork_url.clone();
+
+                            media_square_card(
+                                col.artwork_url,
+                                mono,
+                                col.title,
+                                col.subtitle,
+                                card_w,
+                                false,
+                                move || {
+                                    if id_btn.starts_with("MPRE") {
+                                        store::open_album_entity(id_btn.clone());
+                                    } else {
+                                        store::open_collection(
+                                            id_btn.clone(),
+                                            title_btn.clone(),
+                                            sub_btn.clone(),
+                                            art_btn.clone(),
+                                        );
+                                    }
+                                },
+                                None,
+                            )
+                        })),
+                )
+                .into_element()
+        } else {
             view()
                 .w_full()
-                .when(desktop, |v| v.flex_row().flex_wrap().items_start().gap_4())
-                .when(!desktop, |v| v.gap_2())
+                .gap_2()
                 .py_1()
                 .children(slice.into_iter().map(|col| {
                     let mono = col
@@ -563,83 +768,57 @@ fn collection_section_view(
                     let sub_btn = col.subtitle.clone();
                     let art_btn = col.artwork_url.clone();
 
-                    let card_w = 168.0;
-                    if desktop {
-                        media_square_card(
-                            col.artwork_url,
-                            mono,
-                            col.title,
-                            col.subtitle,
-                            card_w,
-                            false,
-                            move || {
-                                if id_btn.starts_with("MPRE") {
-                                    store::open_album_entity(id_btn.clone());
-                                } else {
-                                    store::open_collection(
-                                        id_btn.clone(),
-                                        title_btn.clone(),
-                                        sub_btn.clone(),
-                                        art_btn.clone(),
-                                    );
-                                }
-                            },
-                            None,
+                    button()
+                        .w_full()
+                        .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                        .flex_row()
+                        .items_center()
+                        .gap_3()
+                        .p_3()
+                        .rounded(radius_card)
+                        .bg(frosted_settings_card)
+                        .border_1()
+                        .border_color(glass_hairline)
+                        .hover(|s| s.bg(pill_glass_hover))
+                        .active(|s| s.opacity(0.8))
+                        .focus_visible(|s| {
+                            s.outline(px(2.0)).outline_color(move || theme().ring)
+                        })
+                        .on_press(move || {
+                            if id_btn.starts_with("MPRE") {
+                                store::open_album_entity(id_btn.clone());
+                            } else {
+                                store::open_collection(
+                                    id_btn.clone(),
+                                    title_btn.clone(),
+                                    sub_btn.clone(),
+                                    art_btn.clone(),
+                                );
+                            }
+                        })
+                        .child(artwork_box(col.artwork_url, mono, 44.0, 8.0))
+                        .child(
+                            view()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .gap_0p5()
+                                .child(
+                                    text(col.title)
+                                        .number_of_lines(1)
+                                        .text_sm()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(move || theme().foreground),
+                                )
+                                .child(
+                                    text(col.subtitle)
+                                        .number_of_lines(1)
+                                        .text_xs()
+                                        .text_color(move || theme().muted_foreground),
+                                ),
                         )
-                        .into_element()
-                    } else {
-                        nsh_base::button()
-                            .w_full()
-                            .min_h(px(MOBILE_MIN_TOUCH_TARGET))
-                            .flex_row()
-                            .items_center()
-                            .gap_3()
-                            .p_3()
-                            .rounded(radius_card)
-                            .bg(move || theme().card)
-                            .border_1()
-                            .border_color(glass_hairline)
-                            .hover(|s| s.bg(move || theme().muted))
-                            .active(|s| s.opacity(0.8))
-                            .focus_visible(|s| {
-                                s.outline(px(2.0)).outline_color(move || theme().ring)
-                            })
-                            .on_press(move || {
-                                if id_btn.starts_with("MPRE") {
-                                    store::open_album_entity(id_btn.clone());
-                                } else {
-                                    store::open_collection(
-                                        id_btn.clone(),
-                                        title_btn.clone(),
-                                        sub_btn.clone(),
-                                        art_btn.clone(),
-                                    );
-                                }
-                            })
-                            .child(artwork_box(col.artwork_url, mono, 44.0, 8.0))
-                            .child(
-                                view()
-                                    .flex_1()
-                                    .min_w(px(0.0))
-                                    .gap_0p5()
-                                    .child(
-                                        text(col.title)
-                                            .number_of_lines(1)
-                                            .text_sm()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(move || theme().foreground),
-                                    )
-                                    .child(
-                                        text(col.subtitle)
-                                            .number_of_lines(1)
-                                            .text_xs()
-                                            .text_color(move || theme().muted_foreground),
-                                    ),
-                            )
-                            .into_element()
-                    }
-                })),
-        )
+                }))
+                .into_element()
+        })
 }
 
 fn home_feed_view() -> impl IntoElement {
@@ -652,14 +831,14 @@ fn home_feed_view() -> impl IntoElement {
     scroll()
         .flex_1()
         .min_h(px(0.0))
+        .pb_safe_area()
         .child(
             view()
                 .p_3()
-                .gap_3()
-                .style_when(is_desktop_layout, |s| s.px_8().py_5().gap_6())
-                // Mood / category filter chips row (wraps on narrow viewports so no chips hide off-screen)
+                .gap_4()
+                .style_when(is_desktop_layout, |s| s.px_8().py_5().gap_7())
+                // Wrapping mood/activity filter pills row matching 01_home_01.png
                 .child(dynamic(|| {
-                    let narrow = is_narrow_viewport();
                     let live_chips = store::home_mood_chips();
                     let active = store::selected_mood();
                     let chips: Vec<(String, Option<String>)> = if !live_chips.is_empty() {
@@ -675,11 +854,12 @@ fn home_feed_view() -> impl IntoElement {
                     };
 
                     let mut row = view()
+                        .w_full()
                         .flex_row()
+                        .flex_wrap()
                         .items_center()
                         .gap_2()
-                        .py_1()
-                        .when(narrow, |v| v.flex_wrap());
+                        .py_1();
                     if active.is_some() {
                         row = row.child(mood_chip_with_icon(
                             Some(IconKind::Close),
@@ -688,7 +868,7 @@ fn home_feed_view() -> impl IntoElement {
                             store::clear_home_mood,
                         ));
                     }
-                    let row = row.children(chips.into_iter().map(|(label, params)| {
+                    row.children(chips.into_iter().map(|(label, params)| {
                         let is_selected = active.as_deref() == Some(label.as_str());
                         let label_click = label.clone();
                         mood_chip(
@@ -698,18 +878,8 @@ fn home_feed_view() -> impl IntoElement {
                                 store::select_home_mood(&label_click, params.as_deref());
                             },
                         )
-                    }));
-
-                    if narrow {
-                        row.w_full().into_element()
-                    } else {
-                        scroll()
-                            .horizontal()
-                            .w_full()
-                            .min_h(px(MOBILE_MIN_TOUCH_TARGET))
-                            .child(row)
-                            .into_element()
-                    }
+                    }))
+                    .into_element()
                 }))
                 // Loading skeletons
                 .child(when(store::is_home_loading, || {
@@ -780,9 +950,7 @@ fn home_feed_view() -> impl IntoElement {
 
                         if !tracks.is_empty() && tracks.len() >= collections.len() {
                             let lower = section.title.to_lowercase();
-                            if desktop
-                                && (lower.contains("listen again") || lower.contains("recent"))
-                            {
+                            if lower.contains("listen again") || lower.contains("recent") {
                                 children.push(
                                     listen_again_shelf(
                                         section.id,
@@ -812,7 +980,7 @@ fn home_feed_view() -> impl IntoElement {
                         }
                     }
 
-                    view().gap_6().children(children).into_element()
+                    view().gap_7().children(children).into_element()
                 })),
         )
 }

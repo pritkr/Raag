@@ -544,17 +544,94 @@ pub fn open_artist_entity(channel_id: String) {
             let art = top_songs.first().and_then(|t| t.artwork_url.clone());
             c.active_artist = Some(ArtistDetail {
                 channel_id: channel_id.clone(),
-                name,
-                description: Some("Fixture preview artist discography.".to_owned()),
-                subscribers: Some("Fixture Artist".to_owned()),
+                name: name.clone(),
+                description: Some(format!(
+                    "{name} — curated discography, top tracks, live sessions, and related artists."
+                )),
+                subscribers: Some("6.6M subscribers".to_owned()),
                 is_subscribed: false,
-                artwork_url: art,
+                artwork_url: art.clone(),
                 radio_playlist_id: None,
                 shuffle_playlist_id: None,
                 top_songs,
-                albums: Vec::new(),
-                singles: Vec::new(),
-                related_artists: Vec::new(),
+                albums: vec![
+                    LibraryCollectionRef {
+                        browse_id: "MPREb_fixture_01".into(),
+                        playlist_id: None,
+                        title: "Midnight Acoustics (Deluxe)".into(),
+                        subtitle: "Album • 2025".into(),
+                        artwork_url: art.clone(),
+                        track_count: Some(12),
+                    },
+                    LibraryCollectionRef {
+                        browse_id: "MPREb_fixture_02".into(),
+                        playlist_id: None,
+                        title: "Monsoon Sessions Live".into(),
+                        subtitle: "Album • 2024".into(),
+                        artwork_url: None,
+                        track_count: Some(9),
+                    },
+                    LibraryCollectionRef {
+                        browse_id: "MPREb_fixture_03".into(),
+                        playlist_id: None,
+                        title: "Echoes of Raag".into(),
+                        subtitle: "Album • 2023".into(),
+                        artwork_url: None,
+                        track_count: Some(10),
+                    },
+                ],
+                singles: vec![
+                    LibraryCollectionRef {
+                        browse_id: "MPREb_single_01".into(),
+                        playlist_id: None,
+                        title: "Starlight Drift (Unplugged)".into(),
+                        subtitle: "Single • 2026".into(),
+                        artwork_url: None,
+                        track_count: Some(1),
+                    },
+                    LibraryCollectionRef {
+                        browse_id: "MPREb_single_02".into(),
+                        playlist_id: None,
+                        title: "Afterglow Horizon".into(),
+                        subtitle: "EP • 2025".into(),
+                        artwork_url: None,
+                        track_count: Some(4),
+                    },
+                ],
+                related_artists: vec![
+                    LibraryCollectionRef {
+                        browse_id: "UC_related_01".into(),
+                        playlist_id: None,
+                        title: "Shreya Ghoshal".into(),
+                        subtitle: "14.2M subscribers".into(),
+                        artwork_url: None,
+                        track_count: None,
+                    },
+                    LibraryCollectionRef {
+                        browse_id: "UC_related_02".into(),
+                        playlist_id: None,
+                        title: "A.R. Rahman".into(),
+                        subtitle: "11.8M subscribers".into(),
+                        artwork_url: None,
+                        track_count: None,
+                    },
+                    LibraryCollectionRef {
+                        browse_id: "UC_related_03".into(),
+                        playlist_id: None,
+                        title: "Vishal Mishra".into(),
+                        subtitle: "5.4M subscribers".into(),
+                        artwork_url: None,
+                        track_count: None,
+                    },
+                    LibraryCollectionRef {
+                        browse_id: "UC_related_04".into(),
+                        playlist_id: None,
+                        title: "Pritam".into(),
+                        subtitle: "8.9M subscribers".into(),
+                        artwork_url: None,
+                        track_count: None,
+                    },
+                ],
             });
         } else {
             c.entity_loading = true;

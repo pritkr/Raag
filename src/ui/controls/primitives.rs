@@ -536,7 +536,7 @@ pub fn setting_switch(
         .px_4()
         .py_2()
         .rounded(radius_card)
-        .bg(move || theme().card)
+        .bg(crate::ui::tokens::frosted_settings_card)
         .border_1()
         .border_color(glass_hairline)
         .child(

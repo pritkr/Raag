@@ -9,6 +9,7 @@ import {
   INITIAL_PREVIEW_STATE,
   formatHostError,
   previewReducer,
+  type NshAmbientPayload,
   type NshBorderSide,
   type NshNode,
   type NshTreeResponse,
@@ -43,6 +44,7 @@ function logicalTextAlign(
 
 interface NodeViewProps {
   node: NshNode;
+  ambient?: NshAmbientPayload;
   isRoot?: boolean;
   insideButton?: boolean;
   onPress: (id: number) => void;
@@ -53,6 +55,7 @@ interface NodeViewProps {
 
 function NshNodeView({
   node,
+  ambient,
   isRoot = false,
   insideButton = false,
   onPress,
@@ -106,6 +109,70 @@ function NshNodeView({
     fontFamily:
       'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
   };
+
+  if (
+    ambient &&
+    (node.testId === 'ambient-shell-backdrop' ||
+      node.testId === 'ambient-now-playing-backdrop')
+  ) {
+    const paused = ambient.reducedMotion;
+    const blobPause = paused ? ' nsh-ambient-paused' : '';
+    return (
+      <div
+        data-testid={node.testId}
+        aria-hidden="true"
+        style={{
+          ...baseStyle,
+          backgroundColor: ambient.base,
+          overflow: 'hidden',
+          transition: paused ? undefined : 'background-color 700ms ease',
+        }}
+      >
+        <div
+          className={`nsh-ambient-blob-a${blobPause}`}
+          style={{
+            position: 'absolute',
+            insetInlineStart: '-18%',
+            top: '-22%',
+            width: '74%',
+            height: '78%',
+            borderRadius: '9999px',
+            background: `radial-gradient(circle, ${ambient.accent} 0%, transparent 72%)`,
+            filter: 'blur(78px)',
+            opacity: 0.78,
+          }}
+        />
+        <div
+          className={`nsh-ambient-blob-b${blobPause}`}
+          style={{
+            position: 'absolute',
+            insetInlineStart: '34%',
+            top: '18%',
+            width: '76%',
+            height: '84%',
+            borderRadius: '9999px',
+            background: `radial-gradient(circle, ${ambient.complementary} 0%, transparent 70%)`,
+            filter: 'blur(88px)',
+            opacity: 0.74,
+          }}
+        />
+        <div
+          className={`nsh-ambient-blob-c${blobPause}`}
+          style={{
+            position: 'absolute',
+            insetInlineStart: '12%',
+            top: '48%',
+            width: '62%',
+            height: '66%',
+            borderRadius: '9999px',
+            background: `radial-gradient(circle, ${ambient.accent} 0%, transparent 74%)`,
+            filter: 'blur(92px)',
+            opacity: 0.42,
+          }}
+        />
+      </div>
+    );
+  }
 
   if (node.isInput) {
     const inputFontRem = Math.max(1, (node.inputFontSize || 16) / 16);
@@ -244,6 +311,7 @@ function NshNodeView({
       <NshNodeView
         key={child.id}
         node={child}
+        ambient={ambient}
         insideButton={insideButton || node.pressable}
         onPress={onPress}
         onInput={onInput}
@@ -646,6 +714,7 @@ export default function App() {
 
               <NshNodeView
                 node={tree.root}
+                ambient={tree.ambient}
                 isRoot
                 onPress={(id) => void sendAction('/api/nsh/press', { id })}
                 onInput={(id, text) =>

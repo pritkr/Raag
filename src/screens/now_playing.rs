@@ -1,7 +1,8 @@
-//! Priority Visual Surface #1: Expanded Now Playing Screen.
-//! - Full-screen artwork-driven atmospheric backdrop (`ambient_backdrop_color`)
-//! - Desktop (>= 820px): Spacious 2-column split (340px focal artwork + controls on left,
-//!   live synced karaoke lyrics beside the artwork on right)
+//! Priority Visual Surface #1: Expanded Now Playing Screen matching `ytm-rs` (`07_now_playing_01_expanded.png` & `_04_lyrics.png`):
+//! - Full-screen artwork-driven animated ambient backdrop (`ambient_shader_backdrop`)
+//! - Desktop (>= 820px): Ultra-clean top bar (`v` collapse top-left, subtle actions top-right),
+//!   spacious 2-column split (340px focal artwork + track title/artist + compact actions on left,
+//!   large expressive synced karaoke lyrics directly over the ambient canvas on right)
 //! - Mobile (< 820px): Single-column focal stack with >= 48dp interactive touch targets
 //! - 100% semantic design tokens from `theme.json` and `crate::ui::tokens`.
 
@@ -23,8 +24,8 @@ use crate::ui::tokens::{
     color_lyric_active, color_lyric_inactive, color_on_cover, color_player_accent,
     color_sponsor_badge, color_status_ok, cover_gradient_pair, frosted_card_surface,
     glass_hairline, glass_specular_hairline, is_desktop_layout, is_narrow_viewport, motion,
-    pill_glass_hover, pill_glass_surface, radius_card, radius_panel, radius_panel_inner,
-    radius_pill, radius_tab_inner, sidebar_active_surface,
+    pill_glass_hover, pill_glass_surface, radius_card, radius_panel, radius_pill,
+    radius_tab_inner, sidebar_active_surface,
 };
 
 fn np_transition_ms() -> f32 {
@@ -81,8 +82,8 @@ fn header_pill_button(
 ) -> impl IntoElement {
     button()
         .on_press(on_press)
-        .min_h(px(36.0))
-        .px_3p5()
+        .min_h(px(34.0))
+        .px_3()
         .flex_row()
         .items_center()
         .justify_center()
@@ -105,7 +106,7 @@ fn header_pill_button(
 
 fn top_header_bar(desktop: bool) -> impl IntoElement {
     let btn_box = if desktop {
-        40.0
+        36.0
     } else {
         MOBILE_MIN_TOUCH_TARGET
     };
@@ -116,80 +117,65 @@ fn top_header_bar(desktop: bool) -> impl IntoElement {
         .items_center()
         .justify_between()
         .gap_3()
-        .px_3()
-        .py_2()
-        .rounded(radius_card)
-        .backdrop_blur(px(14.0))
-        .backdrop_material(BackdropMaterial::Thin)
-        .bg(frosted_card_surface)
-        .border_1()
-        .border_color(glass_hairline)
+        .when(!desktop, |v| {
+            v.px_3()
+                .py_2()
+                .rounded(radius_card)
+                .bg(frosted_card_surface)
+                .border_1()
+                .border_color(glass_hairline)
+        })
         .child(
             view()
-                .flex_1()
-                .min_w(px(0.0))
                 .flex_row()
                 .items_center()
-                .gap_2()
+                .gap_2p5()
                 .child(svg_icon_button(
                     IconKind::ChevronDown,
                     18.0,
                     btn_box,
                     "Collapse Now Playing",
-                    true,
+                    false,
                     move || theme().foreground,
                     store::go_back,
                 ))
                 .child(
                     view()
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .gap_0p5()
+                        .flex_row()
+                        .items_center()
+                        .gap_1p5()
                         .child(
-                            text("Now Playing")
-                                .number_of_lines(1)
-                                .text_base()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(move || theme().foreground),
+                            text(move || {
+                                let snap = store::player_snapshot();
+                                if snap.offline_mode {
+                                    SharedString::from("Offline")
+                                } else if snap.current_track.as_ref().is_some_and(|t| {
+                                    t.id.starts_with("local:") || t.id.starts_with("local_")
+                                }) {
+                                    SharedString::from("Local Audio")
+                                } else if snap.active_proxy_url.is_some() {
+                                    SharedString::from("Standard Stream")
+                                } else {
+                                    SharedString::from("Audio")
+                                }
+                            })
+                            .test_id("now-playing-source-badge")
+                            .text_xs()
+                            .text_color(move || theme().muted_foreground),
                         )
                         .child(
-                            view()
-                                .flex_row()
-                                .items_center()
-                                .gap_1p5()
-                                .child(
-                                    text(move || {
-                                        let snap = store::player_snapshot();
-                                        if snap.offline_mode {
-                                            SharedString::from("Offline")
-                                        } else if snap.current_track.as_ref().is_some_and(|t| {
-                                            t.id.starts_with("local:") || t.id.starts_with("local_")
-                                        }) {
-                                            SharedString::from("Local Audio")
-                                        } else if snap.active_proxy_url.is_some() {
-                                            SharedString::from("Standard Stream")
-                                        } else {
-                                            SharedString::from("Audio")
-                                        }
-                                    })
-                                    .test_id("now-playing-source-badge")
-                                    .text_xs()
-                                    .text_color(move || theme().muted_foreground),
-                                )
-                                .child(
-                                    text("•")
-                                        .text_xs()
-                                        .text_color(move || theme().muted_foreground),
-                                )
-                                .child(
-                                    text(move || {
-                                        SharedString::from(store::player_snapshot().state.name())
-                                    })
-                                    .test_id("player-state-label")
-                                    .text_xs()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(move || theme().primary),
-                                ),
+                            text("•")
+                                .text_xs()
+                                .text_color(move || theme().muted_foreground),
+                        )
+                        .child(
+                            text(move || {
+                                SharedString::from(store::player_snapshot().state.name())
+                            })
+                            .test_id("player-state-label")
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(move || theme().primary),
                         ),
                 ),
         )
@@ -219,10 +205,7 @@ fn top_header_bar(desktop: bool) -> impl IntoElement {
                         .justify_center()
                         .gap_0p5()
                         .rounded_full()
-                        .style_when(
-                            || sleep_timer_badge_label().is_some(),
-                            |s| s.bg(pill_glass_surface),
-                        )
+                        .bg(pill_glass_surface)
                         .transition()
                         .duration(np_transition_ms)
                         .ease_out()
@@ -230,7 +213,7 @@ fn top_header_bar(desktop: bool) -> impl IntoElement {
                         .active(|s| s.scale(np_press_scale))
                         .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                         .on_press(open_sleep_timer_sheet)
-                        .child(icon(IconKind::Moon, 16.0, move || {
+                        .child(icon(IconKind::Moon, 15.0, move || {
                             if sleep_timer_badge_label().is_some() {
                                 color_player_accent()
                             } else {
@@ -250,10 +233,7 @@ fn top_header_bar(desktop: bool) -> impl IntoElement {
                         .justify_center()
                         .gap_0p5()
                         .rounded_full()
-                        .style_when(
-                            || speed_badge_label().is_some(),
-                            |s| s.bg(pill_glass_surface),
-                        )
+                        .bg(pill_glass_surface)
                         .transition()
                         .duration(np_transition_ms)
                         .ease_out()
@@ -261,7 +241,7 @@ fn top_header_bar(desktop: bool) -> impl IntoElement {
                         .active(|s| s.scale(np_press_scale))
                         .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                         .on_press(open_speed_sheet)
-                        .child(icon(IconKind::Gauge, 16.0, move || {
+                        .child(icon(IconKind::Gauge, 15.0, move || {
                             if speed_badge_label().is_some() {
                                 color_player_accent()
                             } else {
@@ -271,7 +251,7 @@ fn top_header_bar(desktop: bool) -> impl IntoElement {
                         .child(active_state_dot(|| speed_badge_label().is_some())),
                 )
                 .child(svg_icon_button(
-                    IconKind::MoreVertical,
+                    IconKind::MoreHorizontal,
                     16.0,
                     btn_box,
                     "Track Actions",
@@ -296,7 +276,7 @@ fn focal_artwork(size_px: f32) -> impl IntoElement {
 
     view()
         .relative()
-        .p_2()
+        .p_1()
         .items_center()
         .justify_center()
         .child(
@@ -305,8 +285,8 @@ fn focal_artwork(size_px: f32) -> impl IntoElement {
                 .inset_1()
                 .rounded(radius_panel)
                 .bg(move || ambient_accent_color(store::active_ambient_palette()))
-                .blur(px(30.0))
-                .opacity(0.62)
+                .blur(px(28.0))
+                .opacity(0.48)
                 .pointer_events(PointerEvents::None)
                 .accessibility_elements_hidden(true),
         )
@@ -315,7 +295,7 @@ fn focal_artwork(size_px: f32) -> impl IntoElement {
                 .relative()
                 .w(px(size_px))
                 .h(px(size_px))
-                .rounded(radius_panel_inner)
+                .rounded(radius_card)
                 .shadow_xl()
                 .bg_linear_to_br()
                 .gradient_from(move || {
@@ -360,7 +340,7 @@ fn focal_artwork(size_px: f32) -> impl IntoElement {
                         })
                         .size(px(size_px))
                         .object_fit(ResizeMode::Cover)
-                        .rounded(radius_panel_inner)
+                        .rounded(radius_card)
                     })
                     .otherwise(|| {
                         text(move || {
@@ -605,7 +585,7 @@ fn track_info_and_actions() -> impl IntoElement {
                         .on_press(store::toggle_like_current)
                         .child(animated_like_heart(
                             is_liked,
-                            19.0,
+                            18.0,
                             color_liked,
                             move || theme().foreground,
                         )),
@@ -634,7 +614,7 @@ fn track_info_and_actions() -> impl IntoElement {
                         .active(|s| s.opacity(0.75))
                         .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                         .on_press(store::toggle_dislike_current)
-                        .child(icon(IconKind::ThumbsDown, 18.0, move || {
+                        .child(icon(IconKind::ThumbsDown, 17.0, move || {
                             if is_disliked() {
                                 theme().foreground
                             } else {
@@ -678,12 +658,12 @@ fn seek_section(mobile: bool) -> impl IntoElement {
     let pill_min = if mobile {
         MOBILE_MIN_TOUCH_TARGET
     } else {
-        36.0
+        32.0
     };
 
     view()
         .w_full()
-        .gap_2()
+        .gap_1p5()
         .child(seek_slider(
             || store::player_snapshot().position_ms as f64,
             || store::player_snapshot().duration_ms as f64,
@@ -709,7 +689,7 @@ fn seek_section(mobile: bool) -> impl IntoElement {
                     view()
                         .flex_row()
                         .items_center()
-                        .gap_2()
+                        .gap_1p5()
                         .child(step_seek_pill("\u{2212}15s", pill_min, || {
                             let pos = store::player_snapshot().position_ms;
                             store::seek_ms(pos.saturating_sub(15_000));
@@ -755,7 +735,7 @@ fn transport_bar() -> impl IntoElement {
                 .active(|s| s.opacity(0.72))
                 .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                 .on_press(store::toggle_shuffle)
-                .child(icon(IconKind::Shuffle, 19.0, move || {
+                .child(icon(IconKind::Shuffle, 18.0, move || {
                     if is_shuffle() {
                         color_player_accent()
                     } else {
@@ -766,18 +746,18 @@ fn transport_bar() -> impl IntoElement {
         )
         .child(svg_icon_button(
             IconKind::SkipBack,
-            22.0,
+            21.0,
             MOBILE_MIN_TOUCH_TARGET,
             "Previous Track",
-            true,
+            false,
             move || theme().foreground,
             store::previous_track,
         ))
         .child(
             button()
                 .accessibility_label("Play or Pause")
-                .w(px(62.0))
-                .h(px(62.0))
+                .w(px(56.0))
+                .h(px(56.0))
                 .items_center()
                 .justify_center()
                 .rounded_full()
@@ -792,16 +772,16 @@ fn transport_bar() -> impl IntoElement {
                 .on_press(store::toggle_play_pause)
                 .child(animated_play_pause_icon(
                     is_playing,
-                    24.0,
+                    22.0,
                     color_control_fg,
                 )),
         )
         .child(svg_icon_button(
             IconKind::SkipForward,
-            22.0,
+            21.0,
             MOBILE_MIN_TOUCH_TARGET,
             "Next Track",
-            true,
+            false,
             move || theme().foreground,
             store::next_track,
         ))
@@ -829,7 +809,7 @@ fn transport_bar() -> impl IntoElement {
                         RepeatMode::One => IconKind::RepeatOne,
                         _ => IconKind::Repeat,
                     },
-                    19.0,
+                    18.0,
                     move || {
                         if store::player_snapshot().queue.repeat == RepeatMode::None {
                             theme().muted_foreground
@@ -872,7 +852,7 @@ fn volume_step_button(
 
 fn volume_strip(desktop: bool) -> impl IntoElement {
     let btn_box = if desktop {
-        36.0
+        32.0
     } else {
         MOBILE_MIN_TOUCH_TARGET
     };
@@ -882,7 +862,7 @@ fn volume_strip(desktop: bool) -> impl IntoElement {
         .w_full()
         .gap_1p5()
         .px_2p5()
-        .py_1p5()
+        .py_1()
         .rounded(radius_card)
         .bg(pill_glass_surface)
         .border_1()
@@ -915,7 +895,7 @@ fn volume_strip(desktop: bool) -> impl IntoElement {
                                     IconKind::VolumeHigh
                                 }
                             },
-                            17.0,
+                            16.0,
                             move || theme().foreground,
                         )),
                 )
@@ -940,7 +920,7 @@ fn volume_strip(desktop: bool) -> impl IntoElement {
                     view()
                         .flex_row()
                         .items_center()
-                        .gap_1p5()
+                        .gap_1()
                         .child(volume_step_button(
                             "−",
                             "Decrease Volume",
@@ -960,21 +940,18 @@ fn volume_strip(desktop: bool) -> impl IntoElement {
         })
 }
 
-/// Frosted glass control dock grouping seek, transport, and volume controls with a 1px top specular hairline.
+/// Frosted glass control dock grouping seek, transport, and volume controls.
 fn now_playing_control_dock(desktop: bool) -> impl IntoElement {
     view()
         .test_id("now-playing-control-dock")
         .w_full()
-        .p_4()
-        .gap_3p5()
+        .p_3p5()
+        .gap_3()
         .rounded(radius_panel)
-        .backdrop_blur(px(24.0))
-        .backdrop_material(BackdropMaterial::Regular)
         .bg(frosted_card_surface)
         .border_1()
         .border_color(glass_hairline)
         .border_t_color(glass_specular_hairline)
-        .shadow_xl()
         .child(seek_section(!desktop))
         .child(transport_bar())
         .child(volume_strip(desktop))
@@ -986,13 +963,13 @@ fn sponsorblock_badge() -> impl IntoElement {
         || {
             view()
                 .px_3()
-                .py_1p5()
+                .py_1()
                 .rounded(radius_pill)
                 .bg(pill_glass_surface)
                 .border_1()
                 .border_color(color_sponsor_badge)
                 .child(
-                    text("SponsorBlock active (auto-skip non-music segments)")
+                    text("SponsorBlock active")
                         .text_xs()
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(color_sponsor_badge),
@@ -1022,23 +999,21 @@ fn now_playing_tab_bar() -> impl IntoElement {
         .accessibility_label("Now Playing panels")
         .child(
             tab()
-                .test_id("now-playing-tab-up-next")
-                .selected(is_up_next)
-                .on_press(|| store::set_now_playing_tab(NowPlayingTab::UpNext))
+                .test_id("now-playing-tab-lyrics")
+                .selected(is_lyrics)
+                .on_press(|| store::set_now_playing_tab(NowPlayingTab::Lyrics))
                 .flex_1()
-                .min_h(px(40.0))
+                .min_h(px(36.0))
                 .items_center()
                 .justify_center()
                 .rounded(radius_tab_inner)
                 .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                 .child(
-                    text("Up Next")
+                    text("Lyrics")
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .uppercase()
-                        .letter_spacing(px(0.7))
                         .text_color(move || {
-                            if is_up_next() {
+                            if is_lyrics() {
                                 theme().primary_foreground
                             } else {
                                 theme().muted_foreground
@@ -1048,23 +1023,21 @@ fn now_playing_tab_bar() -> impl IntoElement {
         )
         .child(
             tab()
-                .test_id("now-playing-tab-lyrics")
-                .selected(is_lyrics)
-                .on_press(|| store::set_now_playing_tab(NowPlayingTab::Lyrics))
+                .test_id("now-playing-tab-up-next")
+                .selected(is_up_next)
+                .on_press(|| store::set_now_playing_tab(NowPlayingTab::UpNext))
                 .flex_1()
-                .min_h(px(40.0))
+                .min_h(px(36.0))
                 .items_center()
                 .justify_center()
                 .rounded(radius_tab_inner)
                 .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                 .child(
-                    text("Lyrics")
+                    text("Up Next")
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .uppercase()
-                        .letter_spacing(px(0.7))
                         .text_color(move || {
-                            if is_lyrics() {
+                            if is_up_next() {
                                 theme().primary_foreground
                             } else {
                                 theme().muted_foreground
@@ -1078,7 +1051,7 @@ fn now_playing_tab_bar() -> impl IntoElement {
                 .selected(is_related)
                 .on_press(|| store::set_now_playing_tab(NowPlayingTab::Related))
                 .flex_1()
-                .min_h(px(40.0))
+                .min_h(px(36.0))
                 .items_center()
                 .justify_center()
                 .rounded(radius_tab_inner)
@@ -1087,8 +1060,6 @@ fn now_playing_tab_bar() -> impl IntoElement {
                     text("Related")
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .uppercase()
-                        .letter_spacing(px(0.7))
                         .text_color(move || {
                             if is_related() {
                                 theme().primary_foreground
@@ -1106,7 +1077,7 @@ fn now_playing_up_next_body() -> impl IntoElement {
         .min_h(px(0.0))
         .gap_2p5()
         .child(setting_switch(
-            "Autoplay Radio",
+            "Autoplay similar songs",
             || store::player_snapshot().queue.autoplay_radio,
             store::set_autoplay_radio,
         ))
@@ -1196,6 +1167,8 @@ fn now_playing_up_next_body() -> impl IntoElement {
         )
 }
 
+/// Large expressive synced karaoke lyrics rendered directly over the ambient canvas
+/// (matching `07_now_playing_01_expanded.png` and `_04_lyrics.png` — zero heavy card border).
 fn now_playing_lyrics_body() -> impl IntoElement {
     let has_lyrics = move || store::current_lyrics().is_some_and(|d| !d.lines.is_empty());
 
@@ -1203,35 +1176,6 @@ fn now_playing_lyrics_body() -> impl IntoElement {
         .flex_1()
         .min_h(px(0.0))
         .gap_3()
-        .child(
-            view()
-                .w_full()
-                .flex_row()
-                .items_center()
-                .justify_between()
-                .gap_3()
-                .child(
-                    text(move || {
-                        let label = match store::current_lyrics() {
-                            Some(doc)
-                                if !doc.lines.is_empty()
-                                    && doc.sync_kind != LyricSyncKind::Plain =>
-                            {
-                                format!("Synced • {}", doc.provider)
-                            }
-                            Some(doc) if !doc.lines.is_empty() => {
-                                format!("Lyrics • {}", doc.provider)
-                            }
-                            _ => "Lyrics unavailable".into(),
-                        };
-                        SharedString::from(label)
-                    })
-                    .text_xs()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(move || theme().muted_foreground),
-                )
-                .child(sponsorblock_badge()),
-        )
         .child(
             when(has_lyrics, || {
                 virtual_list(
@@ -1248,12 +1192,11 @@ fn now_playing_lyrics_body() -> impl IntoElement {
 
                         button()
                             .w_full()
-                            .min_h(px(44.0))
-                            .px_3()
-                            .py_2p5()
+                            .min_h(px(52.0))
+                            .px_2()
+                            .py_3()
                             .rounded(radius_card)
-                            .style_when(is_active, |s| s.bg(pill_glass_surface))
-                            .hover(|s| s.bg(pill_glass_hover))
+                            .hover(|s| s.bg(pill_glass_surface))
                             .active(|s| s.opacity(0.85))
                             .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().ring))
                             .on_press(move || {
@@ -1271,7 +1214,7 @@ fn now_playing_lyrics_body() -> impl IntoElement {
                                         )
                                     })
                                 })
-                                .text_xl()
+                                .text_2xl()
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(move || {
                                     if is_active() {
@@ -1292,7 +1235,7 @@ fn now_playing_lyrics_body() -> impl IntoElement {
                         })
                         .unwrap_or_default()
                 })
-                .estimated_item_size(px(56.0))
+                .estimated_item_size(px(64.0))
                 .flex_1()
             })
             .otherwise(|| {
@@ -1303,6 +1246,36 @@ fn now_playing_lyrics_body() -> impl IntoElement {
                         .text_color(move || theme().muted_foreground),
                 )
             }),
+        )
+        .child(
+            view()
+                .w_full()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .gap_3()
+                .px_2()
+                .child(
+                    text(move || {
+                        let label = match store::current_lyrics() {
+                            Some(doc)
+                                if !doc.lines.is_empty()
+                                    && doc.sync_kind != LyricSyncKind::Plain =>
+                            {
+                                format!("Synced lyrics • {}", doc.provider)
+                            }
+                            Some(doc) if !doc.lines.is_empty() => {
+                                format!("Lyrics • {}", doc.provider)
+                            }
+                            _ => "Lyrics unavailable".into(),
+                        };
+                        SharedString::from(label)
+                    })
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(move || theme().muted_foreground),
+                )
+                .child(sponsorblock_badge()),
         )
 }
 
@@ -1403,7 +1376,7 @@ fn now_playing_related_body() -> impl IntoElement {
 
 fn desktop_now_playing_right_panel() -> impl IntoElement {
     let is_up_next = move || store::now_playing_tab() == NowPlayingTab::UpNext;
-    let is_lyrics = move || store::now_playing_tab() == NowPlayingTab::Lyrics;
+    let is_related = move || store::now_playing_tab() == NowPlayingTab::Related;
 
     view()
         .flex_1()
@@ -1412,17 +1385,16 @@ fn desktop_now_playing_right_panel() -> impl IntoElement {
         .h_full()
         .gap_4()
         .px_4()
-        .py_3()
-        .rounded(radius_panel)
-        .bg(pill_glass_surface)
-        .border_1()
-        .border_color(glass_hairline)
-        .child(now_playing_tab_bar())
+        .py_2()
         .child(
-            when(is_up_next, now_playing_up_next_body)
-                .otherwise(move || {
-                    when(is_lyrics, now_playing_lyrics_body).otherwise(now_playing_related_body)
-                }),
+            view()
+                .max_w(px(360.0))
+                .child(now_playing_tab_bar()),
+        )
+        .child(
+            when(is_up_next, now_playing_up_next_body).otherwise(move || {
+                when(is_related, now_playing_related_body).otherwise(now_playing_lyrics_body)
+            }),
         )
 }
 
@@ -1430,26 +1402,27 @@ fn desktop_now_playing() -> impl IntoElement {
     view()
         .flex_1()
         .min_h(px(0.0))
-        .p_5()
+        .px_8()
+        .py_5()
         .gap_5()
         .items_center()
         .child(
             view()
                 .w_full()
-                .max_w(px(1080.0))
+                .max_w(px(1160.0))
                 .child(top_header_bar(true)),
         )
         .child(
             view()
                 .w_full()
-                .max_w(px(1080.0))
+                .max_w(px(1160.0))
                 .flex_1()
                 .min_h(px(0.0))
                 .flex_row()
                 .items_start()
                 .gap_10()
                 .child(
-                    scroll().w(px(396.0)).h_full().child(
+                    scroll().w(px(384.0)).h_full().child(
                         view()
                             .w_full()
                             .gap_4()
@@ -1482,7 +1455,7 @@ fn mobile_now_playing_tabs_card() -> impl IntoElement {
                 view()
                     .gap_2()
                     .child(setting_switch(
-                        "Autoplay Radio",
+                        "Autoplay similar songs",
                         || store::player_snapshot().queue.autoplay_radio,
                         store::set_autoplay_radio,
                     ))

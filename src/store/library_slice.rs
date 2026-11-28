@@ -58,18 +58,18 @@ pub fn collect_unique_songs(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LibraryFilter {
+    #[default]
     Playlists,
     Songs,
-    #[default]
     LikedSongs,
     Albums,
     Artists,
-    PinnedOffline,
-    Downloads,
-    LocalFiles,
     Podcasts,
     History,
     Uploads,
+    Downloads,
+    PinnedOffline,
+    LocalFiles,
 }
 
 impl LibraryFilter {
@@ -80,12 +80,10 @@ impl LibraryFilter {
             Self::LikedSongs,
             Self::Albums,
             Self::Artists,
-            Self::PinnedOffline,
-            Self::Downloads,
-            Self::LocalFiles,
             Self::Podcasts,
             Self::History,
             Self::Uploads,
+            Self::Downloads,
         ]
     }
 
@@ -96,12 +94,12 @@ impl LibraryFilter {
             Self::LikedSongs => "Liked songs",
             Self::Albums => "Albums",
             Self::Artists => "Artists",
-            Self::PinnedOffline => "Pinned Offline",
-            Self::Downloads => "Downloads",
-            Self::LocalFiles => "Local Files",
             Self::Podcasts => "Podcasts",
             Self::History => "History",
             Self::Uploads => "Uploads",
+            Self::Downloads => "Downloads",
+            Self::PinnedOffline => "Pinned Offline",
+            Self::LocalFiles => "Local Files",
         }
     }
 }
@@ -140,16 +138,122 @@ impl Default for LibrarySlice {
 
 impl LibrarySlice {
     pub fn new(fixture: bool, liked_tracks: Vec<Track>) -> Self {
+        let playlists = if fixture {
+            vec![
+                LibraryCollectionRef {
+                    browse_id: "VLPL_FIX_JO".into(),
+                    title: "Late Night Vibes".into(),
+                    subtitle: "You • 12 tracks".into(),
+                    artwork_url: None,
+                    playlist_id: Some("PL_FIX_JO".into()),
+                    track_count: Some(12),
+                },
+                LibraryCollectionRef {
+                    browse_id: "VLPL_FIX_MUSIC".into(),
+                    title: "Daily Rotation".into(),
+                    subtitle: "You • 34 tracks".into(),
+                    artwork_url: None,
+                    playlist_id: Some("PL_FIX_MUSIC".into()),
+                    track_count: Some(34),
+                },
+                LibraryCollectionRef {
+                    browse_id: "VLPL_FIX_SHORTS".into(),
+                    title: "Sounds from Shorts".into(),
+                    subtitle: "Auto playlist • 16 tracks".into(),
+                    artwork_url: None,
+                    playlist_id: Some("PL_FIX_SHORTS".into()),
+                    track_count: Some(16),
+                },
+                LibraryCollectionRef {
+                    browse_id: "VLPL_COMM_1".into(),
+                    title: "Love and Heartbreak".into(),
+                    subtitle: "YRF • 15 tracks".into(),
+                    artwork_url: None,
+                    playlist_id: Some("PL_COMM_1".into()),
+                    track_count: Some(15),
+                },
+                LibraryCollectionRef {
+                    browse_id: "VLPL_COMM_2".into(),
+                    title: "Adrenaline Boosters".into(),
+                    subtitle: "Sandeep Chahar • 20 tracks".into(),
+                    artwork_url: None,
+                    playlist_id: Some("PL_COMM_2".into()),
+                    track_count: Some(20),
+                },
+                LibraryCollectionRef {
+                    browse_id: "VLPL_COMM_3".into(),
+                    title: "Indian Indie Essentials".into(),
+                    subtitle: "Indie Radar • 32 tracks".into(),
+                    artwork_url: None,
+                    playlist_id: Some("PL_COMM_3".into()),
+                    track_count: Some(32),
+                },
+            ]
+        } else {
+            Vec::new()
+        };
+        let albums = if fixture {
+            vec![
+                LibraryCollectionRef {
+                    browse_id: "MPRE_FIX_1".into(),
+                    title: "Nocturne Telemetry".into(),
+                    subtitle: "Kaelen Vance • 2026".into(),
+                    artwork_url: None,
+                    playlist_id: None,
+                    track_count: Some(10),
+                },
+                LibraryCollectionRef {
+                    browse_id: "MPRE_FIX_2".into(),
+                    title: "ネオン東京 EP 🎧".into(),
+                    subtitle: "星野サクラ • 2026".into(),
+                    artwork_url: None,
+                    playlist_id: None,
+                    track_count: Some(6),
+                },
+            ]
+        } else {
+            Vec::new()
+        };
+        let artists = if fixture {
+            vec![
+                LibraryCollectionRef {
+                    browse_id: "UC_ART_1".into(),
+                    title: "Kaelen Vance".into(),
+                    subtitle: "1.4M subscribers".into(),
+                    artwork_url: None,
+                    playlist_id: None,
+                    track_count: None,
+                },
+                LibraryCollectionRef {
+                    browse_id: "UC_ART_ARIJIT".into(),
+                    title: "Arijit Singh".into(),
+                    subtitle: "652M monthly audience".into(),
+                    artwork_url: None,
+                    playlist_id: None,
+                    track_count: None,
+                },
+                LibraryCollectionRef {
+                    browse_id: "UC_ART_3".into(),
+                    title: "星野サクラ 🌸".into(),
+                    subtitle: "840K subscribers".into(),
+                    artwork_url: None,
+                    playlist_id: None,
+                    track_count: None,
+                },
+            ]
+        } else {
+            Vec::new()
+        };
         Self {
             liked_tracks,
-            playlists: Vec::new(),
-            albums: Vec::new(),
-            artists: Vec::new(),
+            playlists,
+            albums,
+            artists,
             library_loading: false,
             library_hydrated_at: None,
             disliked_ids: Vec::new(),
             history: Vec::new(),
-            library_filter: LibraryFilter::LikedSongs,
+            library_filter: LibraryFilter::Playlists,
             library_search_query: String::new(),
             cache_stats: CacheStats {
                 audio_chunk_bytes: if fixture { 42 * 1024 * 1024 } else { 0 },

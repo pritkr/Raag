@@ -11,8 +11,8 @@ use crate::ui::controls::primitives::{artwork_box, primary_button};
 use crate::ui::icons::{IconKind, icon};
 use crate::ui::tokens::{
     MOBILE_MIN_TOUCH_TARGET, color_hero_pill_bg, color_hero_pill_fg, color_sponsor_badge,
-    color_status_ok, frosted_bar_surface, glass_hairline, is_desktop_layout, motion,
-    muted_caption_label, pill_glass_hover, pill_glass_surface, radius_card,
+    color_status_ok, frosted_bar_surface, frosted_settings_card, glass_hairline, is_desktop_layout,
+    motion, muted_caption_label, pill_glass_hover, pill_glass_surface, radius_card,
 };
 
 fn card_transition_ms() -> f32 {
@@ -217,7 +217,7 @@ pub fn status_card(
         .items_center()
         .justify_center()
         .rounded(radius_card)
-        .bg(move || theme().card)
+        .bg(frosted_settings_card)
         .border_1()
         .border_color(glass_hairline)
         .child(

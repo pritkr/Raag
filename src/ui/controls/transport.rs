@@ -13,8 +13,8 @@ use crate::ui::controls::sleep_timer_sheet::{open_sleep_timer_sheet, sleep_timer
 use crate::ui::controls::speed_sheet::{open_speed_sheet, speed_badge_label};
 use crate::ui::icons::{IconKind, icon, reactive_icon};
 use crate::ui::tokens::{
-    MOBILE_MIN_TOUCH_TARGET, color_control, color_control_fg, color_liked, color_on_cover,
-    color_player_accent, cover_gradient_pair, frosted_bar_surface, glass_hairline,
+    MOBILE_MIN_TOUCH_TARGET, ambient_progress_color, color_control, color_control_fg, color_liked,
+    color_on_cover, color_player_accent, cover_gradient_pair, frosted_bar_surface, glass_hairline,
     glass_specular_hairline, is_desktop_panel_visible, motion, pill_glass_hover,
     pill_glass_surface,
 };
@@ -66,9 +66,9 @@ pub fn seek_slider(
         .track_class("w-full h-6 justify-center")
         .indicator_class("w-full h-1.5 rounded-full bg-muted")
         .range_class("rounded-full")
-        .range_style(|s| s.bg(color_player_accent))
+        .range_style(|s| s.bg(|| ambient_progress_color(store::active_ambient_palette())))
         .thumb_class("size-3.5 rounded-full")
-        .thumb_style(|s| s.bg(color_player_accent))
+        .thumb_style(|s| s.bg(|| ambient_progress_color(store::active_ambient_palette())))
         .on_change(move |v: &SliderValue| {
             on_seek(v.start().max(0.0).round() as u64);
         })
@@ -85,18 +85,22 @@ pub fn volume_slider(
         .max(1.0)
         .step(0.02)
         .accessibility_label("Volume")
-        .track_class("w-24 h-6 justify-center")
+        .track_class("w-20 h-6 justify-center")
         .indicator_class("w-full h-1 rounded-full bg-muted")
         .range_class("rounded-full")
-        .range_style(|s| s.bg(color_player_accent))
+        .range_style(|s| s.bg(|| ambient_progress_color(store::active_ambient_palette())))
         .thumb_class("size-3 rounded-full")
-        .thumb_style(|s| s.bg(color_player_accent))
+        .thumb_style(|s| s.bg(|| ambient_progress_color(store::active_ambient_palette())))
         .on_change(move |v: &SliderValue| {
             on_change(v.start() as f32);
         })
 }
 
-/// Sleek frosted-glass Desktop Bottom Player Bar (`BackdropMaterial::Chrome`) with top-edge seek slider.
+/// Sleek frosted-glass Desktop Bottom Player Bar matching `ytm-rs`:
+/// - Thin full-width progress bar flush along top edge tinted with active track's accent color
+/// - Left: square art, title, artist, Like, Dislike, More
+/// - Center: Shuffle, Previous, large circular Play/Pause, Next, Repeat
+/// - Right: elapsed / duration, Volume, Cast/Device, Lyrics, Queue, Miniplayer, Expand Now Playing
 pub fn desktop_player_bar() -> impl IntoElement {
     let is_now_playing = move || store::active_tab() == AppTab::NowPlaying;
     let is_playing = move || store::player_snapshot().state.is_playing();
@@ -107,14 +111,26 @@ pub fn desktop_player_bar() -> impl IntoElement {
     };
     let is_disliked = store::is_current_disliked;
     let is_shuffle = move || store::player_snapshot().queue.shuffle;
+    let is_lyrics_open = move || {
+        store::active_tab() == AppTab::Lyrics
+            || (store::desktop_side_panel_open()
+                && store::desktop_side_panel() == DesktopSidePanel::Lyrics)
+    };
+    let is_queue_open = move || {
+        store::active_tab() == AppTab::Queue
+            || (store::desktop_side_panel_open()
+                && store::desktop_side_panel() == DesktopSidePanel::Queue)
+    };
 
     view()
+        .test_id("desktop-player-bar")
         .w_full()
-        .backdrop_blur(px(24.0))
+        .backdrop_blur(px(28.0))
         .backdrop_material(BackdropMaterial::Chrome)
         .bg(frosted_bar_surface)
         .border_t_1()
-        .border_color(glass_specular_hairline)
+        .border_color(glass_hairline)
+        // Thin full-width interactive progress bar flush along the top edge
         .child(
             view()
                 .test_id("mini-player-progress")
@@ -137,12 +153,16 @@ pub fn desktop_player_bar() -> impl IntoElement {
                         })
                         .step(500.0)
                         .accessibility_label("Desktop Playback Seek Bar")
-                        .track_class("w-full h-5 justify-center")
-                        .indicator_class("w-full h-1 bg-muted")
-                        .range_class("h-1")
-                        .range_style(|s| s.bg(color_player_accent))
-                        .thumb_class("size-3.5 rounded-full")
-                        .thumb_style(|s| s.bg(color_player_accent))
+                        .track_class("w-full h-3 justify-start")
+                        .indicator_class("w-full h-0.5 bg-muted")
+                        .range_class("h-0.5")
+                        .range_style(|s| {
+                            s.bg(|| ambient_progress_color(store::active_ambient_palette()))
+                        })
+                        .thumb_class("size-3 rounded-full")
+                        .thumb_style(|s| {
+                            s.bg(|| ambient_progress_color(store::active_ambient_palette()))
+                        })
                         .on_change(|v: &SliderValue| {
                             store::seek_ms(v.start().max(0.0).round() as u64);
                         }),
@@ -154,16 +174,18 @@ pub fn desktop_player_bar() -> impl IntoElement {
                 .items_center()
                 .justify_between()
                 .px_4()
-                .py_2()
-                .min_h(px(68.0))
-                .gap_4()
+                .pb_2()
+                .pt_0p5()
+                .min_h(px(62.0))
+                .gap_3()
+                // Left: Square artwork + Title/Artist + Like / Dislike / More
                 .child(
                     view()
                         .flex_1()
                         .min_w(px(0.0))
                         .flex_row()
                         .items_center()
-                        .gap_3()
+                        .gap_2p5()
                         .child(
                             button()
                                 .test_id("mini-player-open")
@@ -172,7 +194,7 @@ pub fn desktop_player_bar() -> impl IntoElement {
                                 .items_center()
                                 .gap_3()
                                 .min_w(px(0.0))
-                                .max_w(px(280.0))
+                                .max_w(px(260.0))
                                 .rounded(move || theme().radius)
                                 .transition()
                                 .duration(btn_transition_ms)
@@ -185,8 +207,8 @@ pub fn desktop_player_bar() -> impl IntoElement {
                                 .on_press(|| store::set_tab(AppTab::NowPlaying))
                                 .child(
                                     view()
-                                        .w(px(46.0))
-                                        .h(px(46.0))
+                                        .w(px(44.0))
+                                        .h(px(44.0))
                                         .rounded(px(6.0))
                                         .bg(move || {
                                             let seed = store::player_snapshot()
@@ -218,7 +240,7 @@ pub fn desktop_player_bar() -> impl IntoElement {
                                                                 .unwrap_or_default(),
                                                         )
                                                     })
-                                                    .size(px(46.0))
+                                                    .size(px(44.0))
                                                     .object_fit(ResizeMode::Cover)
                                                     .rounded(px(6.0))
                                                 },
@@ -309,21 +331,13 @@ pub fn desktop_player_bar() -> impl IntoElement {
                                         "Player Bar Dislike"
                                     }))
                                 })
-                                .w(px(36.0))
-                                .h(px(36.0))
+                                .w(px(34.0))
+                                .h(px(34.0))
                                 .flex_col()
                                 .items_center()
                                 .justify_center()
                                 .gap_0p5()
                                 .rounded_full()
-                                .border_1()
-                                .border_color(move || {
-                                    if is_disliked() {
-                                        color_player_accent()
-                                    } else {
-                                        frosted_bar_surface()
-                                    }
-                                })
                                 .transition()
                                 .duration(btn_transition_ms)
                                 .ease_out()
@@ -359,11 +373,12 @@ pub fn desktop_player_bar() -> impl IntoElement {
                             }
                         })),
                 )
+                // Center: Shuffle, Previous, circular Play/Pause, Next, Repeat
                 .child(
                     view()
                         .flex_row()
                         .items_center()
-                        .gap_2p5()
+                        .gap_2()
                         .child(
                             button()
                                 .selected(is_shuffle)
@@ -374,20 +389,14 @@ pub fn desktop_player_bar() -> impl IntoElement {
                                         "Player Bar Shuffle"
                                     }))
                                 })
-                                .w(px(38.0))
-                                .h(px(38.0))
+                                .w(px(36.0))
+                                .h(px(36.0))
                                 .flex_col()
                                 .items_center()
                                 .justify_center()
                                 .gap_0p5()
                                 .rounded_full()
-                                .bg(move || {
-                                    if is_shuffle() {
-                                        pill_glass_surface()
-                                    } else {
-                                        frosted_bar_surface()
-                                    }
-                                })
+                                .style_when(is_shuffle, |s| s.bg(pill_glass_surface))
                                 .transition()
                                 .duration(btn_transition_ms)
                                 .ease_out()
@@ -399,7 +408,7 @@ pub fn desktop_player_bar() -> impl IntoElement {
                                 .on_press(store::toggle_shuffle)
                                 .child(icon(IconKind::Shuffle, 16.0, move || {
                                     if is_shuffle() {
-                                        color_player_accent()
+                                        theme().foreground
                                     } else {
                                         theme().muted_foreground
                                     }
@@ -409,7 +418,7 @@ pub fn desktop_player_bar() -> impl IntoElement {
                         .child(svg_icon_button(
                             IconKind::SkipBack,
                             18.0,
-                            38.0,
+                            36.0,
                             "Player Bar Previous Track",
                             true,
                             move || theme().foreground,
@@ -418,8 +427,8 @@ pub fn desktop_player_bar() -> impl IntoElement {
                         .child(
                             button()
                                 .accessibility_label("Player Bar Play or Pause")
-                                .w(px(44.0))
-                                .h(px(44.0))
+                                .w(px(42.0))
+                                .h(px(42.0))
                                 .items_center()
                                 .justify_center()
                                 .rounded_full()
@@ -442,7 +451,7 @@ pub fn desktop_player_bar() -> impl IntoElement {
                         .child(svg_icon_button(
                             IconKind::SkipForward,
                             18.0,
-                            38.0,
+                            36.0,
                             "Player Bar Next Track",
                             true,
                             move || theme().foreground,
@@ -469,22 +478,20 @@ pub fn desktop_player_bar() -> impl IntoElement {
                                         },
                                     ))
                                 })
-                                .w(px(38.0))
-                                .h(px(38.0))
+                                .w(px(36.0))
+                                .h(px(36.0))
                                 .flex_col()
                                 .items_center()
                                 .justify_center()
                                 .gap_0p5()
                                 .rounded_full()
-                                .bg(move || {
-                                    if store::player_snapshot().queue.repeat
-                                        != resonance_contract::RepeatMode::None
-                                    {
-                                        pill_glass_surface()
-                                    } else {
-                                        frosted_bar_surface()
-                                    }
-                                })
+                                .style_when(
+                                    move || {
+                                        store::player_snapshot().queue.repeat
+                                            != resonance_contract::RepeatMode::None
+                                    },
+                                    |s| s.bg(pill_glass_surface),
+                                )
                                 .transition()
                                 .duration(btn_transition_ms)
                                 .ease_out()
@@ -506,7 +513,7 @@ pub fn desktop_player_bar() -> impl IntoElement {
                                         {
                                             theme().muted_foreground
                                         } else {
-                                            color_player_accent()
+                                            theme().foreground
                                         }
                                     },
                                 ))
@@ -516,6 +523,7 @@ pub fn desktop_player_bar() -> impl IntoElement {
                                 })),
                         ),
                 )
+                // Right: elapsed / duration, Volume, Cast/Device, Lyrics, Queue, Miniplayer, Expand ^
                 .child(
                     view()
                         .flex_1()
@@ -523,7 +531,7 @@ pub fn desktop_player_bar() -> impl IntoElement {
                         .flex_row()
                         .items_center()
                         .justify_end()
-                        .gap_2p5()
+                        .gap_1p5()
                         .child(
                             text(move || {
                                 let snap = store::player_snapshot();
@@ -535,7 +543,8 @@ pub fn desktop_player_bar() -> impl IntoElement {
                             })
                             .text_xs()
                             .tabular_nums()
-                            .text_color(move || theme().muted_foreground),
+                            .text_color(move || theme().muted_foreground)
+                            .pr_1(),
                         )
                         .child(when(
                             || speed_badge_label().is_some(),
@@ -546,7 +555,7 @@ pub fn desktop_player_bar() -> impl IntoElement {
                                     .px_2()
                                     .py_1()
                                     .rounded_full()
-                                    .bg(move || theme().muted)
+                                    .bg(pill_glass_surface)
                                     .transition()
                                     .duration(btn_transition_ms)
                                     .ease_out()
@@ -564,7 +573,7 @@ pub fn desktop_player_bar() -> impl IntoElement {
                                         .text_xs()
                                         .tabular_nums()
                                         .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(color_player_accent),
+                                        .text_color(move || theme().foreground),
                                     )
                             },
                         ))
@@ -580,7 +589,7 @@ pub fn desktop_player_bar() -> impl IntoElement {
                                     .items_center()
                                     .gap_1()
                                     .rounded_full()
-                                    .bg(move || theme().muted)
+                                    .bg(pill_glass_surface)
                                     .transition()
                                     .duration(btn_transition_ms)
                                     .ease_out()
@@ -589,7 +598,7 @@ pub fn desktop_player_bar() -> impl IntoElement {
                                     .focus_visible(|s| {
                                         s.outline(px(2.0)).outline_color(move || theme().ring)
                                     })
-                                    .child(icon(IconKind::Moon, 12.0, color_player_accent))
+                                    .child(icon(IconKind::Moon, 12.0, move || theme().foreground))
                                     .child(
                                         text(move || {
                                             SharedString::from(
@@ -599,15 +608,15 @@ pub fn desktop_player_bar() -> impl IntoElement {
                                         .text_xs()
                                         .tabular_nums()
                                         .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(color_player_accent),
+                                        .text_color(move || theme().foreground),
                                     )
                             },
                         ))
                         .child(
                             button()
                                 .accessibility_label("Player Bar Mute")
-                                .w(px(34.0))
-                                .h(px(34.0))
+                                .w(px(32.0))
+                                .h(px(32.0))
                                 .items_center()
                                 .justify_center()
                                 .rounded_full()
@@ -636,29 +645,43 @@ pub fn desktop_player_bar() -> impl IntoElement {
                             || f64::from(store::player_snapshot().volume),
                             store::set_volume,
                         ))
+                        // Cast / Audio Output Device button
                         .child(
                             button()
-                                .selected(move || {
-                                    store::desktop_side_panel_open()
-                                        && store::desktop_side_panel() == DesktopSidePanel::Lyrics
+                                .test_id("player-cast-btn")
+                                .accessibility_label("Cast to Device")
+                                .w(px(32.0))
+                                .h(px(32.0))
+                                .items_center()
+                                .justify_center()
+                                .rounded_full()
+                                .transition()
+                                .duration(btn_transition_ms)
+                                .ease_out()
+                                .hover(|s| s.bg(pill_glass_hover))
+                                .active(|s| s.scale(btn_press_scale))
+                                .focus_visible(|s| {
+                                    s.outline(px(2.0)).outline_color(move || theme().ring)
                                 })
-                                .accessibility_label("Toggle Lyrics")
-                                .w(px(36.0))
-                                .h(px(36.0))
+                                .on_press(|| store::set_cast_sheet_open(true))
+                                .child(icon(IconKind::Cast, 16.0, move || {
+                                    theme().muted_foreground
+                                })),
+                        )
+                        // Lyrics microphone button (also carries `nav-lyrics` test_id)
+                        .child(
+                            button()
+                                .test_id("nav-lyrics")
+                                .selected(is_lyrics_open)
+                                .accessibility_label("Lyrics")
+                                .w(px(32.0))
+                                .h(px(32.0))
                                 .flex_col()
                                 .items_center()
                                 .justify_center()
                                 .gap_0p5()
                                 .rounded_full()
-                                .bg(move || {
-                                    if store::desktop_side_panel_open()
-                                        && store::desktop_side_panel() == DesktopSidePanel::Lyrics
-                                    {
-                                        pill_glass_surface()
-                                    } else {
-                                        frosted_bar_surface()
-                                    }
-                                })
+                                .style_when(is_lyrics_open, |s| s.bg(pill_glass_surface))
                                 .transition()
                                 .duration(btn_transition_ms)
                                 .ease_out()
@@ -668,50 +691,38 @@ pub fn desktop_player_bar() -> impl IntoElement {
                                     s.outline(px(2.0)).outline_color(move || theme().ring)
                                 })
                                 .on_press(|| {
-                                    if is_desktop_panel_visible() {
+                                    if is_desktop_panel_visible()
+                                        && store::active_tab() != AppTab::NowPlaying
+                                    {
                                         trigger_panel_layout_animation();
                                         store::toggle_desktop_side_panel(DesktopSidePanel::Lyrics);
                                     } else {
                                         store::set_tab(AppTab::Lyrics);
                                     }
                                 })
-                                .child(icon(IconKind::Lyrics, 16.0, move || {
-                                    if store::desktop_side_panel_open()
-                                        && store::desktop_side_panel() == DesktopSidePanel::Lyrics
-                                    {
-                                        color_player_accent()
+                                .child(icon(IconKind::Lyrics, 15.0, move || {
+                                    if is_lyrics_open() {
+                                        theme().foreground
                                     } else {
                                         theme().muted_foreground
                                     }
                                 }))
-                                .child(active_state_dot(move || {
-                                    store::desktop_side_panel_open()
-                                        && store::desktop_side_panel() == DesktopSidePanel::Lyrics
-                                })),
+                                .child(active_state_dot(is_lyrics_open)),
                         )
+                        // Queue drawer button (also carries `nav-queue` test_id)
                         .child(
                             button()
-                                .selected(move || {
-                                    store::desktop_side_panel_open()
-                                        && store::desktop_side_panel() == DesktopSidePanel::Queue
-                                })
-                                .accessibility_label("Toggle Queue")
-                                .w(px(36.0))
-                                .h(px(36.0))
+                                .test_id("nav-queue")
+                                .selected(is_queue_open)
+                                .accessibility_label("Queue")
+                                .w(px(32.0))
+                                .h(px(32.0))
                                 .flex_col()
                                 .items_center()
                                 .justify_center()
                                 .gap_0p5()
                                 .rounded_full()
-                                .bg(move || {
-                                    if store::desktop_side_panel_open()
-                                        && store::desktop_side_panel() == DesktopSidePanel::Queue
-                                    {
-                                        pill_glass_surface()
-                                    } else {
-                                        frosted_bar_surface()
-                                    }
-                                })
+                                .style_when(is_queue_open, |s| s.bg(pill_glass_surface))
                                 .transition()
                                 .duration(btn_transition_ms)
                                 .ease_out()
@@ -729,24 +740,51 @@ pub fn desktop_player_bar() -> impl IntoElement {
                                     }
                                 })
                                 .child(icon(IconKind::Queue, 16.0, move || {
-                                    if store::desktop_side_panel_open()
-                                        && store::desktop_side_panel() == DesktopSidePanel::Queue
-                                    {
-                                        color_player_accent()
+                                    if is_queue_open() {
+                                        theme().foreground
                                     } else {
                                         theme().muted_foreground
                                     }
                                 }))
-                                .child(active_state_dot(move || {
-                                    store::desktop_side_panel_open()
-                                        && store::desktop_side_panel() == DesktopSidePanel::Queue
-                                })),
+                                .child(active_state_dot(is_queue_open)),
                         )
+                        // Miniplayer / Popout toggle
                         .child(
                             button()
-                                .accessibility_label("Toggle Fullscreen Player")
-                                .w(px(34.0))
-                                .h(px(34.0))
+                                .test_id("player-miniplayer-btn")
+                                .selected(store::miniplayer_open)
+                                .accessibility_label("Toggle Miniplayer")
+                                .w(px(32.0))
+                                .h(px(32.0))
+                                .items_center()
+                                .justify_center()
+                                .rounded_full()
+                                .style_when(store::miniplayer_open, |s| s.bg(pill_glass_surface))
+                                .transition()
+                                .duration(btn_transition_ms)
+                                .ease_out()
+                                .hover(|s| s.bg(pill_glass_hover))
+                                .active(|s| s.scale(btn_press_scale))
+                                .focus_visible(|s| {
+                                    s.outline(px(2.0)).outline_color(move || theme().ring)
+                                })
+                                .on_press(store::toggle_miniplayer)
+                                .child(icon(IconKind::Miniplayer, 15.0, move || {
+                                    if store::miniplayer_open() {
+                                        theme().foreground
+                                    } else {
+                                        theme().muted_foreground
+                                    }
+                                })),
+                        )
+                        // Expand / Collapse Now Playing chevron (also carries `nav-now-playing` test_id)
+                        .child(
+                            button()
+                                .test_id("nav-now-playing")
+                                .selected(is_now_playing)
+                                .accessibility_label("Now Playing")
+                                .w(px(32.0))
+                                .h(px(32.0))
                                 .items_center()
                                 .justify_center()
                                 .rounded_full()

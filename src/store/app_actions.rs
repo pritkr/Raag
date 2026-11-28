@@ -100,6 +100,67 @@ pub fn set_now_playing_tab(tab: NowPlayingTab) {
     ui_signal().update(|u| u.now_playing_tab = tab);
 }
 
+pub fn settings_section() -> super::ui_slice::SettingsSection {
+    ui_signal().with(|u| u.settings_section)
+}
+
+pub fn set_settings_section(section: super::ui_slice::SettingsSection) {
+    ui_signal().update(|u| u.settings_section = section);
+}
+
+pub fn open_settings_account() {
+    if catalog_signal().with(|c| c.can_go_back_entity()) {
+        catalog_signal().update(|c| c.clear_entity_routes());
+    }
+    ui_signal().update(|u| {
+        u.settings_section = super::ui_slice::SettingsSection::Account;
+        u.set_tab(AppTab::Settings);
+    });
+}
+
+pub fn open_settings_shortcuts() {
+    if catalog_signal().with(|c| c.can_go_back_entity()) {
+        catalog_signal().update(|c| c.clear_entity_routes());
+    }
+    ui_signal().update(|u| {
+        u.settings_section = super::ui_slice::SettingsSection::KeyboardShortcuts;
+        u.set_tab(AppTab::Settings);
+    });
+}
+
+pub fn settings_search_query() -> String {
+    ui_signal().with(|u| u.settings_search_query.clone())
+}
+
+pub fn set_settings_search_query(query: String) {
+    ui_signal().update(|u| u.settings_search_query = query);
+}
+
+pub fn search_dropdown_open() -> bool {
+    ui_signal().with(|u| u.search_dropdown_open)
+}
+
+pub fn set_search_dropdown_open(open: bool) {
+    ui_signal().update(|u| u.search_dropdown_open = open);
+}
+
+pub fn miniplayer_open() -> bool {
+    ui_signal().with(|u| u.miniplayer_open)
+}
+
+pub fn toggle_miniplayer() {
+    let mut now_open = false;
+    ui_signal().update(|u| {
+        u.miniplayer_open = !u.miniplayer_open;
+        now_open = u.miniplayer_open;
+    });
+    if now_open {
+        set_status_banner("Miniplayer mode enabled");
+    } else {
+        set_status_banner("Returned to full player");
+    }
+}
+
 pub fn status_banner() -> Option<String> {
     ui_signal().with(|u| u.status_banner.clone())
 }

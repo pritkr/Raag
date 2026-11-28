@@ -149,15 +149,187 @@ pub fn fixture_lyrics(video_id: &str) -> LyricsDocument {
 
 pub fn fixture_home_sections() -> Vec<HomeSection> {
     let tracks = fixture_tracks();
+    let mut listen_again_items: Vec<HomeItem> = tracks.iter().cloned().map(HomeItem::Track).collect();
+    listen_again_items.push(HomeItem::Collection {
+        browse_id: "MPRE_FIX_1".into(),
+        title: "Nocturne Telemetry".into(),
+        subtitle: "Album • Kaelen Vance".into(),
+        artwork_url: None,
+    });
+    listen_again_items.push(HomeItem::Collection {
+        browse_id: "MPRE_FIX_2".into(),
+        title: "ネオン東京 EP 🎧".into(),
+        subtitle: "EP • 星野サクラ".into(),
+        artwork_url: None,
+    });
+
+    let song_mix_tracks: Vec<HomeItem> = vec![
+        Track {
+            id: "mix-maheroo".into(),
+            title: "Maheroo Maheroo".into(),
+            artists: vec![
+                ArtistRef { id: Some("UC_ART_SHREYA".into()), name: "Shreya Ghoshal".into() },
+                ArtistRef { id: Some("UC_ART_DARSHAN".into()), name: "Darshan Raval".into() },
+            ],
+            album: Some(AlbumRef { id: Some("MPRE_MIX_1".into()), title: "Super Nani".into() }),
+            duration_ms: 274_000,
+            artwork_url: None,
+            is_explicit: false,
+            is_liked: true,
+            is_video: false,
+        },
+        Track {
+            id: "mix-raataan".into(),
+            title: "Raataan Lambiyan".into(),
+            artists: vec![
+                ArtistRef { id: Some("UC_ART_JUBIN".into()), name: "Jubin Nautiyal".into() },
+                ArtistRef { id: Some("UC_ART_ASEES".into()), name: "Asees Kaur".into() },
+            ],
+            album: Some(AlbumRef { id: Some("MPRE_MIX_2".into()), title: "Shershaah".into() }),
+            duration_ms: 230_000,
+            artwork_url: None,
+            is_explicit: false,
+            is_liked: true,
+            is_video: false,
+        },
+        Track {
+            id: "mix-kesariya".into(),
+            title: "Kesariya".into(),
+            artists: vec![
+                ArtistRef { id: Some("UC_ART_ARIJIT".into()), name: "Arijit Singh".into() },
+                ArtistRef { id: Some("UC_ART_PRITAM".into()), name: "Pritam".into() },
+            ],
+            album: Some(AlbumRef { id: Some("MPRE_MIX_3".into()), title: "Brahmastra".into() }),
+            duration_ms: 268_000,
+            artwork_url: None,
+            is_explicit: false,
+            is_liked: false,
+            is_video: false,
+        },
+        Track {
+            id: "mix-chaleya".into(),
+            title: "Chaleya".into(),
+            artists: vec![
+                ArtistRef { id: Some("UC_ART_ARIJIT".into()), name: "Arijit Singh".into() },
+                ArtistRef { id: Some("UC_ART_SHILPA".into()), name: "Shilpa Rao".into() },
+            ],
+            album: Some(AlbumRef { id: Some("MPRE_MIX_4".into()), title: "Jawan".into() }),
+            duration_ms: 200_000,
+            artwork_url: None,
+            is_explicit: false,
+            is_liked: false,
+            is_video: false,
+        },
+        Track {
+            id: "mix-apna-bana".into(),
+            title: "Apna Bana Le".into(),
+            artists: vec![
+                ArtistRef { id: Some("UC_ART_ARIJIT".into()), name: "Arijit Singh".into() },
+                ArtistRef { id: Some("UC_ART_SACHIN".into()), name: "Sachin-Jigar".into() },
+            ],
+            album: Some(AlbumRef { id: Some("MPRE_MIX_5".into()), title: "Bhediya".into() }),
+            duration_ms: 261_000,
+            artwork_url: None,
+            is_explicit: false,
+            is_liked: true,
+            is_video: false,
+        },
+        Track {
+            id: "mix-tum-hi-ho".into(),
+            title: "Tum Hi Ho".into(),
+            artists: vec![ArtistRef { id: Some("UC_ART_ARIJIT".into()), name: "Arijit Singh".into() }],
+            album: Some(AlbumRef { id: Some("MPRE_MIX_6".into()), title: "Aashiqui 2".into() }),
+            duration_ms: 262_000,
+            artwork_url: None,
+            is_explicit: false,
+            is_liked: true,
+            is_video: false,
+        },
+    ]
+    .into_iter()
+    .map(HomeItem::Track)
+    .collect();
+
     vec![
         HomeSection {
-            id: "quick-picks".into(),
-            title: "Quick Picks".into(),
-            items: tracks.iter().cloned().map(HomeItem::Track).collect(),
+            id: "listen-again".into(),
+            title: "Listen again".into(),
+            items: listen_again_items,
         },
         HomeSection {
-            id: "featured-mixes".into(),
-            title: "Focus & Night Drives".into(),
+            id: "song-mixes".into(),
+            title: "Song mixes".into(),
+            items: song_mix_tracks,
+        },
+        HomeSection {
+            id: "daily-discover".into(),
+            title: "Your daily discover".into(),
+            items: vec![
+                HomeItem::Collection {
+                    browse_id: "VLPL_DISCOVER_1".into(),
+                    title: "Discover Mix".into(),
+                    subtitle: "Playlist • YouTube Music".into(),
+                    artwork_url: None,
+                },
+                HomeItem::Collection {
+                    browse_id: "VLPL_DISCOVER_2".into(),
+                    title: "New Release Mix".into(),
+                    subtitle: "Playlist • Updated Fridays".into(),
+                    artwork_url: None,
+                },
+                HomeItem::Collection {
+                    browse_id: "VLPL_DISCOVER_3".into(),
+                    title: "Replay Mix".into(),
+                    subtitle: "Playlist • Your top tracks".into(),
+                    artwork_url: None,
+                },
+                HomeItem::Collection {
+                    browse_id: "VLPL_DISCOVER_4".into(),
+                    title: "Supermix".into(),
+                    subtitle: "Playlist • Mixed for you".into(),
+                    artwork_url: None,
+                },
+                HomeItem::Collection {
+                    browse_id: "VLPL_DISCOVER_5".into(),
+                    title: "Chill Mix".into(),
+                    subtitle: "Playlist • Lo-fi & Acoustic".into(),
+                    artwork_url: None,
+                },
+            ],
+        },
+        HomeSection {
+            id: "from-community".into(),
+            title: "From the community".into(),
+            items: vec![
+                HomeItem::Collection {
+                    browse_id: "VLPL_COMM_1".into(),
+                    title: "Love and Heartbreak".into(),
+                    subtitle: "YRF • 15 tracks".into(),
+                    artwork_url: None,
+                },
+                HomeItem::Collection {
+                    browse_id: "VLPL_COMM_2".into(),
+                    title: "Adrenaline Boosters".into(),
+                    subtitle: "Sandeep Chahar • 20 tracks".into(),
+                    artwork_url: None,
+                },
+                HomeItem::Collection {
+                    browse_id: "VLPL_COMM_3".into(),
+                    title: "Indian Indie Essentials".into(),
+                    subtitle: "Indie Radar • 32 tracks".into(),
+                    artwork_url: None,
+                },
+                HomeItem::Collection {
+                    browse_id: "VLPL_COMM_4".into(),
+                    title: "Late Night Monsoon".into(),
+                    subtitle: "Curated • 28 tracks".into(),
+                    artwork_url: None,
+                },
+            ],
+        },
+        HomeSection {
+            id: "new-releases".into(),
+            title: "New releases".into(),
             items: vec![
                 HomeItem::Collection {
                     browse_id: "MPRE_FIX_1".into(),
@@ -169,6 +341,78 @@ pub fn fixture_home_sections() -> Vec<HomeSection> {
                     browse_id: "MPRE_FIX_2".into(),
                     title: "ネオン東京 EP 🎧".into(),
                     subtitle: "EP • 星野サクラ".into(),
+                    artwork_url: None,
+                },
+                HomeItem::Collection {
+                    browse_id: "MPRE_FIX_3".into(),
+                    title: "Unplugged Tape IV".into(),
+                    subtitle: "Album • Elena Rostova".into(),
+                    artwork_url: None,
+                },
+                HomeItem::Collection {
+                    browse_id: "MPRE_FIX_4".into(),
+                    title: "Concrete Frequencies".into(),
+                    subtitle: "Album • Monolith".into(),
+                    artwork_url: None,
+                },
+            ],
+        },
+        HomeSection {
+            id: "indian-pop".into(),
+            title: "Indian pop".into(),
+            items: vec![
+                HomeItem::Collection {
+                    browse_id: "VLPL_INDIE_1".into(),
+                    title: "Bollywood Mush".into(),
+                    subtitle: "Playlist • YouTube Music".into(),
+                    artwork_url: None,
+                },
+                HomeItem::Collection {
+                    browse_id: "VLPL_INDIE_2".into(),
+                    title: "Desi Pop Anthems".into(),
+                    subtitle: "Playlist • 40 tracks".into(),
+                    artwork_url: None,
+                },
+                HomeItem::Collection {
+                    browse_id: "VLPL_INDIE_3".into(),
+                    title: "Acoustic Unplugged".into(),
+                    subtitle: "Playlist • 24 tracks".into(),
+                    artwork_url: None,
+                },
+            ],
+        },
+        HomeSection {
+            id: "live-performances".into(),
+            title: "Live performances".into(),
+            items: vec![
+                HomeItem::Collection {
+                    browse_id: "VLPL_LIVE_1".into(),
+                    title: "Coke Studio Sessions".into(),
+                    subtitle: "Live • 18 videos".into(),
+                    artwork_url: None,
+                },
+                HomeItem::Collection {
+                    browse_id: "VLPL_LIVE_2".into(),
+                    title: "Midnight Tiny Desk".into(),
+                    subtitle: "Live • 14 videos".into(),
+                    artwork_url: None,
+                },
+            ],
+        },
+        HomeSection {
+            id: "recaps".into(),
+            title: "Recaps".into(),
+            items: vec![
+                HomeItem::Collection {
+                    browse_id: "VLPL_RECAP_1".into(),
+                    title: "2026 Seasonal Recap".into(),
+                    subtitle: "Auto playlist • 25 tracks".into(),
+                    artwork_url: None,
+                },
+                HomeItem::Collection {
+                    browse_id: "VLPL_RECAP_2".into(),
+                    title: "Sounds from Shorts".into(),
+                    subtitle: "Auto playlist • 16 tracks".into(),
                     artwork_url: None,
                 },
             ],

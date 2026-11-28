@@ -16,8 +16,8 @@ use crate::store;
 use crate::store::settings_slice::AudioDspCapability;
 use crate::ui::controls::{secondary_button, setting_switch};
 use crate::ui::tokens::{
-    MOBILE_MIN_TOUCH_TARGET, PROSE_MAX_WIDTH, color_status_ok, glass_hairline, pill_glass_surface,
-    radius_card,
+    MOBILE_MIN_TOUCH_TARGET, PROSE_MAX_WIDTH, color_status_ok, frosted_settings_card,
+    glass_hairline, pill_glass_surface, radius_card,
 };
 
 #[derive(Clone)]
@@ -74,7 +74,7 @@ pub fn dsp_settings_card(props: DspCardProps) -> impl IntoElement {
         .p_4()
         .gap_3()
         .rounded(radius_card)
-        .bg(move || theme().card)
+        .bg(frosted_settings_card)
         .border_1()
         .border_color(glass_hairline)
         .child(

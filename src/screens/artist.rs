@@ -1,22 +1,28 @@
-//! Dedicated Artist Entity Screen (`src/screens/artist.rs`, `H2.1`).
-//!
+//! Dedicated Artist Entity Screen (`src/screens/artist.rs`, `H2.1`) matching `ytm-rs` (`09_artist_detail_1.png`–`_3.png`):
+//! - Full-bleed rounded artist hero banner with gradient/artwork scrim + overlaid bold Artist name & subscriber count
+//! - Clean pill action bar below banner (`Play`, `Shuffle`, `Radio`, `Subscribe`)
+//! - `Top songs` (`Show all` pill + compact rows)
+//! - Horizontal carousels for `Albums`, `Singles & EPs`, and `Fans might also like` (circular artist cards)
 //! Zero raw color literals — 100% semantic `theme.json` & `src/ui/tokens` tokens.
 
 use std::sync::Arc;
 
 use nsh_base::{button, theme};
+use nsh_core::element::ImageSrc;
 use nsh_core::prelude::*;
 use resonance_contract::{ArtistDetail, LibraryCollectionRef, Track};
 use resonance_core::palette::palette_for_track;
 
+use crate::store;
 use crate::ui::controls::{
     artwork_box, back_button, glass_pill_button, hero_pill_button, media_square_card,
-    secondary_button, track_row_view,
+    track_row_view,
 };
 use crate::ui::icons::IconKind;
 use crate::ui::tokens::{
-    MOBILE_MIN_TOUCH_TARGET, PROSE_MAX_WIDTH, ambient_backdrop_color, glass_hairline,
-    is_desktop_layout, is_narrow_viewport, pill_glass_surface, radius_card,
+    MOBILE_MIN_TOUCH_TARGET, PROSE_MAX_WIDTH, ambient_accent_color, ambient_backdrop_color,
+    color_on_cover, frosted_settings_card, glass_hairline, is_desktop_layout, overlay_scrim,
+    radius_card,
 };
 
 #[derive(Clone)]
@@ -66,26 +72,66 @@ fn shelf_section(
     on_open: Arc<dyn Fn(String)>,
     circular_hint: bool,
 ) -> impl IntoElement {
-    let card_width = if circular_hint { 148.0 } else { 164.0 };
+    let card_width = if circular_hint { 156.0 } else { 172.0 };
     view()
         .gap_3()
         .child(
             text(heading)
-                .text_lg()
+                .text_xl()
                 .font_weight(FontWeight::BOLD)
                 .text_color(move || theme().foreground),
         )
         .child(
-            scroll()
-                .horizontal()
-                .child(
-                    view()
-                        .flex_row()
-                        .gap_4()
-                        .children(items.into_iter().map(move |item| {
-                            let id = item.browse_id.clone();
-                            let cb = Arc::clone(&on_open);
-                            let mono = monogram_for(&item.title);
+            scroll().horizontal().w_full().child(
+                view()
+                    .flex_row()
+                    .items_start()
+                    .gap_4()
+                    .py_1()
+                    .children(items.into_iter().map(move |item| {
+                        let id = item.browse_id.clone();
+                        let cb = Arc::clone(&on_open);
+                        let mono = monogram_for(&item.title);
+                        if circular_hint {
+                            button()
+                                .accessibility_label(item.title.clone())
+                                .w(px(card_width))
+                                .items_center()
+                                .gap_2()
+                                .rounded(radius_card)
+                                .hover(|s| s.opacity(0.9))
+                                .active(|s| s.opacity(0.78))
+                                .focus_visible(|s| {
+                                    s.outline(px(2.0)).outline_color(move || theme().ring)
+                                })
+                                .on_press(move || cb(id.clone()))
+                                .child(artwork_box(
+                                    item.artwork_url,
+                                    mono,
+                                    144.0,
+                                    72.0,
+                                ))
+                                .child(
+                                    view()
+                                        .w_full()
+                                        .items_center()
+                                        .gap_0p5()
+                                        .child(
+                                            text(item.title)
+                                                .number_of_lines(1)
+                                                .text_sm()
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_color(move || theme().foreground),
+                                        )
+                                        .child(
+                                            text(item.subtitle)
+                                                .number_of_lines(1)
+                                                .text_xs()
+                                                .text_color(move || theme().muted_foreground),
+                                        ),
+                                )
+                                .into_element()
+                        } else {
                             media_square_card(
                                 item.artwork_url,
                                 mono,
@@ -96,8 +142,10 @@ fn shelf_section(
                                 move || cb(id.clone()),
                                 None,
                             )
-                        })),
-                ),
+                            .into_element()
+                        }
+                    })),
+            ),
         )
 }
 
@@ -108,9 +156,10 @@ pub fn artist_screen_with_detail(
     let show_all_songs = signal(false);
     let show_about = signal(false);
     let palette = palette_for_track(&artist.channel_id, &artist.name);
-    let hero_bg = move || ambient_backdrop_color(palette);
-    let art_size = if is_narrow_viewport() { 128.0 } else { 156.0 };
-    let mono = monogram_for(&artist.name);
+    let hero_from = move || ambient_accent_color(palette);
+    let hero_to = move || ambient_backdrop_color(palette);
+    let desktop = is_desktop_layout();
+    let banner_h = if desktop { 260.0 } else { 196.0 };
 
     let top_for_play = artist.top_songs.clone();
     let top_for_shuffle = artist.top_songs.clone();
@@ -126,6 +175,7 @@ pub fn artist_screen_with_detail(
         .subscribers
         .clone()
         .unwrap_or_else(|| "Artist".to_owned());
+    let banner_art = store::resolve_artwork_url(artist.artwork_url.clone());
 
     let top_songs = artist.top_songs.clone();
     let albums = artist.albums.clone();
@@ -156,122 +206,121 @@ pub fn artist_screen_with_detail(
                     .justify_between()
                     .child(back_button(move || cb_back())),
             )
+            // Full-bleed rounded Artist Hero Banner matching 09_artist_detail_1.png
             .child(
                 view()
-                    .p_5()
-                    .gap_4()
+                    .relative()
+                    .w_full()
+                    .h(px(banner_h))
                     .rounded(radius_card)
-                    .bg(hero_bg)
+                    .overflow_hidden()
+                    .bg_linear_to_br()
+                    .gradient_from(hero_from)
+                    .gradient_to(hero_to)
                     .border_1()
                     .border_color(glass_hairline)
-                    .style_when(is_desktop_layout, |s| s.flex_row().items_end().gap_6())
+                    .when_some(banner_art, |v, url| {
+                        v.child(
+                            image(ImageSrc::from(url))
+                                .absolute()
+                                .inset_0()
+                                .size_full()
+                                .object_fit(ResizeMode::Cover),
+                        )
+                    })
+                    // Subtle scrim for guaranteed white-text readability over hero imagery
                     .child(
                         view()
-                            .w(px(art_size))
-                            .h(px(art_size))
-                            .rounded_full()
-                            .overflow_hidden()
-                            .child(artwork_box(
-                                artist.artwork_url.clone(),
-                                mono,
-                                art_size,
-                                art_size / 2.0,
-                            )),
+                            .absolute()
+                            .inset_0()
+                            .bg(overlay_scrim)
+                            .opacity(0.45)
+                            .pointer_events(PointerEvents::None),
                     )
                     .child(
                         view()
+                            .relative()
                             .flex_1()
-                            .min_w(px(0.0))
-                            .gap_2()
+                            .justify_end()
+                            .p_6()
+                            .gap_1()
                             .child(
                                 text(artist.name.clone())
-                                    .text_2xl()
+                                    .when(desktop, |t| t.text_4xl())
+                                    .when(!desktop, |t| t.text_2xl())
                                     .font_weight(FontWeight::BOLD)
-                                    .text_color(move || theme().foreground),
+                                    .text_color(color_on_cover),
                             )
                             .child(
                                 text(sub_label)
                                     .text_sm()
-                                    .text_color(move || theme().muted_foreground),
-                            )
-                            .when(has_bio, |v| {
-                                v.child(
-                                    button()
-                                        .min_h(px(MOBILE_MIN_TOUCH_TARGET))
-                                        .px_3()
-                                        .rounded(radius_card)
-                                        .bg(pill_glass_surface)
-                                        .focus_visible(|s| {
-                                            s.outline(px(2.0)).outline_color(move || theme().ring)
-                                        })
-                                        .on_press(move || show_about.set(!show_about.get()))
-                                        .child(
-                                            text(move || {
-                                                if show_about.get() {
-                                                    "Hide About"
-                                                } else {
-                                                    "About"
-                                                }
-                                            })
-                                            .text_xs()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(move || theme().foreground),
-                                        ),
-                                )
-                            })
-                            .child(
-                                view()
-                                    .flex_row()
-                                    .flex_wrap()
-                                    .gap_2p5()
-                                    .pt_1()
-                                    .child(
-                                        view()
-                                            .min_h(px(MOBILE_MIN_TOUCH_TARGET))
-                                            .justify_center()
-                                            .child(hero_pill_button(
-                                                "Play Top Songs",
-                                                Some(IconKind::Play),
-                                                move || cb_play_top(top_for_play.clone()),
-                                            )),
-                                    )
-                                    .child(
-                                        view()
-                                            .test_id("artist-start-radio-btn")
-                                            .min_h(px(MOBILE_MIN_TOUCH_TARGET))
-                                            .justify_center()
-                                            .child(glass_pill_button(
-                                                "Start Radio",
-                                                Some(IconKind::Radio),
-                                                move || cb_radio(artist_for_radio.clone()),
-                                            )),
-                                    )
-                                    .child(
-                                        view()
-                                            .min_h(px(MOBILE_MIN_TOUCH_TARGET))
-                                            .justify_center()
-                                            .child(glass_pill_button(
-                                                "Shuffle",
-                                                Some(IconKind::Shuffle),
-                                                move || cb_shuffle(top_for_shuffle.clone()),
-                                            )),
-                                    )
-                                    .child(
-                                        view()
-                                            .min_h(px(MOBILE_MIN_TOUCH_TARGET))
-                                            .justify_center()
-                                            .child(glass_pill_button(
-                                                if is_sub { "Subscribed" } else { "Subscribe" },
-                                                Some(if is_sub {
-                                                    IconKind::Check
-                                                } else {
-                                                    IconKind::Plus
-                                                }),
-                                                move || cb_sub(cid_sub.clone(), !is_sub),
-                                            )),
-                                    ),
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(color_on_cover)
+                                    .opacity(0.84),
                             ),
                     ),
+            )
+            // Action pills cleanly below banner matching 09_artist_detail_1.png
+            .child(
+                view()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2p5()
+                    .child(
+                        view()
+                            .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                            .justify_center()
+                            .child(hero_pill_button(
+                                "Play",
+                                Some(IconKind::Play),
+                                move || cb_play_top(top_for_play.clone()),
+                            )),
+                    )
+                    .child(
+                        view()
+                            .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                            .justify_center()
+                            .child(glass_pill_button(
+                                "Shuffle",
+                                Some(IconKind::Shuffle),
+                                move || cb_shuffle(top_for_shuffle.clone()),
+                            )),
+                    )
+                    .child(
+                        view()
+                            .test_id("artist-start-radio-btn")
+                            .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                            .justify_center()
+                            .child(glass_pill_button(
+                                "Radio",
+                                Some(IconKind::Radio),
+                                move || cb_radio(artist_for_radio.clone()),
+                            )),
+                    )
+                    .child(
+                        view()
+                            .min_h(px(MOBILE_MIN_TOUCH_TARGET))
+                            .justify_center()
+                            .child(glass_pill_button(
+                                if is_sub { "Subscribed" } else { "Subscribe" },
+                                if is_sub { Some(IconKind::Check) } else { None },
+                                move || cb_sub(cid_sub.clone(), !is_sub),
+                            )),
+                    )
+                    .when(has_bio, |v| {
+                        v.child(glass_pill_button(
+                            move || {
+                                if show_about.get() {
+                                    SharedString::from("Hide about")
+                                } else {
+                                    SharedString::from("About")
+                                }
+                            },
+                            None,
+                            move || show_about.set(!show_about.get()),
+                        ))
+                    }),
             )
             .when(has_bio, |v| {
                 v.child(when(
@@ -280,7 +329,7 @@ pub fn artist_screen_with_detail(
                         view()
                             .p_4()
                             .rounded(radius_card)
-                            .bg(move || theme().card)
+                            .bg(frosted_settings_card)
                             .border_1()
                             .border_color(glass_hairline)
                             .child(
@@ -297,27 +346,28 @@ pub fn artist_screen_with_detail(
                 let total_songs = songs_for_dyn.len();
                 v.child(
                     view()
-                        .gap_2()
+                        .gap_3()
                         .child(
                             view()
                                 .flex_row()
                                 .items_center()
                                 .justify_between()
                                 .child(
-                                    text("Top Songs")
-                                        .text_lg()
+                                    text("Top songs")
+                                        .text_xl()
                                         .font_weight(FontWeight::BOLD)
                                         .text_color(move || theme().foreground),
                                 )
-                                .when(total_songs > 5, |h| {
-                                    h.child(secondary_button(
+                                .when(total_songs > 4, |h| {
+                                    h.child(glass_pill_button(
                                         move || {
                                             if show_all_songs.get() {
-                                                "Show less"
+                                                SharedString::from("Show less")
                                             } else {
-                                                "Show all"
+                                                SharedString::from("Show all")
                                             }
                                         },
+                                        None,
                                         move || show_all_songs.set(!show_all_songs.get()),
                                     ))
                                 }),
@@ -352,7 +402,7 @@ pub fn artist_screen_with_detail(
                 v.child(shelf_section("Singles & EPs", singles, cb_singles, false))
             })
             .when(!related.is_empty(), |v| {
-                v.child(shelf_section("Related Artists", related, cb_related, true))
+                v.child(shelf_section("Fans might also like", related, cb_related, true))
             }),
     )
 }

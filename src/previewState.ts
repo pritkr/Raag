@@ -64,6 +64,14 @@ export interface NshNode {
 
 export type PreviewDevice = 'compact' | 'android' | 'desktop';
 
+export interface NshAmbientPayload {
+  base: string;
+  accent: string;
+  complementary: string;
+  reducedMotion: boolean;
+  isPlaying: boolean;
+}
+
 export interface NshTreeResponse {
   version: number;
   engine: string;
@@ -73,6 +81,7 @@ export interface NshTreeResponse {
   height: number;
   apkAvailable: boolean;
   apkSizeBytes: number;
+  ambient?: NshAmbientPayload;
   root: NshNode | null;
 }
 

@@ -12,7 +12,8 @@ use resonance_contract::{UpdateChannel, UpdateInfo, UpdatePhase};
 use crate::ui::controls::{glass_pill_button, hero_pill_button, secondary_button, setting_switch};
 use crate::ui::text_format::format_recoverable_error;
 use crate::ui::tokens::{
-    MOBILE_MIN_TOUCH_TARGET, color_status_ok, glass_hairline, pill_glass_surface, radius_card,
+    MOBILE_MIN_TOUCH_TARGET, color_status_ok, frosted_settings_card, glass_hairline,
+    pill_glass_surface, radius_card,
 };
 
 #[derive(Clone)]
@@ -48,7 +49,7 @@ pub fn settings_updater_card(props: UpdaterCardProps) -> impl IntoElement {
         .p_4()
         .gap_3()
         .rounded(radius_card)
-        .bg(move || theme().card)
+        .bg(frosted_settings_card)
         .border_1()
         .border_color(glass_hairline)
         .child(

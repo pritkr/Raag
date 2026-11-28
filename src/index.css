@@ -50,8 +50,48 @@
   outline-offset: 2px;
 }
 
+@keyframes nsh-ambient-drift-a {
+  0% { transform: translate3d(-6%, -4%, 0) scale(1); }
+  50% { transform: translate3d(8%, 6%, 0) scale(1.12); }
+  100% { transform: translate3d(-6%, -4%, 0) scale(1); }
+}
+
+@keyframes nsh-ambient-drift-b {
+  0% { transform: translate3d(7%, 5%, 0) scale(1.06); }
+  50% { transform: translate3d(-9%, -6%, 0) scale(0.95); }
+  100% { transform: translate3d(7%, 5%, 0) scale(1.06); }
+}
+
+@keyframes nsh-ambient-drift-c {
+  0% { transform: translate3d(-4%, 8%, 0) scale(0.98); }
+  50% { transform: translate3d(6%, -7%, 0) scale(1.1); }
+  100% { transform: translate3d(-4%, 8%, 0) scale(0.98); }
+}
+
+.nsh-ambient-blob-a {
+  animation: nsh-ambient-drift-a 24s ease-in-out infinite;
+  transition: background-color 700ms ease, opacity 700ms ease;
+}
+
+.nsh-ambient-blob-b {
+  animation: nsh-ambient-drift-b 31s ease-in-out infinite;
+  transition: background-color 700ms ease, opacity 700ms ease;
+}
+
+.nsh-ambient-blob-c {
+  animation: nsh-ambient-drift-c 27s ease-in-out infinite;
+  transition: background-color 700ms ease, opacity 700ms ease;
+}
+
+.nsh-ambient-paused {
+  animation-play-state: paused !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .host-spin {
+  .host-spin,
+  .nsh-ambient-blob-a,
+  .nsh-ambient-blob-b,
+  .nsh-ambient-blob-c {
     animation: none !important;
   }
   .host-transition {

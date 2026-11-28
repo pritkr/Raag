@@ -290,7 +290,7 @@ mod host {
             Self {
                 nodes,
                 version: 0,
-                device: "android".into(),
+                device: "desktop".into(),
                 scheme: "dark".into(),
                 width,
                 height,
@@ -537,6 +537,16 @@ mod host {
 
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
+    struct AmbientPayload {
+        base: String,
+        accent: String,
+        complementary: String,
+        reduced_motion: bool,
+        is_playing: bool,
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
     struct TreeResponse {
         version: u64,
         engine: &'static str,
@@ -546,7 +556,29 @@ mod host {
         height: f32,
         apk_available: bool,
         apk_size_bytes: u64,
+        ambient: AmbientPayload,
         root: Option<SerializedNode>,
+    }
+
+    fn rgb_css(c: [u8; 3]) -> String {
+        format!("rgb({},{},{})", c[0], c[1], c[2])
+    }
+
+    fn complementary_rgb(c: [u8; 3], light: bool) -> [u8; 3] {
+        if light {
+            [
+                ((c[2] as u16 + 215) / 2).min(255) as u8,
+                ((c[0] as u16 + 225) / 2).min(255) as u8,
+                ((c[1] as u16 + 235) / 2).min(255) as u8,
+            ]
+        } else {
+            // Subtle deep oceanic / complementary dark accent glow for multi-blob depth
+            [
+                ((c[2] as f32 * 0.48) + 12.0).min(110.0) as u8,
+                ((c[0] as f32 * 0.42) + 38.0).min(115.0) as u8,
+                ((c[1] as f32 * 0.65) + 52.0).min(130.0) as u8,
+            ]
+        }
     }
 
     struct HostState {
@@ -582,6 +614,14 @@ mod host {
             let apk_meta = std::fs::metadata(Path::new("public/raag-arm64-debug.apk"))
                 .or_else(|_| std::fs::metadata(Path::new("public/resonance-arm64-debug.apk")))
                 .ok();
+            let amb = resonance::ui::controls::latest_ambient_snapshot();
+            let is_light = self.scene.scheme == "light";
+            let (base_rgb, accent_rgb) = if is_light {
+                (amb.light_base, amb.light_accent)
+            } else {
+                (amb.dark_base, amb.dark_accent)
+            };
+            let comp_rgb = complementary_rgb(accent_rgb, is_light);
             TreeResponse {
                 version: self.scene.version,
                 engine: "Pure Rust NSH 0.7.0 (nsh-engine + nsh-core + nsh-base)",
@@ -591,6 +631,13 @@ mod host {
                 height: self.scene.height,
                 apk_available: apk_meta.is_some(),
                 apk_size_bytes: apk_meta.map(|m| m.len()).unwrap_or(0),
+                ambient: AmbientPayload {
+                    base: rgb_css(base_rgb),
+                    accent: rgb_css(accent_rgb),
+                    complementary: rgb_css(comp_rgb),
+                    reduced_motion: amb.reduced_motion,
+                    is_playing: amb.is_playing,
+                },
                 root: self.scene.serialize_node(ROOT_ID),
             }
         }
@@ -641,7 +688,7 @@ mod host {
             ColorScheme::Dark
         };
         if device == "desktop" {
-            let size = Size::new(Points(1180.0), Points(780.0));
+            let size = Size::new(Points(1240.0), Points(820.0));
             (
                 size,
                 Environment {
@@ -856,7 +903,7 @@ mod host {
         resonance::store::enable_fixture_mode(true);
 
         let (tx, rx) = crossbeam_channel::unbounded();
-        let (initial_size, initial_env) = make_environment("android", "dark");
+        let (initial_size, initial_env) = make_environment("desktop", "dark");
         let tokens = nsh_base::tokens_of(Some(THEME_JSON))
             .expect("theme.json must parse into valid NSH tokens");
 

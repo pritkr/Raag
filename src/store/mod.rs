@@ -47,7 +47,7 @@ pub use playback_actions::*;
 pub use playback_slice::{AudioDriverSnapshot, PlaybackSlice, ShortcutAction, map_shortcut_key};
 pub use rooms_slice::{ListenTogetherSubMode, RoomsSlice};
 pub use settings_slice::{AudioDspCapability, SettingsSlice, ThemeChoice};
-pub use ui_slice::{AppTab, DesktopSidePanel, NowPlayingTab, UiSlice};
+pub use ui_slice::{AppTab, DesktopSidePanel, NowPlayingTab, SettingsSection, UiSlice};
 pub use updater_slice::UpdaterSlice;
 
 /// Isolated Cast discovery and active-session state slice.

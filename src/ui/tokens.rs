@@ -138,14 +138,15 @@ pub fn ambient_accent_color(palette: AmbientPalette) -> AdaptiveColor {
 }
 
 /// Resolves an artwork `AmbientPalette` into a 3-color harmonic HSLA triple for the GPU ambient
-/// drift shader under the currently active color scheme (`c1` base, `c2` primary bloom, `c3` warm/cool drift).
+/// drift shader under the currently active color scheme (`c1` base, `c2` primary bloom, `c3` complementary drift).
 pub fn ambient_shader_palette_triple(palette: AmbientPalette) -> (Hsla, Hsla, Hsla) {
     let base = color(ambient_backdrop_color(palette));
     let accent = color(ambient_accent_color(palette));
     let mut tertiary = accent;
-    tertiary.h = (tertiary.h + 0.085).fract();
-    tertiary.s = (tertiary.s * 0.92).clamp(0.08, 0.85);
-    tertiary.l = ((base.l * 0.55) + (accent.l * 0.45)).clamp(0.04, 0.96);
+    // Complementary warm/cool shift (gives the iconic amber + deep teal / crimson + indigo ambient depth)
+    tertiary.h = (tertiary.h + 0.42).fract();
+    tertiary.s = (tertiary.s * 0.88).clamp(0.14, 0.82);
+    tertiary.l = ((base.l * 0.48) + (accent.l * 0.52)).clamp(0.06, 0.94);
     tertiary.a = 1.0;
 
     let mut c1 = base;
@@ -153,6 +154,31 @@ pub fn ambient_shader_palette_triple(palette: AmbientPalette) -> (Hsla, Hsla, Hs
     let mut c2 = accent;
     c2.a = 1.0;
     (c1, c2, tertiary)
+}
+
+/// Active track accent tint for the thin full-width bottom player progress bar.
+pub fn ambient_progress_color(palette: AmbientPalette) -> AdaptiveColor {
+    let boost = |c: [u8; 3], light_mode: bool| -> [u8; 3] {
+        if light_mode {
+            // Deepen slightly so progress stands out cleanly in Light mode
+            [
+                (c[0] as f32 * 0.62) as u8,
+                (c[1] as f32 * 0.62) as u8,
+                (c[2] as f32 * 0.62) as u8,
+            ]
+        } else {
+            // Brighten toward crisp luminous white-tinted accent in Dark mode
+            [
+                ((c[0] as f32 * 0.35) + 165.0).min(255.0) as u8,
+                ((c[1] as f32 * 0.35) + 165.0).min(255.0) as u8,
+                ((c[2] as f32 * 0.35) + 165.0).min(255.0) as u8,
+            ]
+        }
+    };
+    AdaptiveColor::new(
+        rgb_u8_to_hsla(boost(palette.light_accent, true), 1.0),
+        rgb_u8_to_hsla(boost(palette.dark_accent, false), 1.0),
+    )
 }
 
 /// Subtle warm top-ambient tint matching the reference YouTube Music Desktop canvas glow.
@@ -165,7 +191,23 @@ pub fn frosted_bar_surface() -> AdaptiveColor {
     theme()
         .color("glass-bar")
         .unwrap_or(theme().card)
-        .opacity(0.84)
+        .opacity(0.62)
+}
+
+/// Calibrated translucent frosted glass surface for the Left Sidebar over the moving ambient backdrop.
+pub fn frosted_sidebar_surface() -> AdaptiveColor {
+    theme()
+        .color("glass-sidebar")
+        .unwrap_or(theme().card)
+        .opacity(0.28)
+}
+
+/// Calibrated translucent frosted glass surface for the Right `Up next` Queue / Lyrics drawer.
+pub fn frosted_drawer_surface() -> AdaptiveColor {
+    theme()
+        .color("glass-drawer")
+        .unwrap_or(theme().card)
+        .opacity(0.54)
 }
 
 /// Calibrated translucent frosted glass surface for the sticky Desktop Top Header.
@@ -173,15 +215,28 @@ pub fn frosted_header_surface() -> AdaptiveColor {
     theme()
         .color("glass-header")
         .unwrap_or(theme().background)
-        .opacity(0.74)
+        .opacity(0.16)
+}
+
+/// Calibrated translucent glass card surface for Settings cards, Listen Together cards, and Search Top Result.
+pub fn frosted_settings_card() -> AdaptiveColor {
+    AdaptiveColor::new(
+        color(theme().card).opacity(0.84),
+        color(
+            theme()
+                .color("glass-settings-card")
+                .unwrap_or(theme().foreground),
+        )
+        .opacity(0.065),
+    )
 }
 
 /// Calibrated translucent glass card surface for Now Playing control dock, modals, and popovers.
 pub fn frosted_card_surface() -> AdaptiveColor {
-    theme()
-        .color("glass-card")
-        .unwrap_or(theme().card)
-        .opacity(0.76)
+    AdaptiveColor::new(
+        color(theme().card).opacity(0.88),
+        color(theme().color("glass-card").unwrap_or(theme().foreground)).opacity(0.085),
+    )
 }
 
 /// Soft dimmed overlay scrim behind glassmorphism modals and bottom sheets.
@@ -189,7 +244,7 @@ pub fn overlay_scrim() -> AdaptiveColor {
     theme()
         .color("overlay-scrim")
         .unwrap_or(theme().background)
-        .opacity(0.54)
+        .opacity(0.56)
 }
 
 /// Subtle translucent pill surface for search bar, mood chips, and action pills.
@@ -197,7 +252,7 @@ pub fn pill_glass_surface() -> AdaptiveColor {
     theme()
         .color("glass-pill")
         .unwrap_or(theme().foreground)
-        .opacity(0.07)
+        .opacity(0.08)
 }
 
 /// Hover state for translucent pills.
@@ -205,15 +260,15 @@ pub fn pill_glass_hover() -> AdaptiveColor {
     theme()
         .color("glass-pill")
         .unwrap_or(theme().foreground)
-        .opacity(0.13)
+        .opacity(0.15)
 }
 
-/// Active sidebar navigation pill background (subtle warm translucent highlight).
+/// Active sidebar navigation pill background (subtle translucent glass highlight).
 pub fn sidebar_active_surface() -> AdaptiveColor {
     theme()
         .color("glass-pill")
         .unwrap_or(theme().foreground)
-        .opacity(0.10)
+        .opacity(0.12)
 }
 
 /// Subtle 1px inner-highlight hairline border for translucent frosted surfaces.
@@ -229,7 +284,7 @@ pub fn glass_specular_hairline() -> AdaptiveColor {
     theme()
         .color("glass-specular")
         .unwrap_or(theme().foreground)
-        .opacity(0.18)
+        .opacity(0.16)
 }
 
 /// Deterministic editorial artwork cover gradient pair `(from, to)` resolved from `theme.json`.
@@ -273,6 +328,15 @@ pub fn genre_card_tint(index: usize) -> AdaptiveColor {
     ];
     let t = theme();
     t.color(KEYS[index % KEYS.len()]).unwrap_or(t.secondary)
+}
+
+/// Vibrant left vertical accent stripe color for `Moods & genres` tiles (matches `02_explore_02.png`).
+pub fn genre_stripe_color(index: usize) -> AdaptiveColor {
+    const KEYS: [&str; 6] = [
+        "stripe-1", "stripe-2", "stripe-3", "stripe-4", "stripe-5", "stripe-6",
+    ];
+    let t = theme();
+    t.color(KEYS[index % KEYS.len()]).unwrap_or(t.primary)
 }
 
 pub fn color_player_surface() -> AdaptiveColor {
